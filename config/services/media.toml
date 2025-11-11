@@ -1,0 +1,20 @@
+# Media 服务配置
+
+[services.media]
+service_name = "flare-media"
+metadata_store = "media"
+metadata_cache = "media_metadata"
+object_store = "default"  # 使用默认的对象存储配置
+redis_ttl_seconds = 3600
+orphan_grace_seconds = 86400
+upload_session_store = "upload_sessions"
+chunk_upload_dir = "./data/media/chunks"
+chunk_ttl_seconds = 172800
+max_chunk_size_bytes = 52428800
+local_storage_dir = "./data/media"
+local_base_url = "http://localhost:50092/files"
+cdn_base_url = "http://localhost:50092/files"
+
+[services.media.server]
+address = "0.0.0.0"
+port = 60081

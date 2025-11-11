@@ -1,0 +1,9 @@
+# 生产环境配置示例
+
+[object_storage.default]
+profile_type = "s3"
+access_key = "${AWS_ACCESS_KEY_ID}"
+secret_key = "${AWS_SECRET_ACCESS_KEY}"
+bucket = "flare-media-production"
+region = "us-west-2"
+cdn_base_url = "https://d1234567890.cloudfront.net"

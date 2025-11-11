@@ -1,0 +1,129 @@
+[workspace]
+members = [
+    
+    # 通信核心层 - 统一网关
+    "flare-core-gateway",
+    
+    # 通信核心层 - 统一接入网关（客户端连接接入、认证、会话管理、消息传输）
+    "flare-access-gateway",
+    
+    # 通信核心层 - 信令系统
+    "flare-signaling/online",
+    "flare-signaling/route",
+    
+    # 通信核心层 - 推送系统
+    "flare-push/proxy",
+    "flare-push/server",
+    "flare-push/worker",
+    
+    # 通信核心层 - 存储系统
+    "flare-storage/model",
+    "flare-storage/writer",
+    "flare-storage/reader",
+
+    # 消息编排服务
+    "flare-message-orchestrator",
+    
+    # 媒体服务
+    "flare-media",
+]
+
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Flare Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# 错误处理
+anyhow = "1.0"
+
+# Base64 & BSON/Mongo 支持
+base64 = "0.22"
+bson = { version = "3.0", features = ["chrono-0_4"] }
+mongodb = { version = "2.8", features = ["tokio-runtime"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# gRPC
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+
+# 数据库
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
+redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+
+# 消息队列
+rdkafka = "0.38"
+
+# 认证
+jsonwebtoken = { version = "10.2", default-features = false, features = ["rust_crypto"] }
+
+# 工具
+bytes = "1"
+async-trait = "0.1"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+once_cell = "1.19"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Service Mesh 和中间件
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# etcd 客户端
+etcd-client = "0.17"
+
+# Flare Core
+flare-core = { path = "../flare-core" }
+
+# Flare Server Core
+flare-server-core = { path = "../flare-server-core" }
+
+# Flare Proto
+flare-proto = { path = "../flare-proto" }
+
+# Big integers (for crypto / math utilities)
+num-bigint-dig = { version = "0.8.5", default-features = false, features = ["std", "u64_digit", "prime", "rand", "zeroize"] }
+
+[package]
+name = "flare-im-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "flare_im_core"
+path = "src/lib.rs"
+
+[dependencies]
+flare-server-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+flare-proto = { workspace = true }
+tonic = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
+prost-types = { workspace = true }
+flare-core = { workspace = true }

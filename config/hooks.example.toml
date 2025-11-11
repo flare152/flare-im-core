@@ -1,0 +1,62 @@
+# 示例：预置 Hook 配置
+#
+# 将本文件复制为 config/hooks.toml 后按需启用。
+
+[[pre_send]]
+name = "compliance-text-check"
+type = "pre_send"
+priority = 10
+timeout_ms = 200
+require_success = true
+
+[pre_send.selector]
+tenants = ["default"]
+session_types = ["single_chat"]
+message_types = ["text"]
+
+[pre_send.transport]
+type = "grpc"
+endpoint = "https://hooks.internal.svc:7443"
+
+[pre_send.metadata]
+risk_level = "strict"
+
+[[post_send]]
+name = "audit-log-sink"
+priority = 0
+timeout_ms = 1000
+require_success = false
+
+[post_send.selector]
+tenants = ["default"]
+
+[post_send.transport]
+type = "webhook"
+endpoint = "https://audit.example.com/hooks/post_send"
+secret = "replace-me"
+
+[post_send.transport.headers]
+X-Service = "flare-im-core"
+
+[[delivery]]
+name = "delivery-metrics"
+priority = 0
+
+[delivery.selector]
+tenants = ["default"]
+
+[delivery.transport]
+type = "local"
+target = "builtin_delivery_metrics"
+
+[[recall]]
+name = "recall-audit"
+priority = 0
+
+[recall.selector]
+tenants = ["default"]
+
+[recall.transport]
+type = "grpc"
+endpoint = "https://hooks.internal.svc:7443"
+

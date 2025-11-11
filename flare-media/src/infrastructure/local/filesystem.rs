@@ -1,0 +1,53 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use tokio::fs;
+
+use crate::domain::models::UploadContext;
+use crate::domain::repositories::MediaLocalStore;
+
+#[derive(Clone)]
+pub struct FilesystemMediaStore {
+    root: PathBuf,
+    base_url: Option<String>,
+}
+
+impl FilesystemMediaStore {
+    pub fn new(root: impl AsRef<Path>, base_url: Option<String>) -> Result<Self> {
+        let root = root.as_ref().to_path_buf();
+        std::fs::create_dir_all(&root)?;
+        Ok(Self { root, base_url })
+    }
+
+    fn file_path(&self, file_id: &str) -> PathBuf {
+        self.root.join(file_id)
+    }
+}
+
+#[async_trait::async_trait]
+impl MediaLocalStore for FilesystemMediaStore {
+    async fn write(&self, context: &UploadContext<'_>) -> Result<String> {
+        let path = self.file_path(context.file_id);
+        fs::write(&path, context.payload)
+            .await
+            .with_context(|| format!("write file to {:?}", path))?;
+        Ok(context.file_id.to_string())
+    }
+
+    async fn delete(&self, file_id: &str) -> Result<()> {
+        let path = self.file_path(file_id);
+        if path.exists() {
+            fs::remove_file(&path)
+                .await
+                .with_context(|| format!("remove file {:?}", path))?;
+        }
+        Ok(())
+    }
+
+    fn base_url(&self) -> Option<String> {
+        self.base_url.clone()
+    }
+}
+
+pub type FilesystemMediaStoreRef = Arc<FilesystemMediaStore>;

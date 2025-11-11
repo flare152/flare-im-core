@@ -1,0 +1,10 @@
+# 预发布环境配置示例
+
+[object_storage.default]
+profile_type = "oss"
+endpoint = "https://oss-cn-hangzhou.aliyuncs.com"
+access_key = "${ALIYUN_ACCESS_KEY_ID}"
+secret_key = "${ALIYUN_SECRET_ACCESS_KEY}"
+bucket = "flare-media-staging"
+region = "oss-cn-hangzhou"
+cdn_base_url = "https://flare-media-staging.oss-cn-hangzhou.aliyuncs.com"

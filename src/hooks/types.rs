@@ -1,0 +1,400 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+
+use crate::error::{ErrorBuilder, ErrorCode, FlareError, Result};
+
+/// Hook 类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HookKind {
+    PreSend,
+    PostSend,
+    Delivery,
+    Recall,
+}
+
+/// Hook 执行策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookErrorPolicy {
+    /// 失败时终止主流程
+    FailFast,
+    /// 失败时忽略（记录告警）
+    Ignore,
+}
+
+impl Default for HookErrorPolicy {
+    fn default() -> Self {
+        HookErrorPolicy::FailFast
+    }
+}
+
+/// Hook 调用上下文
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HookContext {
+    pub tenant_id: String,
+    pub session_id: Option<String>,
+    pub session_type: Option<String>,
+    pub message_type: Option<String>,
+    pub sender_id: Option<String>,
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    #[serde(default)]
+    pub attributes: HashMap<String, String>,
+    #[serde(default)]
+    pub request_metadata: HashMap<String, String>,
+    #[serde(default)]
+    pub occurred_at: Option<SystemTime>,
+}
+
+impl HookContext {
+    pub fn new<T: Into<String>>(tenant_id: T) -> Self {
+        Self {
+            tenant_id: tenant_id.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_session<T: Into<String>>(mut self, session_id: T) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    pub fn with_session_type<T: Into<String>>(mut self, ty: T) -> Self {
+        self.session_type = Some(ty.into());
+        self
+    }
+
+    pub fn with_message_type<T: Into<String>>(mut self, ty: T) -> Self {
+        self.message_type = Some(ty.into());
+        self
+    }
+
+    pub fn with_sender<T: Into<String>>(mut self, sender: T) -> Self {
+        self.sender_id = Some(sender.into());
+        self
+    }
+
+    pub fn with_trace<T: Into<String>>(mut self, trace_id: T) -> Self {
+        self.trace_id = Some(trace_id.into());
+        self
+    }
+
+    pub fn with_tags(mut self, tags: HashMap<String, String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    pub fn occurred_now(mut self) -> Self {
+        self.occurred_at = Some(SystemTime::now());
+        self
+    }
+}
+
+/// 消息草稿（Pre-Send 阶段可修改）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageDraft {
+    pub message_id: Option<String>,
+    pub client_message_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub payload: Vec<u8>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+    #[serde(default)]
+    pub extra: HashMap<String, JsonValue>,
+}
+
+impl MessageDraft {
+    pub fn new(payload: Vec<u8>) -> Self {
+        Self {
+            message_id: None,
+            client_message_id: None,
+            conversation_id: None,
+            payload,
+            headers: HashMap::new(),
+            metadata: HashMap::new(),
+            extra: HashMap::new(),
+        }
+    }
+
+    pub fn set_message_id<T: Into<String>>(&mut self, message_id: T) {
+        self.message_id = Some(message_id.into());
+    }
+
+    pub fn set_client_message_id<T: Into<String>>(&mut self, message_id: T) {
+        self.client_message_id = Some(message_id.into());
+    }
+
+    pub fn set_conversation_id<T: Into<String>>(&mut self, conversation_id: T) {
+        self.conversation_id = Some(conversation_id.into());
+    }
+
+    pub fn header<T: Into<String>, U: Into<String>>(&mut self, key: T, value: U) {
+        self.headers.insert(key.into(), value.into());
+    }
+
+    pub fn metadata<T: Into<String>, U: Into<String>>(&mut self, key: T, value: U) {
+        self.metadata.insert(key.into(), value.into());
+    }
+
+    pub fn extra<T: Into<String>>(&mut self, key: T, value: JsonValue) {
+        self.extra.insert(key.into(), value);
+    }
+}
+
+/// 消息持久化记录
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageRecord {
+    pub message_id: String,
+    pub client_message_id: Option<String>,
+    pub conversation_id: String,
+    pub sender_id: String,
+    pub session_type: Option<String>,
+    pub message_type: Option<String>,
+    pub persisted_at: SystemTime,
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// 投递事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryEvent {
+    pub message_id: String,
+    pub user_id: String,
+    pub channel: String,
+    pub delivered_at: SystemTime,
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// 撤回事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallEvent {
+    pub message_id: String,
+    pub operator_id: String,
+    pub recalled_at: SystemTime,
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Pre-Send Hook 的决策
+#[derive(Debug)]
+pub enum PreSendDecision {
+    Continue,
+    Reject { error: FlareError },
+}
+
+impl PreSendDecision {
+    pub fn is_continue(&self) -> bool {
+        matches!(self, PreSendDecision::Continue)
+    }
+}
+
+impl From<Result<()>> for PreSendDecision {
+    fn from(value: Result<()>) -> Self {
+        match value {
+            Ok(_) => PreSendDecision::Continue,
+            Err(err) => PreSendDecision::Reject { error: err },
+        }
+    }
+}
+
+impl fmt::Display for PreSendDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PreSendDecision::Continue => write!(f, "continue"),
+            PreSendDecision::Reject { error } => write!(f, "reject: {error}"),
+        }
+    }
+}
+
+/// Hook 执行结果
+#[derive(Debug)]
+pub enum HookOutcome {
+    Completed,
+    Failed(FlareError),
+}
+
+impl HookOutcome {
+    pub fn is_completed(&self) -> bool {
+        matches!(self, HookOutcome::Completed)
+    }
+}
+
+/// Pre-Send Hook Trait
+#[async_trait]
+pub trait PreSendHook: Send + Sync {
+    async fn handle(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision;
+}
+
+/// Post-Send Hook Trait
+#[async_trait]
+pub trait PostSendHook: Send + Sync {
+    async fn handle(
+        &self,
+        ctx: &HookContext,
+        record: &MessageRecord,
+        draft: &MessageDraft,
+    ) -> HookOutcome;
+}
+
+/// Delivery Hook Trait
+#[async_trait]
+pub trait DeliveryHook: Send + Sync {
+    async fn handle(&self, ctx: &HookContext, event: &DeliveryEvent) -> HookOutcome;
+}
+
+/// Recall Hook Trait
+#[async_trait]
+pub trait RecallHook: Send + Sync {
+    async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome;
+}
+
+#[async_trait]
+impl<T> PreSendHook for Arc<T>
+where
+    T: PreSendHook + ?Sized,
+{
+    async fn handle(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision {
+        (**self).handle(ctx, draft).await
+    }
+}
+
+#[async_trait]
+impl<T> PostSendHook for Arc<T>
+where
+    T: PostSendHook + ?Sized,
+{
+    async fn handle(
+        &self,
+        ctx: &HookContext,
+        record: &MessageRecord,
+        draft: &MessageDraft,
+    ) -> HookOutcome {
+        (**self).handle(ctx, record, draft).await
+    }
+}
+
+#[async_trait]
+impl<T> DeliveryHook for Arc<T>
+where
+    T: DeliveryHook + ?Sized,
+{
+    async fn handle(&self, ctx: &HookContext, event: &DeliveryEvent) -> HookOutcome {
+        (**self).handle(ctx, event).await
+    }
+}
+
+#[async_trait]
+impl<T> RecallHook for Arc<T>
+where
+    T: RecallHook + ?Sized,
+{
+    async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome {
+        (**self).handle(ctx, event).await
+    }
+}
+
+impl HookOutcome {
+    pub fn into_result(self, metadata: &HookMetadata) -> Result<()> {
+        match self {
+            HookOutcome::Completed => Ok(()),
+            HookOutcome::Failed(err) => {
+                if metadata.error_policy == HookErrorPolicy::Ignore {
+                    tracing::warn!(
+                        hook = %metadata.name,
+                        "hook failed but configured to ignore: {err}"
+                    );
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+}
+
+/// Hook 注册元信息
+#[derive(Debug, Clone)]
+pub struct HookMetadata {
+    pub name: Arc<str>,
+    pub version: Option<Arc<str>>,
+    pub description: Option<Arc<str>>,
+    pub kind: HookKind,
+    pub priority: i32,
+    pub timeout: std::time::Duration,
+    pub max_retries: u32,
+    pub error_policy: HookErrorPolicy,
+    pub require_success: bool,
+}
+
+impl Default for HookMetadata {
+    fn default() -> Self {
+        Self {
+            name: Arc::from("anonymous"),
+            version: None,
+            description: None,
+            kind: HookKind::PreSend,
+            priority: 0,
+            timeout: std::time::Duration::from_millis(3_000),
+            max_retries: 0,
+            error_policy: HookErrorPolicy::FailFast,
+            require_success: true,
+        }
+    }
+}
+
+impl HookMetadata {
+    pub fn with_kind(mut self, kind: HookKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn with_name<T: Into<Arc<str>>>(mut self, name: T) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn with_version<T: Into<Arc<str>>>(mut self, version: Option<T>) -> Self {
+        self.version = version.map(Into::into);
+        self
+    }
+
+    pub fn with_description<T: Into<Arc<str>>>(mut self, description: Option<T>) -> Self {
+        self.description = description.map(Into::into);
+        self
+    }
+
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn with_error_policy(mut self, policy: HookErrorPolicy) -> Self {
+        self.error_policy = policy;
+        self
+    }
+
+    pub fn with_require_success(mut self, require_success: bool) -> Self {
+        self.require_success = require_success;
+        self
+    }
+
+    pub fn build_error(&self, code: ErrorCode, message: &str) -> FlareError {
+        ErrorBuilder::new(code, message)
+            .details(format!("hook={}", self.name))
+            .build_error()
+    }
+}

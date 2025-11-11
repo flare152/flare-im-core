@@ -1,0 +1,82 @@
+# Flare IM Core 基础配置
+
+[service]
+name = "flare-im-core"
+version = "0.1.0"
+
+[server]
+address = "0.0.0.0"
+port = 50051
+
+[registry]
+registry_type = "etcd"
+endpoints = ["http://localhost:22379"]
+namespace = "flare"
+ttl = 30
+
+[mesh]
+enabled = false
+service_name = "flare-im-core"
+namespace = "default"
+
+[redis.session_store]
+url = "redis://localhost:26379/0"
+namespace = "flare:session"
+ttl_seconds = 3600
+
+[redis.token_store]
+url = "redis://localhost:26379/1"
+namespace = "flare:token"
+ttl_seconds = 7200
+
+[redis.media_metadata]
+url = "redis://localhost:26379/2"
+namespace = "flare:media"
+ttl_seconds = 3600
+
+[redis.upload_sessions]
+url = "redis://localhost:26379/3"
+namespace = "flare:media:upload"
+ttl_seconds = 86400
+
+[redis.message_wal]
+url = "redis://localhost:26379/4"
+namespace = "flare:message:wal"
+ttl_seconds = 86400
+
+[kafka.push]
+bootstrap_servers = "localhost:29092"
+client_id = "flare-im"
+timeout_ms = 5000
+
+[kafka.message]
+bootstrap_servers = "localhost:29092"
+client_id = "flare-message-orchestrator"
+timeout_ms = 5000
+
+[postgres.media]
+url = "postgres://flare:flare123@localhost:25432/flare"
+max_connections = 20
+
+[mongodb.primary]
+url = "mongodb://localhost:27017"
+database = "flare"
+
+# 对象存储配置 - 简化为单一配置，通过环境变量或部署时配置选择具体后端
+[object_storage.default]
+profile_type = "minio"
+endpoint = "http://localhost:29000"
+access_key = "minioadmin"
+secret_key = "minioadmin"
+bucket = "flare-media"
+region = "us-east-1"
+use_ssl = false
+cdn_base_url = "http://localhost:29000/flare-media"
+
+# 可选：如果需要多个对象存储配置，可以定义多个profile
+# [object_storage.production]
+# profile_type = "s3"
+# access_key = "your-access-key"
+# secret_key = "your-secret-key"
+# bucket = "your-bucket-name"
+# region = "us-west-2"

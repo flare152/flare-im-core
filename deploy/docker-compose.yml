@@ -1,0 +1,179 @@
+version: '3.8'
+
+networks:
+  flare-network:
+    driver: bridge
+
+services:
+  # ===== Etcd - 服务注册发现 =====
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: flare-etcd
+    networks:
+      - flare-network
+    ports:
+      - "22379:2379"
+      - "22380:2380"
+    volumes:
+      - ./data/etcd:/etcd-data
+    command: 
+      /usr/local/bin/etcd
+      --name=etcd0
+      --data-dir=/etcd-data
+      --listen-client-urls=http://0.0.0.0:2379
+      --advertise-client-urls=http://etcd:2379
+      --listen-peer-urls=http://0.0.0.0:2380
+      --initial-advertise-peer-urls=http://etcd:2380
+      --initial-cluster=etcd0=http://etcd:2380
+      --initial-cluster-token=etcd-cluster-1
+      --initial-cluster-state=new
+
+  # ===== Redis - 缓存 / 路由 =====
+  redis:
+    image: redis:7-alpine
+    container_name: flare-redis
+    networks:
+      - flare-network
+    ports:
+      - "26379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== PostgreSQL + TimescaleDB - 消息存储 =====
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: flare-postgres
+    networks:
+      - flare-network
+    environment:
+      POSTGRES_USER: flare
+      POSTGRES_PASSWORD: flare123
+      POSTGRES_DB: flare
+    ports:
+      - "25432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flare"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Kafka - 消息队列（KRaft 无 Zookeeper） =====
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: flare-kafka
+    networks:
+      - flare-network
+    ports:
+      - "29092:9092"
+    environment:
+      CLUSTER_ID: 4LZEfdh1SPSb9z7J1Hf0sw
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - ./data/kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions", "--bootstrap-server", "kafka:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== MinIO - 对象存储 =====
+  minio:
+    image: minio/minio:latest
+    container_name: flare-minio
+    networks:
+      - flare-network
+    ports:
+      - "29000:9000"
+      - "29001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./data/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # ===== Loki - 日志聚合 =====
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: flare-loki
+    networks:
+      - flare-network
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ./data/loki:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ===== Prometheus - 监控 =====
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: flare-prometheus
+    networks:
+      - flare-network
+    ports:
+      - "29090:9090"
+    volumes:
+      - ./data/prometheus:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===== Grafana - 可视化与告警 =====
+  grafana:
+    image: grafana/grafana:latest
+    container_name: flare-grafana
+    networks:
+      - flare-network
+    depends_on:
+      - loki
+      - prometheus
+    ports:
+      - "23000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+

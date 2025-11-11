@@ -1,0 +1,10 @@
+# Message Orchestrator 服务配置
+
+[services.message_orchestrator]
+kafka = "message"
+kafka_topic = "storage-messages"
+wal_store = "message_wal"
+wal_hash_key = "flare:message:wal"
+wal_ttl_seconds = 86400
+hook_config = "config/hooks.toml"
+# hook_config_dir = "config/hooks.d"

@@ -1,0 +1,430 @@
+use std::sync::Arc;
+
+use flare_proto::media::media_service_server::MediaService;
+use flare_proto::media::upload_file_request;
+use flare_proto::media::{
+    AbortMultipartUploadRequest, AbortMultipartUploadResponse, CleanupOrphanedAssetsRequest,
+    CleanupOrphanedAssetsResponse, CompleteMultipartUploadRequest, CreateReferenceRequest,
+    CreateReferenceResponse, DeleteFileRequest, DeleteFileResponse, DeleteReferenceRequest,
+    DeleteReferenceResponse, GetFileInfoRequest, GetFileInfoResponse, GetFileUrlRequest,
+    GetFileUrlResponse, InitiateMultipartUploadRequest, InitiateMultipartUploadResponse,
+    ListReferencesRequest, ListReferencesResponse, ProcessImageRequest, ProcessImageResponse,
+    ProcessVideoRequest, ProcessVideoResponse, UploadFileRequest, UploadFileResponse,
+    UploadMultipartChunkRequest, UploadMultipartChunkResponse,
+};
+use flare_server_core::error::{ErrorBuilder, ErrorCode, ok_status};
+use prost_types::Timestamp;
+use tokio_stream::StreamExt;
+use tonic::{Request, Response, Status};
+use tracing::instrument;
+
+use crate::application::commands::MediaCommandService;
+use crate::application::queries::MediaQueryService;
+use crate::application::service::{to_proto_file_info, to_proto_reference};
+use crate::domain::models::MediaReferenceScope;
+
+#[derive(Clone)]
+pub struct MediaGrpcHandler {
+    command_service: Arc<MediaCommandService>,
+    query_service: Arc<MediaQueryService>,
+}
+
+impl MediaGrpcHandler {
+    pub fn new(
+        command_service: Arc<MediaCommandService>,
+        query_service: Arc<MediaQueryService>,
+    ) -> Self {
+        Self {
+            command_service,
+            query_service,
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl MediaService for MediaGrpcHandler {
+    #[instrument(skip(self, request))]
+    async fn upload_file(
+        &self,
+        request: Request<tonic::Streaming<UploadFileRequest>>,
+    ) -> Result<Response<UploadFileResponse>, Status> {
+        let mut stream = request.into_inner();
+        let first = stream
+            .next()
+            .await
+            .ok_or_else(|| status_internal("upload stream empty"))?
+            .map_err(status_internal)?;
+
+        let (upload_metadata, mut payload) = match first.request {
+            Some(upload_file_request::Request::Metadata(metadata)) => (metadata, Vec::new()),
+            _ => return Err(status_internal("first upload frame must contain metadata")),
+        };
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(status_internal)?;
+            match chunk.request {
+                Some(upload_file_request::Request::ChunkData(data)) => {
+                    payload.extend_from_slice(&data);
+                }
+                Some(upload_file_request::Request::Metadata(_)) => {
+                    return Err(status_internal("metadata frame must only appear once"));
+                }
+                None => {}
+            }
+        }
+
+        let metadata = self
+            .command_service
+            .upload_file(upload_metadata, payload)
+            .await
+            .map_err(status_internal)?;
+        
+        Ok(Response::new(UploadFileResponse {
+            file_id: metadata.file_id.clone(),
+            url: metadata.url.clone(),
+            cdn_url: metadata.cdn_url.clone(),
+            info: Some(to_proto_file_info(&metadata)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn initiate_multipart_upload(
+        &self,
+        request: Request<InitiateMultipartUploadRequest>,
+    ) -> Result<Response<InitiateMultipartUploadResponse>, Status> {
+        let req = request.into_inner();
+        let session = self
+            .command_service
+            .initiate_multipart_upload(req)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(InitiateMultipartUploadResponse {
+            upload_id: session.upload_id,
+            chunk_size: session.chunk_size,
+            expires_at: Some(to_proto_timestamp(session.expires_at)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn upload_multipart_chunk(
+        &self,
+        request: Request<UploadMultipartChunkRequest>,
+    ) -> Result<Response<UploadMultipartChunkResponse>, Status> {
+        let req = request.into_inner();
+        let chunk_index = req.chunk_index;
+        let session = self
+            .command_service
+            .upload_multipart_chunk(req)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(UploadMultipartChunkResponse {
+            upload_id: session.upload_id,
+            chunk_index,
+            uploaded_size: session.uploaded_size as u64,
+            expires_at: Some(to_proto_timestamp(session.expires_at)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn complete_multipart_upload(
+        &self,
+        request: Request<CompleteMultipartUploadRequest>,
+    ) -> Result<Response<UploadFileResponse>, Status> {
+        let req = request.into_inner();
+        let metadata = self
+            .command_service
+            .complete_multipart_upload(req)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(UploadFileResponse {
+            file_id: metadata.file_id.clone(),
+            url: metadata.url.clone(),
+            cdn_url: metadata.cdn_url.clone(),
+            info: Some(to_proto_file_info(&metadata)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn abort_multipart_upload(
+        &self,
+        request: Request<AbortMultipartUploadRequest>,
+    ) -> Result<Response<AbortMultipartUploadResponse>, Status> {
+        let req = request.into_inner();
+        self.command_service
+            .abort_multipart_upload(req)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(AbortMultipartUploadResponse {
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn create_reference(
+        &self,
+        request: Request<CreateReferenceRequest>,
+    ) -> Result<Response<CreateReferenceResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.file_id.is_empty() {
+            return Err(status_invalid_argument("file_id is required"));
+        }
+        if req.owner_id.is_empty() {
+            return Err(status_invalid_argument("owner_id is required"));
+        }
+
+        let namespace = if req.namespace.is_empty() {
+            req.metadata
+                .get("namespace")
+                .cloned()
+                .unwrap_or_else(|| req.owner_id.clone())
+        } else {
+            req.namespace.clone()
+        };
+
+        let business_tag = if req.business_tag.is_empty() {
+            req.metadata.get("business_tag").cloned()
+        } else {
+            Some(req.business_tag.clone())
+        };
+
+        let scope = MediaReferenceScope {
+            namespace,
+            owner_id: req.owner_id.clone(),
+            business_tag,
+        };
+
+        let metadata = self
+            .command_service
+            .attach_reference(&req.file_id, scope, req.metadata)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(CreateReferenceResponse {
+            info: Some(to_proto_file_info(&metadata)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn delete_reference(
+        &self,
+        request: Request<DeleteReferenceRequest>,
+    ) -> Result<Response<DeleteReferenceResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.file_id.is_empty() {
+            return Err(status_invalid_argument("file_id is required"));
+        }
+
+        let reference_id = if req.reference_id.is_empty() {
+            None
+        } else {
+            Some(req.reference_id.as_str())
+        };
+
+        let metadata = self
+            .command_service
+            .release_reference(&req.file_id, reference_id)
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(DeleteReferenceResponse {
+            info: Some(to_proto_file_info(&metadata)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn list_references(
+        &self,
+        request: Request<ListReferencesRequest>,
+    ) -> Result<Response<ListReferencesResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.file_id.is_empty() {
+            return Err(status_invalid_argument("file_id is required"));
+        }
+
+        let references = self
+            .query_service
+            .list_references(&req.file_id)
+            .await
+            .map_err(status_internal)?;
+
+        let references_proto = references
+            .iter()
+            .map(|reference| to_proto_reference(reference))
+            .collect();
+
+        Ok(Response::new(ListReferencesResponse {
+            references: references_proto,
+            pagination: None,
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn cleanup_orphaned_assets(
+        &self,
+        request: Request<CleanupOrphanedAssetsRequest>,
+    ) -> Result<Response<CleanupOrphanedAssetsResponse>, Status> {
+        let _req = request.into_inner();
+
+        let cleaned = self
+            .command_service
+            .cleanup_orphaned_assets()
+            .await
+            .map_err(status_internal)?;
+
+        Ok(Response::new(CleanupOrphanedAssetsResponse {
+            file_ids: cleaned,
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn get_file_url(
+        &self,
+        request: Request<GetFileUrlRequest>,
+    ) -> Result<Response<GetFileUrlResponse>, Status> {
+        let req = request.into_inner();
+        let presigned = self
+            .query_service
+            .get_file_url(req)
+            .await
+            .map_err(status_internal)?;
+        Ok(Response::new(GetFileUrlResponse {
+            url: presigned.url,
+            cdn_url: presigned.cdn_url,
+            expires_at: Some(to_proto_timestamp(presigned.expires_at)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn get_file_info(
+        &self,
+        request: Request<GetFileInfoRequest>,
+    ) -> Result<Response<GetFileInfoResponse>, Status> {
+        let req = request.into_inner();
+        let metadata = self
+            .query_service
+            .get_file_info(&req.file_id)
+            .await
+            .map_err(status_internal)?;
+        Ok(Response::new(GetFileInfoResponse {
+            info: Some(to_proto_file_info(&metadata)),
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn delete_file(
+        &self,
+        request: Request<DeleteFileRequest>,
+    ) -> Result<Response<DeleteFileResponse>, Status> {
+        let req = request.into_inner();
+        self.command_service
+            .delete_file(req)
+            .await
+            .map_err(status_internal)?;
+        Ok(Response::new(DeleteFileResponse {
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn process_image(
+        &self,
+        request: Request<ProcessImageRequest>,
+    ) -> Result<Response<ProcessImageResponse>, Status> {
+        let req = request.into_inner();
+        let result = self
+            .command_service
+            .process_image(req)
+            .await
+            .map_err(status_internal)?;
+        Ok(Response::new(ProcessImageResponse {
+            processed_file_id: result.file_id,
+            url: result.url,
+            cdn_url: result.cdn_url,
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    async fn process_video(
+        &self,
+        request: Request<ProcessVideoRequest>,
+    ) -> Result<Response<ProcessVideoResponse>, Status> {
+        let req = request.into_inner();
+        let result = self
+            .command_service
+            .process_video(req)
+            .await
+            .map_err(status_internal)?;
+        Ok(Response::new(ProcessVideoResponse {
+            processed_file_id: result.file_id,
+            url: result.url,
+            cdn_url: result.cdn_url,
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+}
+
+fn status_internal<E: std::fmt::Display>(err: E) -> Status {
+    status_from_code(ErrorCode::InternalError, err.to_string())
+}
+
+fn status_invalid_argument(message: impl Into<String>) -> Status {
+    status_from_code(ErrorCode::InvalidParameter, message.into())
+}
+
+fn status_from_code(code: ErrorCode, message: String) -> Status {
+    let flare_error = ErrorBuilder::new(code, message).build_error();
+    Status::from(flare_error)
+}
+
+fn to_proto_timestamp(value: chrono::DateTime<chrono::Utc>) -> Timestamp {
+    Timestamp {
+        seconds: value.timestamp(),
+        nanos: value.timestamp_subsec_nanos() as i32,
+    }
+}

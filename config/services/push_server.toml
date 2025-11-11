@@ -1,0 +1,12 @@
+[services.push_server]
+kafka = "push"
+consumer_group = "push-server"
+message_topic = "push-messages"
+notification_topic = "push-notifications"
+task_topic = "push-tasks"
+redis = "session_store"
+online_ttl_seconds = 3600
+default_tenant_id = "default"
+hook_config = "config/hooks.toml"
+# hook_config_dir = "config/hooks.d"
+

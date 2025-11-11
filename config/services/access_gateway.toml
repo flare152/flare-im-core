@@ -1,0 +1,18 @@
+# Access Gateway 服务配置
+
+[services.access_gateway]
+service_name = "flare-access-gateway"
+signaling_endpoint = "http://localhost:50061"
+message_endpoint = "http://localhost:50081"
+push_endpoint = "http://localhost:50091"
+token_secret = "insecure-secret"
+token_issuer = "flare-im-core"
+token_ttl_seconds = 3600
+token_store = "token_store"
+session_store = "session_store"
+session_store_ttl_seconds = 3600
+
+[services.access_gateway.server]
+address = "0.0.0.0"
+port = 60051
+

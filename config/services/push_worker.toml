@@ -1,0 +1,7 @@
+[services.push_worker]
+kafka = "push"
+consumer_group = "push-worker"
+task_topic = "push-tasks"
+hook_config = "config/hooks.toml"
+# hook_config_dir = "config/hooks.d"
+
