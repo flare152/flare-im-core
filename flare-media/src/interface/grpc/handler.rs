@@ -78,7 +78,6 @@ impl MediaService for MediaGrpcHandler {
             .upload_file(upload_metadata, payload)
             .await
             .map_err(status_internal)?;
-        
         Ok(Response::new(UploadFileResponse {
             file_id: metadata.file_id.clone(),
             url: metadata.url.clone(),

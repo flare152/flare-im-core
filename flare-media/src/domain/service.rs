@@ -306,36 +306,21 @@ impl MediaService {
         let md5 = Some(format!("{:x}", md5_compute(context.payload)));
         tracing::debug!(file_id = context.file_id, md5 = md5.as_ref().unwrap(), "计算文件MD5哈希");
 
-        // 添加调试日志，检查对象存储配置
-        tracing::debug!(
-            file_id = context.file_id,
-            has_object_repo = self.object_repo.is_some(),
-            has_local_store = self.local_store.is_some(),
-            "检查存储配置"
-        );
-
         let (url, cdn_url) = if let Some(object_repo) = &self.object_repo {
             tracing::debug!(file_id = context.file_id, "使用对象存储存储文件");
-            match object_repo.put_object(&context).await {
-                Ok(path) => {
-                    tracing::debug!(file_id = context.file_id, object_path = &path, "文件已存储到对象存储");
-                    let base = object_repo.base_url();
-                    let cdn = self
-                        .cdn_base_url
-                        .clone()
-                        .or_else(|| object_repo.cdn_base_url());
-                    (
-                        base.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
-                            .unwrap_or_default(),
-                        cdn.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
-                            .unwrap_or_default(),
-                    )
-                }
-                Err(e) => {
-                    tracing::error!(file_id = context.file_id, error = %e, "对象存储上传失败");
-                    return Err(e).context("store media file in object storage");
-                }
-            }
+            let path = object_repo.put_object(&context).await?;
+            tracing::debug!(file_id = context.file_id, object_path = &path, "文件已存储到对象存储");
+            let base = object_repo.base_url();
+            let cdn = self
+                .cdn_base_url
+                .clone()
+                .or_else(|| object_repo.cdn_base_url());
+            (
+                base.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
+                    .unwrap_or_default(),
+                cdn.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
+                    .unwrap_or_default(),
+            )
         } else if let Some(local_store) = &self.local_store {
             tracing::debug!(file_id = context.file_id, "使用本地存储存储文件");
             let path = local_store.write(&context).await?;

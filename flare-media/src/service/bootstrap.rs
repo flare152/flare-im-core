@@ -82,18 +82,6 @@ impl ApplicationBootstrap {
         let object_repo: Option<ObjectRepositoryRef> =
             build_object_store(config.object_store.as_ref()).await?;
 
-        // 添加调试日志
-        if let Some(ref object_store_config) = config.object_store {
-            tracing::debug!(
-                "Object store config: profile_type={}, endpoint={:?}, bucket={:?}",
-                object_store_config.profile_type,
-                object_store_config.endpoint,
-                object_store_config.bucket
-            );
-        } else {
-            tracing::debug!("No object store config found");
-        }
-
         let (metadata_store, reference_store): (Option<MetadataStoreRef>, Option<ReferenceStoreRef>) =
             match config.postgres_url() {
                 Some(url) => {
@@ -174,11 +162,6 @@ impl ApplicationBootstrap {
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("shutdown signal received");
-                Ok(())
-            }
-            else => {
-                // 默认情况，服务器正常运行
-                info!("media service running");
                 Ok(())
             }
         };

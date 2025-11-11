@@ -1,151 +1,22 @@
 // 集成测试套件 - 验证MediaService的所有gRPC接口功能
 // 参考 README.md 中的测试指南
 use anyhow::Result;
-use flare_im_core::config::{ServicesConfig, MediaServiceConfig, ObjectStoreConfig, ServiceRuntimeConfig, ServiceEndpointConfig};
-use std::collections::HashMap;
+use flare_proto::media::media_service_client::MediaServiceClient;
+use flare_proto::media::*;
 use std::error::Error;
 use tracing::info;
-use tonic::transport::Server;
-
-// 创建测试配置，使用MinIO作为对象存储
-fn create_test_config_with_minio() -> flare_im_core::config::FlareAppConfig {
-    let mut object_storage = HashMap::new();
-    object_storage.insert("default".to_string(), ObjectStoreConfig {
-        profile_type: "minio".to_string(),
-        endpoint: Some("http://localhost:29000".to_string()),
-        access_key: Some("minioadmin".to_string()),
-        secret_key: Some("minioadmin".to_string()),
-        bucket: Some("flare-media".to_string()),
-        region: Some("us-east-1".to_string()),
-        use_ssl: Some(false),
-        cdn_base_url: Some("http://localhost:29000/flare-media".to_string()),
-        upload_prefix: None,
-    });
-    
-    let services = ServicesConfig {
-        access_gateway: None,
-        media: Some(MediaServiceConfig {
-            runtime: ServiceRuntimeConfig {
-                service_name: Some("flare-media-test".to_string()),
-                server: Some(ServiceEndpointConfig {
-                    address: Some("127.0.0.1".to_string()),
-                    port: Some(0), // 使用随机端口
-                }),
-                registry: None,
-            },
-            metadata_store: Some("media".to_string()),
-            metadata_cache: Some("media_metadata".to_string()),
-            object_store: Some("default".to_string()),
-            redis_ttl_seconds: Some(3600),
-            local_storage_dir: None,
-            local_base_url: None,
-            cdn_base_url: Some("http://localhost:29000/flare-media".to_string()),
-            orphan_grace_seconds: Some(86400),
-            upload_session_store: Some("upload_sessions".to_string()),
-            chunk_upload_dir: Some("./test_data/chunks".to_string()),
-            chunk_ttl_seconds: Some(172800),
-            max_chunk_size_bytes: Some(52428800),
-        }),
-        push_proxy: None,
-        push_server: None,
-        push_worker: None,
-        message_orchestrator: None,
-    };
-    
-    let mut redis = HashMap::new();
-    redis.insert("media_metadata".to_string(), flare_im_core::config::RedisPoolConfig {
-        url: "redis://localhost:26379/2".to_string(),
-        namespace: Some("flare:media".to_string()),
-        database: Some(2),
-        ttl_seconds: Some(3600),
-    });
-    redis.insert("upload_sessions".to_string(), flare_im_core::config::RedisPoolConfig {
-        url: "redis://localhost:26379/3".to_string(),
-        namespace: Some("flare:media:upload".to_string()),
-        database: Some(3),
-        ttl_seconds: Some(86400),
-    });
-    
-    let mut postgres = HashMap::new();
-    postgres.insert("media".to_string(), flare_im_core::config::PostgresInstanceConfig {
-        url: "postgres://flare:flare123@localhost:25432/flare".to_string(),
-        max_connections: Some(20),
-        min_connections: Some(5),
-    });
-    
-    flare_im_core::config::FlareAppConfig {
-        core: flare_server_core::Config {
-            service: flare_server_core::ServiceConfig {
-                name: "flare-media-test".to_string(),
-                version: "0.1.0".to_string(),
-            },
-            server: flare_server_core::ServerConfig {
-                address: "127.0.0.1".to_string(),
-                port: 0, // 使用随机端口
-            },
-            registry: None,
-            mesh: None,
-            storage: None,
-        },
-        redis,
-        kafka: HashMap::new(),
-        postgres,
-        mongodb: HashMap::new(),
-        object_storage,
-        services,
-    }
-}
-
-// 启动测试gRPC服务器
-async fn start_test_server() -> Result<(String, tokio::task::JoinHandle<()>)> {
-    // 绑定到随机端口
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    let endpoint = format!("http://{}:{}", addr.ip(), addr.port());
-    info!("Test server listening on {}", endpoint);
-    
-    // 创建测试配置，使用MinIO作为对象存储
-    let config = create_test_config_with_minio();
-    
-    // 创建应用上下文
-    let context = flare_media::service::ApplicationBootstrap::create_context(&config).await
-        .expect("Failed to create application context");
-    
-    // 启动服务器
-    let server_handle = tokio::spawn(async move {
-        // 注意：我们不调用start_server，因为它会立即执行优雅停机
-        // 相反，我们直接创建并运行gRPC服务器
-        info!("starting test media service");
-        
-        let server_future = tonic::transport::Server::builder()
-            .add_service(context.grpc_server.into_service())
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
-            
-        // 只等待服务器启动，不等待它完成
-        if let Err(err) = server_future.await {
-            tracing::error!(error = %err, "test media service failed");
-        }
-    });
-    
-    // 等待服务器启动
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    
-    Ok((endpoint, server_handle))
-}
+use tonic::transport::Channel;
 
 #[tokio::test]
 async fn test_service_availability() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
     
-    // 启动测试服务器
-    let (endpoint, _handle) = start_test_server().await?;
-    
     // 连接到运行中的服务
-    let channel = tonic::transport::Endpoint::new(endpoint)?.connect().await?;
-    let mut client = flare_proto::media::media_service_client::MediaServiceClient::new(channel);
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?.connect().await?;
+    let mut client = MediaServiceClient::new(channel);
     
     // 发送一个简单的请求来验证服务可用性
-    let request = tonic::Request::new(flare_proto::media::GetFileInfoRequest {
+    let request = tonic::Request::new(GetFileInfoRequest {
         file_id: "non-existent-file".to_string(),
         context: None,
         tenant: None,
@@ -178,24 +49,21 @@ async fn test_service_availability() -> Result<()> {
 async fn test_upload_file() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
     
-    // 启动测试服务器
-    let (endpoint, _handle) = start_test_server().await?;
-    
     // 连接到运行中的服务
-    let channel = tonic::transport::Endpoint::new(endpoint)?.connect().await?;
-    let mut client = flare_proto::media::media_service_client::MediaServiceClient::new(channel);
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?.connect().await?;
+    let mut client = MediaServiceClient::new(channel);
     
     // 读取README.md文件内容
-    let readme_path = "tests/full_integration_test.md";
+    let readme_path = "tests/README.md";
     let readme_content = std::fs::read_to_string(readme_path)?;
     let readme_bytes = readme_content.as_bytes().to_vec();
     
     // 创建测试文件元数据 - 上传README.md文件
-    let metadata = flare_proto::media::UploadFileMetadata {
-        file_name: "full_integration_test.md".to_string(),
+    let metadata = UploadFileMetadata {
+        file_name: "README.md".to_string(),
         mime_type: "text/markdown".to_string(),
         file_size: readme_bytes.len() as i64,
-        file_type: flare_proto::media::FileType::Document as i32,
+        file_type: FileType::Document as i32,
         upload_id: "".to_string(),  // 让服务器生成
         context: None,
         tenant: None,
@@ -208,11 +76,11 @@ async fn test_upload_file() -> Result<()> {
     
     // 创建流式请求
     let requests = vec![
-        flare_proto::media::UploadFileRequest {
-            request: Some(flare_proto::media::upload_file_request::Request::Metadata(metadata)),
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::Metadata(metadata)),
         },
-        flare_proto::media::UploadFileRequest {
-            request: Some(flare_proto::media::upload_file_request::Request::ChunkData(readme_bytes)),
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::ChunkData(readme_bytes)),
         },
     ];
     
