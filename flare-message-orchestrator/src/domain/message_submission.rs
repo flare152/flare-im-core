@@ -64,9 +64,10 @@ impl MessageSubmission {
 
         let profile = MessageProfile::ensure(&mut message);
         if message.extra.get("message_type").is_none() {
-            message
-                .extra
-                .insert("message_type".into(), profile.message_type_label().to_string());
+            message.extra.insert(
+                "message_type".into(),
+                profile.message_type_label().to_string(),
+            );
         }
 
         if message.timestamp.is_none() {

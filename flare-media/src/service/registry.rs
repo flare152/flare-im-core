@@ -1,6 +1,6 @@
 //! 服务注册器 - 负责服务的注册和发现
 use anyhow::Result;
-use flare_server_core::{ServiceRegistryTrait, create_registry, ServiceInfo};
+use flare_server_core::{ServiceInfo, ServiceRegistryTrait, create_registry};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -13,7 +13,10 @@ impl ServiceRegistrar {
     pub async fn register_service(
         runtime_config: &flare_server_core::Config,
         service_type: &str,
-    ) -> Result<(Option<Arc<RwLock<Box<dyn ServiceRegistryTrait>>>>, Option<ServiceInfo>)> {
+    ) -> Result<(
+        Option<Arc<RwLock<Box<dyn ServiceRegistryTrait>>>>,
+        Option<ServiceInfo>,
+    )> {
         if let Some(reg_config) = &runtime_config.registry {
             match create_registry(reg_config.clone()).await {
                 Ok(mut registry) => {

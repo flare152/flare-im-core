@@ -6,8 +6,9 @@ use flare_proto::media::UploadFileMetadata;
 use prost_types::Timestamp;
 
 use crate::domain::models::{
-    MediaFileMetadata, MediaReference, MediaReferenceScope, MultipartChunkPayload,
-    MultipartUploadInit, MultipartUploadSession, PresignedUrl, UploadContext,
+    FILE_CATEGORY_METADATA_KEY, MediaFileMetadata, MediaReference, MediaReferenceScope,
+    MultipartChunkPayload, MultipartUploadInit, MultipartUploadSession, PresignedUrl,
+    UploadContext, infer_file_category,
 };
 use crate::domain::service::MediaService;
 
@@ -58,12 +59,21 @@ impl MediaApplication {
             Some(metadata.business_tag.as_str())
         };
 
+        let file_category = infer_file_category(
+            Some(metadata.file_type().as_str_name()),
+            metadata.mime_type.as_str(),
+        );
+        extra_metadata
+            .entry(FILE_CATEGORY_METADATA_KEY.to_string())
+            .or_insert_with(|| file_category.clone());
+
         let context = UploadContext {
             file_id,
             file_name: metadata.file_name.as_str(),
             mime_type: metadata.mime_type.as_str(),
             payload,
             file_size: metadata.file_size,
+            file_category,
             user_id: metadata.user_id.as_str(),
             trace_id,
             namespace,
@@ -119,6 +129,16 @@ impl MediaApplication {
         metadata: UploadFileMetadata,
         chunk_size: i64,
     ) -> Result<MultipartUploadSession> {
+        let file_category = infer_file_category(
+            Some(metadata.file_type().as_str_name()),
+            metadata.mime_type.as_str(),
+        );
+
+        let mut metadata_map = metadata.metadata.clone();
+        metadata_map
+            .entry(FILE_CATEGORY_METADATA_KEY.to_string())
+            .or_insert_with(|| file_category.clone());
+
         let init = MultipartUploadInit {
             file_name: metadata.file_name.clone(),
             mime_type: metadata.mime_type.clone(),
@@ -145,7 +165,7 @@ impl MediaApplication {
             } else {
                 Some(metadata.trace_id.clone())
             },
-            metadata: metadata.metadata.clone(),
+            metadata: metadata_map,
         };
 
         self.service

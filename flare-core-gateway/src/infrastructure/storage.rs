@@ -4,8 +4,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use flare_proto::storage::storage_service_client::StorageServiceClient;
 use flare_proto::storage::{
-    BatchStoreMessageRequest, BatchStoreMessageResponse, QueryMessagesRequest, QueryMessagesResponse,
-    StoreMessageRequest, StoreMessageResponse,
+    BatchStoreMessageRequest, BatchStoreMessageResponse, QueryMessagesRequest,
+    QueryMessagesResponse, StoreMessageRequest, StoreMessageResponse,
 };
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
@@ -18,10 +18,7 @@ pub trait StorageClient: Send + Sync {
         &self,
         request: BatchStoreMessageRequest,
     ) -> Result<BatchStoreMessageResponse>;
-    async fn query_messages(
-        &self,
-        request: QueryMessagesRequest,
-    ) -> Result<QueryMessagesResponse>;
+    async fn query_messages(&self, request: QueryMessagesRequest) -> Result<QueryMessagesResponse>;
 }
 
 pub struct GrpcStorageClient {
@@ -87,10 +84,7 @@ impl StorageClient for GrpcStorageClient {
             })
     }
 
-    async fn query_messages(
-        &self,
-        request: QueryMessagesRequest,
-    ) -> Result<QueryMessagesResponse> {
+    async fn query_messages(&self, request: QueryMessagesRequest) -> Result<QueryMessagesResponse> {
         let mut client = self.ensure_client().await?;
         client
             .query_messages(request)
@@ -103,4 +97,3 @@ impl StorageClient for GrpcStorageClient {
             })
     }
 }
-

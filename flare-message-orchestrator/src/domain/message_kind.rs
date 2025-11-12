@@ -43,8 +43,9 @@ fn infer_from_content_type(raw: &str) -> MessageType {
         "image" | "image/png" | "image/jpeg" | "image/jpg" => MessageType::Image,
         "video" | "video/mp4" | "video/mpeg" => MessageType::Video,
         "audio" | "audio/aac" | "audio/mpeg" | "voice" => MessageType::Audio,
-        "file" | "application/octet-stream" | "application/pdf" | "application/zip" =>
-            MessageType::File,
+        "file" | "application/octet-stream" | "application/pdf" | "application/zip" => {
+            MessageType::File
+        }
         "sticker" | "emoji" | "gif" => MessageType::Sticker,
         "location" | "geo" | "geolocation" => MessageType::Location,
         "card" | "share_card" | "invite_card" => MessageType::Card,
@@ -103,4 +104,3 @@ mod tests {
         assert_eq!(msg.content_type, "custom");
     }
 }
-

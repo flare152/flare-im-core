@@ -26,9 +26,7 @@ impl SignalingRouteServer {
         ));
         let service = RouteDirectoryService::new(repository, &route_config);
         for (svid, endpoint) in &route_config.default_services {
-            service
-                .register(svid.clone(), endpoint.clone())
-                .await?;
+            service.register(svid.clone(), endpoint.clone()).await?;
         }
         let service = Arc::new(service);
         let handler = Arc::new(RouteHandler::new(service));

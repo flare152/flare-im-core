@@ -40,8 +40,7 @@ impl PushServer {
             task_publisher,
             hooks.clone(),
         ));
-        let consumer =
-            Arc::new(PushKafkaConsumer::new(server_config, command_service).await?);
+        let consumer = Arc::new(PushKafkaConsumer::new(server_config, command_service).await?);
         Ok(Self { consumer })
     }
 

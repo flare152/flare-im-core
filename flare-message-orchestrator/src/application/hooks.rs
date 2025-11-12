@@ -51,10 +51,14 @@ pub fn build_hook_context(
         tags,
     }) = request.context.as_ref()
     {
-        ctx.request_metadata.insert("request_id".into(), request_id.clone());
-        ctx.request_metadata.insert("span_id".into(), span_id.clone());
-        ctx.request_metadata.insert("client_ip".into(), client_ip.clone());
-        ctx.request_metadata.insert("user_agent".into(), user_agent.clone());
+        ctx.request_metadata
+            .insert("request_id".into(), request_id.clone());
+        ctx.request_metadata
+            .insert("span_id".into(), span_id.clone());
+        ctx.request_metadata
+            .insert("client_ip".into(), client_ip.clone());
+        ctx.request_metadata
+            .insert("user_agent".into(), user_agent.clone());
         if !trace_id.is_empty() {
             ctx.trace_id = Some(trace_id.clone());
         }
@@ -278,7 +282,10 @@ pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookCo
         updated.attributes = original.attributes.clone();
     } else {
         for (key, value) in &original.attributes {
-            updated.attributes.entry(key.clone()).or_insert(value.clone());
+            updated
+                .attributes
+                .entry(key.clone())
+                .or_insert(value.clone());
         }
     }
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as AnyhowContext;
+use flare_proto::TenantContext;
 use flare_proto::communication_core::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, LoginRequest, LoginResponse,
     PushMessageRequest, PushMessageResponse, PushNotificationRequest, PushNotificationResponse,
@@ -11,18 +12,16 @@ use flare_proto::push::{
     PushMessageRequest as PushProtoMessageRequest,
     PushNotificationRequest as PushProtoNotificationRequest,
 };
+use flare_proto::signaling::{
+    GetOnlineStatusRequest as SignalingGetOnlineStatusRequest,
+    LoginRequest as SignalingLoginRequest, OnlineStatus as SignalingOnlineStatus,
+    RouteMessageRequest as SignalingRouteMessageRequest,
+    RouteMessageResponse as SignalingRouteMessageResponse,
+};
 use flare_proto::storage::{
     QueryMessagesRequest as StorageQueryMessagesRequest,
     StoreMessageRequest as StorageStoreMessageRequest,
 };
-use flare_proto::signaling::{
-    GetOnlineStatusRequest as SignalingGetOnlineStatusRequest,
-    LoginRequest as SignalingLoginRequest,
-    RouteMessageRequest as SignalingRouteMessageRequest,
-    RouteMessageResponse as SignalingRouteMessageResponse,
-    OnlineStatus as SignalingOnlineStatus,
-};
-use flare_proto::TenantContext;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 
 use crate::infrastructure::push::PushClient;
@@ -55,12 +54,11 @@ pub(crate) fn tenant_id_label(tenant: Option<&TenantContext>) -> &str {
 fn ensure_tenant(tenant: &Option<TenantContext>, operation: &str) -> Result<()> {
     match tenant {
         Some(ctx) if !ctx.tenant_id.trim().is_empty() => Ok(()),
-        _ => Err(ErrorBuilder::new(
-            ErrorCode::InvalidParameter,
-            "tenant context is required",
-        )
-        .details(format!("operation={operation}"))
-        .build_error()),
+        _ => Err(
+            ErrorBuilder::new(ErrorCode::InvalidParameter, "tenant context is required")
+                .details(format!("operation={operation}"))
+                .build_error(),
+        ),
     }
 }
 
@@ -80,7 +78,9 @@ fn to_signaling_login(request: LoginRequest) -> SignalingLoginRequest {
     }
 }
 
-fn to_core_online_status(status: SignalingOnlineStatus) -> flare_proto::communication_core::OnlineStatus {
+fn to_core_online_status(
+    status: SignalingOnlineStatus,
+) -> flare_proto::communication_core::OnlineStatus {
     flare_proto::communication_core::OnlineStatus {
         online: status.online,
         server_id: status.server_id,
@@ -89,7 +89,9 @@ fn to_core_online_status(status: SignalingOnlineStatus) -> flare_proto::communic
     }
 }
 
-fn convert_push_failure(failure: flare_proto::push::PushFailure) -> flare_proto::communication_core::PushFailure {
+fn convert_push_failure(
+    failure: flare_proto::push::PushFailure,
+) -> flare_proto::communication_core::PushFailure {
     flare_proto::communication_core::PushFailure {
         user_id: failure.user_id,
         code: failure.code,
@@ -139,10 +141,7 @@ impl GatewayHandler {
             context: request.context,
             tenant: request.tenant,
         };
-        let response = self
-            .signaling
-            .get_online_status(signaling_request)
-            .await?;
+        let response = self.signaling.get_online_status(signaling_request).await?;
 
         Ok(GetOnlineStatusResponse {
             statuses: response
@@ -172,10 +171,7 @@ impl GatewayHandler {
             tenant: request.tenant,
         };
 
-        let response = self
-            .signaling
-            .route_message(signaling_request)
-            .await?;
+        let response = self.signaling.route_message(signaling_request).await?;
 
         Ok(RouteMessageResponse {
             success: response.success,
@@ -213,13 +209,11 @@ impl GatewayHandler {
 
         let storage_request = StorageStoreMessageRequest {
             session_id,
-            message: Some(
-                core_to_storage_message(&core_message).map_err(|err| {
-                    ErrorBuilder::new(ErrorCode::InternalError, "failed to encode message")
-                        .details(err.to_string())
-                        .build_error()
-                })?,
-            ),
+            message: Some(core_to_storage_message(&core_message).map_err(|err| {
+                ErrorBuilder::new(ErrorCode::InternalError, "failed to encode message")
+                    .details(err.to_string())
+                    .build_error()
+            })?),
             sync,
             context,
             tenant,
@@ -373,17 +367,21 @@ mod tests {
     use async_trait::async_trait;
     use flare_proto::communication_core::message_content::Content;
     use flare_proto::communication_core::{Message, MessageContent, MessageType, TextContent};
-    use flare_proto::push::{PushFailure as PushProtoFailure, PushMessageResponse as PushProtoMessageResponse, PushNotificationResponse as PushProtoNotificationResponse};
+    use flare_proto::push::{
+        PushFailure as PushProtoFailure, PushMessageResponse as PushProtoMessageResponse,
+        PushNotificationResponse as PushProtoNotificationResponse,
+    };
     use flare_proto::signaling::{
         GetOnlineStatusRequest, GetOnlineStatusResponse, LoginRequest, LoginResponse,
         LogoutRequest, LogoutResponse, RouteMessageRequest, RouteMessageResponse,
     };
     use flare_proto::storage::{
-        BatchStoreMessageRequest, BatchStoreMessageResponse, QueryMessagesRequest as StorageQueryMessagesRequest,
-        QueryMessagesResponse as StorageQueryMessagesResponse, StoreMessageRequest as StorageStoreMessageRequest,
-        StoreMessageResponse,
+        BatchStoreMessageRequest, BatchStoreMessageResponse,
+        QueryMessagesRequest as StorageQueryMessagesRequest,
+        QueryMessagesResponse as StorageQueryMessagesResponse,
+        StoreMessageRequest as StorageStoreMessageRequest, StoreMessageResponse,
     };
-    use flare_server_core::error::{ok_status, ErrorBuilder, ErrorCode, Result};
+    use flare_server_core::error::{ErrorBuilder, ErrorCode, Result, ok_status};
     use std::sync::Mutex;
     use tokio::runtime::Runtime;
 
@@ -418,10 +416,7 @@ mod tests {
             })
         }
 
-        async fn route_message(
-            &self,
-            _: RouteMessageRequest,
-        ) -> Result<RouteMessageResponse> {
+        async fn route_message(&self, _: RouteMessageRequest) -> Result<RouteMessageResponse> {
             Ok(RouteMessageResponse {
                 success: true,
                 response: b"OK".to_vec(),
@@ -463,11 +458,10 @@ mod tests {
             &self,
             _: BatchStoreMessageRequest,
         ) -> Result<BatchStoreMessageResponse> {
-            Err(ErrorBuilder::new(
-                ErrorCode::OperationNotSupported,
-                "not used in tests",
+            Err(
+                ErrorBuilder::new(ErrorCode::OperationNotSupported, "not used in tests")
+                    .build_error(),
             )
-            .build_error())
         }
 
         async fn query_messages(
@@ -619,4 +613,3 @@ mod tests {
         assert_eq!(decoded.message_type, MessageType::MessageTypeText as i32);
     }
 }
-

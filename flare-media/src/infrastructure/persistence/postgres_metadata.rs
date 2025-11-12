@@ -8,7 +8,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Row};
 
-use crate::domain::models::{MediaAssetStatus, MediaFileMetadata, MediaReference, FileAccessType};
+use crate::domain::models::{FileAccessType, MediaAssetStatus, MediaFileMetadata, MediaReference};
 use crate::domain::repositories::{MediaMetadataStore, MediaReferenceStore};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
@@ -77,7 +77,7 @@ impl MediaAssetRow {
             MediaAssetStatus::SoftDeleted => "soft_deleted",
         }
     }
-    
+
     fn access_type_to_str(access_type: FileAccessType) -> &'static str {
         match access_type {
             FileAccessType::Public => "public",
@@ -134,7 +134,9 @@ impl PostgresMetadataStore {
             .await
             .context("failed to connect to postgres")?;
 
-        Ok(Self { pool: Arc::new(pool) })
+        Ok(Self {
+            pool: Arc::new(pool),
+        })
     }
 
     fn pool(&self) -> &PgPool {
@@ -150,7 +152,7 @@ impl PostgresMetadataStore {
 impl MediaMetadataStore for PostgresMetadataStore {
     async fn save_metadata(&self, metadata: &MediaFileMetadata) -> Result<()> {
         let metadata_json = Self::metadata_to_json(&metadata.metadata)?;
-        
+
         sqlx::query(
             r#"
             INSERT INTO media_assets (
@@ -206,7 +208,7 @@ impl MediaMetadataStore for PostgresMetadataStore {
 
         Ok(())
     }
-    
+
     async fn load_metadata(&self, file_id: &str) -> Result<Option<MediaFileMetadata>> {
         let row = sqlx::query_as::<_, MediaAssetRow>(
             r#"
@@ -353,7 +355,7 @@ impl MediaMetadataStore for PostgresMetadataStore {
 impl MediaReferenceStore for PostgresMetadataStore {
     async fn create_reference(&self, reference: &MediaReference) -> Result<bool> {
         let metadata_json = Self::metadata_to_json(&reference.metadata)?;
-        
+
         let result = sqlx::query(
             r#"
             INSERT INTO media_references (
@@ -396,15 +398,17 @@ impl MediaReferenceStore for PostgresMetadataStore {
     }
 
     async fn delete_any_reference(&self, file_id: &str) -> Result<Option<String>> {
-        let row = sqlx::query("DELETE FROM media_references WHERE file_id = $1 RETURNING reference_id")
-            .bind(file_id)
-            .fetch_optional(self.pool())
-            .await
-            .context("failed to delete any media reference")?;
+        let row =
+            sqlx::query("DELETE FROM media_references WHERE file_id = $1 RETURNING reference_id")
+                .bind(file_id)
+                .fetch_optional(self.pool())
+                .await
+                .context("failed to delete any media reference")?;
 
         match row {
             Some(row) => {
-                let reference_id: String = row.try_get("reference_id")
+                let reference_id: String = row
+                    .try_get("reference_id")
                     .context("failed to get reference_id from row")?;
                 Ok(Some(reference_id))
             }
@@ -454,7 +458,8 @@ impl MediaReferenceStore for PostgresMetadataStore {
             .await
             .context("failed to count media references")?;
 
-        let count: i64 = row.try_get("count")
+        let count: i64 = row
+            .try_get("count")
             .context("failed to get count from row")?;
         Ok(count as u64)
     }

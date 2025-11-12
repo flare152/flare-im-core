@@ -10,9 +10,10 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::domain::models::{
-    MediaAssetStatus, MediaFileMetadata, MediaReference, MediaReferenceScope,
-    MultipartChunkPayload, MultipartUploadInit, MultipartUploadSession, PresignedUrl,
-    UploadContext, UploadSession, UploadSessionStatus, FileAccessType,
+    FILE_CATEGORY_METADATA_KEY, FileAccessType, MediaAssetStatus, MediaFileMetadata,
+    MediaReference, MediaReferenceScope, MultipartChunkPayload, MultipartUploadInit,
+    MultipartUploadSession, PresignedUrl, STORAGE_PATH_METADATA_KEY, UploadContext, UploadSession,
+    UploadSessionStatus, infer_file_category,
 };
 use crate::domain::repositories::{
     LocalStoreRef, MetadataCacheRef, MetadataStoreRef, ObjectRepositoryRef, ReferenceStoreRef,
@@ -216,12 +217,21 @@ impl MediaService {
         let file_id = session.upload_id.clone();
         session.total_size = Some(file_size);
 
+        let file_category = session
+            .metadata
+            .get(FILE_CATEGORY_METADATA_KEY)
+            .cloned()
+            .unwrap_or_else(|| {
+                infer_file_category(Some(session.file_type.as_str()), &session.mime_type)
+            });
+
         let context = UploadContext {
             file_id: &file_id,
             file_name: &session.file_name,
             mime_type: &session.mime_type,
             payload: &payload,
             file_size,
+            file_category,
             user_id: session.user_id.as_str(),
             trace_id: session.trace_id.as_deref(),
             namespace: session.namespace.as_deref(),
@@ -259,7 +269,10 @@ impl MediaService {
     }
 
     #[instrument(skip(self, context))]
-    pub async fn store_media_file(&self, context: UploadContext<'_>) -> Result<MediaFileMetadata> {
+    pub async fn store_media_file(
+        &self,
+        mut context: UploadContext<'_>,
+    ) -> Result<MediaFileMetadata> {
         tracing::debug!(
             file_id = context.file_id,
             file_name = context.file_name,
@@ -267,17 +280,33 @@ impl MediaService {
             user_id = context.user_id,
             "开始存储媒体文件"
         );
-        
+
+        let category = Self::ensure_file_category(&mut context);
+        context
+            .metadata
+            .insert(FILE_CATEGORY_METADATA_KEY.to_string(), category.clone());
+
         let sha256 = self.compute_sha256(context.payload);
-        tracing::debug!(file_id = context.file_id, sha256 = &sha256, "计算文件SHA256哈希");
-        
+        tracing::debug!(
+            file_id = context.file_id,
+            sha256 = &sha256,
+            "计算文件SHA256哈希"
+        );
+
         let scope = self.extract_reference_scope(&context);
         tracing::debug!(file_id = context.file_id, scope = ?scope, "提取引用范围");
 
         if let Some(store) = &self.metadata_store {
-            tracing::debug!(file_id = context.file_id, "检查数据库中是否已存在相同哈希的文件");
+            tracing::debug!(
+                file_id = context.file_id,
+                "检查数据库中是否已存在相同哈希的文件"
+            );
             if let Some(mut existing) = store.load_by_hash(&sha256).await? {
-                tracing::debug!(file_id = context.file_id, existing_file_id = existing.file_id, "发现已存在的文件，使用去重机制");
+                tracing::debug!(
+                    file_id = context.file_id,
+                    existing_file_id = existing.file_id,
+                    "发现已存在的文件，使用去重机制"
+                );
                 if let Some(scope) = scope.as_ref() {
                     tracing::debug!(file_id = context.file_id, "为已存在的文件创建引用");
                     self.ensure_reference(&mut existing, &context, scope)
@@ -290,55 +319,115 @@ impl MediaService {
                     self.save_and_cache(&existing).await?;
                 }
 
+                existing
+                    .metadata
+                    .entry(FILE_CATEGORY_METADATA_KEY.to_string())
+                    .or_insert_with(|| category.clone());
+
                 if let Some(cache) = &self.metadata_cache {
                     cache.cache_metadata(&existing).await.ok();
                 }
 
-                tracing::debug!(file_id = context.file_id, existing_file_id = existing.file_id, "返回已存在的文件元数据");
+                tracing::debug!(
+                    file_id = context.file_id,
+                    existing_file_id = existing.file_id,
+                    "返回已存在的文件元数据"
+                );
                 return Ok(existing);
             } else {
-                tracing::debug!(file_id = context.file_id, sha256 = &sha256, "数据库中未找到相同哈希的文件");
+                tracing::debug!(
+                    file_id = context.file_id,
+                    sha256 = &sha256,
+                    "数据库中未找到相同哈希的文件"
+                );
             }
         } else {
             tracing::warn!(file_id = context.file_id, "未配置元数据存储");
         }
 
         let md5 = Some(format!("{:x}", md5_compute(context.payload)));
-        tracing::debug!(file_id = context.file_id, md5 = md5.as_ref().unwrap(), "计算文件MD5哈希");
+        tracing::debug!(
+            file_id = context.file_id,
+            md5 = md5.as_ref().unwrap(),
+            "计算文件MD5哈希"
+        );
 
-        let (url, cdn_url) = if let Some(object_repo) = &self.object_repo {
+        let (url, cdn_url, storage_path) = if let Some(object_repo) = &self.object_repo {
             tracing::debug!(file_id = context.file_id, "使用对象存储存储文件");
-            let path = object_repo.put_object(&context).await?;
-            tracing::debug!(file_id = context.file_id, object_path = &path, "文件已存储到对象存储");
-            let base = object_repo.base_url();
+            let path = object_repo.put_object(&context).await.map_err(|err| {
+                tracing::error!(file_id = context.file_id, error = ?err, "上传对象到媒体存储失败");
+                err
+            })?;
+            tracing::debug!(
+                file_id = context.file_id,
+                object_path = &path,
+                "文件已存储到对象存储"
+            );
+
+            let direct_base = object_repo.base_url();
             let cdn = self
                 .cdn_base_url
                 .clone()
                 .or_else(|| object_repo.cdn_base_url());
-            (
-                base.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
-                    .unwrap_or_default(),
-                cdn.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
-                    .unwrap_or_default(),
-            )
+            let mut primary_url = String::new();
+
+            if object_repo.use_presigned_urls() {
+                match object_repo.presign_object(&path, self.default_ttl).await {
+                    Ok(value) => primary_url = value,
+                    Err(err) => {
+                        tracing::error!(object_path = &path, error = %err, "生成预签名URL失败，回退到直链");
+                        if let Some(base) = &direct_base {
+                            primary_url = Self::build_full_url(base, &path);
+                        }
+                    }
+                }
+            } else if let Some(base) = &direct_base {
+                primary_url = Self::build_full_url(base, &path);
+            }
+
+            if primary_url.is_empty() {
+                primary_url = path.clone();
+            }
+
+            let cdn_url = cdn
+                .map(|base| Self::build_full_url(&base, &path))
+                .unwrap_or_default();
+
+            (primary_url, cdn_url, Some(path))
         } else if let Some(local_store) = &self.local_store {
             tracing::debug!(file_id = context.file_id, "使用本地存储存储文件");
             let path = local_store.write(&context).await?;
-            tracing::debug!(file_id = context.file_id, local_path = &path, "文件已存储到本地存储");
+            tracing::debug!(
+                file_id = context.file_id,
+                local_path = &path,
+                "文件已存储到本地存储"
+            );
             let base = local_store.base_url();
             let cdn = self.cdn_base_url.clone().or_else(|| base.clone());
             (
-                base.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
+                base.map(|base| Self::build_full_url(&base, &path))
                     .unwrap_or_default(),
-                cdn.map(|base| format!("{}/{}", base.trim_end_matches('/'), path))
+                cdn.map(|base| Self::build_full_url(&base, &path))
                     .unwrap_or_default(),
+                Some(path),
             )
         } else {
             tracing::error!(file_id = context.file_id, "未配置媒体存储后端");
             return Err(anyhow!("no media storage backend configured"));
         };
-        
-        tracing::debug!(file_id = context.file_id, url = &url, cdn_url = &cdn_url, "生成文件URL");
+
+        if let Some(path) = storage_path {
+            context
+                .metadata
+                .insert(STORAGE_PATH_METADATA_KEY.to_string(), path);
+        }
+
+        tracing::debug!(
+            file_id = context.file_id,
+            url = &url,
+            cdn_url = &cdn_url,
+            "生成文件URL"
+        );
 
         let mut metadata = MediaFileMetadata {
             file_id: context.file_id.to_string(),
@@ -364,13 +453,13 @@ impl MediaService {
             },
             access_type: FileAccessType::default(), // 默认使用私有访问类型
         };
-        
+
         tracing::debug!(file_id = context.file_id, "准备保存文件元数据");
 
         self.save_and_cache(&metadata)
             .await
             .context("persist metadata")?;
-            
+
         tracing::debug!(file_id = context.file_id, "文件元数据已保存");
 
         if let (Some(scope), Some(_)) = (scope, self.reference_store.as_ref()) {
@@ -416,12 +505,16 @@ impl MediaService {
             return Ok(());
         }
 
+        let storage_path = metadata.metadata.get(STORAGE_PATH_METADATA_KEY).cloned();
+
         if let Some(repo) = &self.object_repo {
-            let _ = repo.delete_object(file_id).await;
+            let target = storage_path.as_deref().unwrap_or(file_id);
+            let _ = repo.delete_object(target).await;
         }
 
         if let Some(local) = &self.local_store {
-            let _ = local.delete(file_id).await;
+            let target = storage_path.as_deref().unwrap_or(file_id);
+            let _ = local.delete(target).await;
         }
 
         if let Some(reference_store) = &self.reference_store {
@@ -471,30 +564,91 @@ impl MediaService {
         };
         let expires_at = Utc::now() + Duration::seconds(expires_in);
 
-        // 根据文件访问类型生成相应的URL
-        let (url, cdn_url) = match metadata.access_type {
-            FileAccessType::Public => {
-                // 公开文件直接返回CDN URL
-                (metadata.url.clone(), metadata.cdn_url.clone())
-            },
-            FileAccessType::Private => {
-                // 私有文件生成预签名URL
-                let url = if let Some(repo) = &self.object_repo {
-                    repo.presign_object(file_id, expires_in).await?
-                } else {
-                    metadata.url.clone()
-                };
-                (url, metadata.cdn_url.clone())
-            },
+        let object_path = metadata
+            .metadata
+            .get(STORAGE_PATH_METADATA_KEY)
+            .cloned()
+            .unwrap_or_else(|| metadata.file_id.clone());
+
+        let mut url = metadata.url.clone();
+        let mut cdn_url = metadata.cdn_url.clone();
+
+        if let Some(repo) = &self.object_repo {
+            match metadata.access_type {
+                FileAccessType::Public => {
+                    if url.is_empty() {
+                        if let Some(base) = repo.base_url() {
+                            url = Self::build_full_url(&base, &object_path);
+                        }
+                    }
+                    if cdn_url.is_empty() {
+                        if let Some(cdn_base) =
+                            self.cdn_base_url.clone().or_else(|| repo.cdn_base_url())
+                        {
+                            cdn_url = Self::build_full_url(&cdn_base, &object_path);
+                        }
+                    }
+                }
+                FileAccessType::Private => {
+                    if repo.use_presigned_urls() {
+                        match repo.presign_object(&object_path, expires_in).await {
+                            Ok(presigned) => url = presigned,
+                            Err(err) => {
+                                tracing::error!(file_id = file_id, error = %err, "生成预签名URL失败，回退到直链");
+                                if let Some(base) = repo.base_url() {
+                                    url = Self::build_full_url(&base, &object_path);
+                                }
+                            }
+                        }
+                    } else if let Some(base) = repo.base_url() {
+                        url = Self::build_full_url(&base, &object_path);
+                    }
+
+                    if cdn_url.is_empty() {
+                        if let Some(cdn_base) =
+                            self.cdn_base_url.clone().or_else(|| repo.cdn_base_url())
+                        {
+                            cdn_url = Self::build_full_url(&cdn_base, &object_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        if url.is_empty() {
+            if let Some(base) = self.object_repo.as_ref().and_then(|repo| repo.base_url()) {
+                url = Self::build_full_url(&base, &object_path);
+            }
+        }
+        if url.is_empty() {
+            url = metadata.url.clone();
+        }
+        if url.is_empty() {
+            url = object_path.clone();
+        }
+
+        if cdn_url.is_empty() {
+            if let Some(base) = self.cdn_base_url.clone() {
+                cdn_url = Self::build_full_url(&base, &object_path);
+            }
+        }
+        if cdn_url.is_empty() {
+            cdn_url = metadata.cdn_url.clone();
+        }
+
+        let final_cdn_url = if cdn_url.is_empty() {
+            if let Some(base) = self.cdn_base_url.clone() {
+                Self::build_full_url(&base, &object_path)
+            } else {
+                String::new()
+            }
+        } else {
+            cdn_url
         };
 
         Ok(PresignedUrl {
             url,
-            cdn_url: if cdn_url.is_empty() {
-                self.cdn_base_url.clone().unwrap_or_default()
-            } else {
-                cdn_url
-            },
+            cdn_url: final_cdn_url,
             expires_at,
         })
     }
@@ -603,11 +757,17 @@ impl MediaService {
             .context("list orphaned media assets")?;
 
         for asset in &expired {
+            let storage_path = asset
+                .metadata
+                .get(STORAGE_PATH_METADATA_KEY)
+                .cloned()
+                .unwrap_or_else(|| asset.file_id.clone());
+
             if let Some(repo) = &self.object_repo {
-                let _ = repo.delete_object(&asset.file_id).await;
+                let _ = repo.delete_object(&storage_path).await;
             }
             if let Some(local) = &self.local_store {
-                let _ = local.delete(&asset.file_id).await;
+                let _ = local.delete(&storage_path).await;
             }
             if let Some(reference_store) = &self.reference_store {
                 let _ = reference_store.delete_all_references(&asset.file_id).await;
@@ -666,6 +826,40 @@ impl MediaService {
                 .with_context(|| format!("failed to cleanup chunk directory {:?}", dir))?;
         }
         Ok(())
+    }
+
+    fn ensure_file_category(context: &mut UploadContext<'_>) -> String {
+        if !context.file_category.is_empty() {
+            return context.file_category.clone();
+        }
+
+        let hint = context
+            .metadata
+            .get("file_type")
+            .map(|value| value.as_str())
+            .or_else(|| {
+                context
+                    .metadata
+                    .get(FILE_CATEGORY_METADATA_KEY)
+                    .map(|value| value.as_str())
+            });
+
+        let category = infer_file_category(hint, context.mime_type);
+        context.file_category = category.clone();
+        category
+    }
+
+    fn build_full_url(base: &str, path: &str) -> String {
+        let trimmed_base = base.trim_end_matches('/');
+        let trimmed_path = path.trim_start_matches('/');
+
+        if trimmed_base.is_empty() {
+            trimmed_path.to_string()
+        } else if trimmed_path.is_empty() {
+            trimmed_base.to_string()
+        } else {
+            format!("{}/{}", trimmed_base, trimmed_path)
+        }
     }
 
     fn extract_reference_scope(&self, context: &UploadContext<'_>) -> Option<MediaReferenceScope> {

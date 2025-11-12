@@ -1,8 +1,4 @@
 //! 应用启动器 - 负责依赖注入和服务启动
-use anyhow::Result;
-use std::sync::Arc;
-use flare_im_core::FlareAppConfig;
-use flare_server_core::ServiceRegistryTrait;
 use crate::application::commands::MediaCommandService;
 use crate::application::queries::MediaQueryService;
 use crate::application::service::MediaApplication;
@@ -20,13 +16,18 @@ use crate::infrastructure::session::redis_session::RedisUploadSessionStore;
 use crate::interface::grpc::handler::MediaGrpcHandler;
 use crate::interface::grpc::server::MediaGrpcServer;
 use crate::service::registry::ServiceRegistrar;
+use anyhow::Result;
+use flare_im_core::FlareAppConfig;
+use flare_server_core::ServiceRegistryTrait;
+use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::info;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
     pub grpc_server: Arc<MediaGrpcServer>,
-    pub service_registry: Option<std::sync::Arc<tokio::sync::RwLock<Box<dyn ServiceRegistryTrait>>>>,
+    pub service_registry:
+        Option<std::sync::Arc<tokio::sync::RwLock<Box<dyn ServiceRegistryTrait>>>>,
     pub service_info: Option<flare_server_core::ServiceInfo>,
 }
 
@@ -38,17 +39,18 @@ impl ApplicationBootstrap {
     pub async fn run(config: &'static FlareAppConfig) -> Result<()> {
         // 创建应用上下文
         let context = Self::create_context(config).await?;
-        
+
         // 获取运行时配置
         let service_cfg = config.media_service();
         let runtime_config = config.compose_service_config(&service_cfg.runtime, "flare-media");
-        
+
         // 启动服务器
         Self::start_server(
             context,
             &runtime_config.server.address,
             runtime_config.server.port,
-        ).await
+        )
+        .await
     }
 
     /// 创建应用上下文
@@ -57,16 +59,17 @@ impl ApplicationBootstrap {
         let runtime_config = config.compose_service_config(&service_cfg.runtime, "flare-media");
         let service_type = runtime_config.service.name.clone();
         let media_config = MediaConfig::from_app_config(config);
-        
+
         // 注册服务
-        let (service_registry, service_info) = ServiceRegistrar::register_service(&runtime_config, &service_type).await?;
+        let (service_registry, service_info) =
+            ServiceRegistrar::register_service(&runtime_config, &service_type).await?;
 
         // 构建核心服务
         let media_service = Self::build_media_service(&media_config).await?;
         let application = Arc::new(MediaApplication::new(media_service));
         let command_service = Arc::new(MediaCommandService::new(application.clone()));
         let query_service = Arc::new(MediaQueryService::new(application));
-        
+
         let handler = Arc::new(MediaGrpcHandler::new(command_service, query_service));
         let grpc_server = Arc::new(MediaGrpcServer::new(handler));
 
@@ -82,16 +85,18 @@ impl ApplicationBootstrap {
         let object_repo: Option<ObjectRepositoryRef> =
             build_object_store(config.object_store.as_ref()).await?;
 
-        let (metadata_store, reference_store): (Option<MetadataStoreRef>, Option<ReferenceStoreRef>) =
-            match config.postgres_url() {
-                Some(url) => {
-                    let store = PostgresMetadataStore::new(url).await?;
-                    let metadata_store: MetadataStoreRef = Arc::new(store.clone());
-                    let reference_store: ReferenceStoreRef = Arc::new(store.clone());
-                    (Some(metadata_store), Some(reference_store))
-                }
-                None => (None, None),
-            };
+        let (metadata_store, reference_store): (
+            Option<MetadataStoreRef>,
+            Option<ReferenceStoreRef>,
+        ) = match config.postgres_url() {
+            Some(url) => {
+                let store = PostgresMetadataStore::new(url).await?;
+                let metadata_store: MetadataStoreRef = Arc::new(store.clone());
+                let reference_store: ReferenceStoreRef = Arc::new(store.clone());
+                (Some(metadata_store), Some(reference_store))
+            }
+            None => (None, None),
+        };
 
         let metadata_cache: Option<MetadataCacheRef> = match config.redis_url() {
             Some(url) => Some(
@@ -140,11 +145,7 @@ impl ApplicationBootstrap {
     }
 
     /// 启动gRPC服务器
-    pub async fn start_server(
-        context: ApplicationContext,
-        address: &str,
-        port: u16,
-    ) -> Result<()> {
+    pub async fn start_server(context: ApplicationContext, address: &str, port: u16) -> Result<()> {
         let addr = format!("{}:{}", address, port).parse()?;
         info!(%addr, "starting media service");
 
@@ -176,7 +177,9 @@ impl ApplicationBootstrap {
     /// 优雅停机处理
     async fn graceful_shutdown(context: ApplicationContext) {
         // 如果有服务注册器，执行服务注销
-        if let (Some(registry), Some(service_info)) = (&context.service_registry, &context.service_info) {
+        if let (Some(registry), Some(service_info)) =
+            (&context.service_registry, &context.service_info)
+        {
             info!("unregistering service...");
             let mut registry = registry.write().await;
             if let Err(e) = registry.unregister(&service_info.instance_id).await {

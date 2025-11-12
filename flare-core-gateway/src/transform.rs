@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use flare_proto::communication_core::{
-    notification_content, BusinessType, Message as CoreMessage, MessageContent, MessageType,
-    Notification, NotificationType, PushOptions,
+    BusinessType, Message as CoreMessage, MessageContent, MessageType, Notification,
+    NotificationType, PushOptions, notification_content,
 };
 use flare_proto::push::Notification as PushNotification;
 use flare_proto::storage::Message as StorageMessage;
@@ -20,8 +20,8 @@ pub fn core_push_options_to_push(options: &Option<PushOptions>) -> flare_proto::
 }
 
 pub fn core_notification_to_push(notification: &Notification) -> PushNotification {
-    let notification_type = NotificationType::from_i32(notification.r#type)
-        .unwrap_or(NotificationType::Unspecified);
+    let notification_type =
+        NotificationType::from_i32(notification.r#type).unwrap_or(NotificationType::Unspecified);
 
     let (title, body, data) = match notification
         .content
@@ -43,11 +43,9 @@ pub fn core_notification_to_push(notification: &Notification) -> PushNotificatio
             format!("{}: {}", status.user_id, status.status),
             Default::default(),
         ),
-        Some(notification_content::Content::Group(group)) => (
-            group.title.clone(),
-            group.body.clone(),
-            group.data.clone(),
-        ),
+        Some(notification_content::Content::Group(group)) => {
+            (group.title.clone(), group.body.clone(), group.data.clone())
+        }
         Some(notification_content::Content::Friend(friend)) => (
             "friend".into(),
             format!("{}: {}", friend.user_id, friend.action),
@@ -69,9 +67,7 @@ pub fn core_notification_to_push(notification: &Notification) -> PushNotificatio
             custom.data.clone(),
         ),
         None => (
-            notification_type
-                .as_str_name()
-                .to_lowercase(),
+            notification_type.as_str_name().to_lowercase(),
             String::new(),
             Default::default(),
         ),
@@ -86,8 +82,7 @@ pub fn core_notification_to_push(notification: &Notification) -> PushNotificatio
 }
 
 pub fn core_to_storage_message(message: &CoreMessage) -> Result<StorageMessage> {
-    let message_type = MessageType::from_i32(message.message_type)
-        .unwrap_or(MessageType::Custom);
+    let message_type = MessageType::from_i32(message.message_type).unwrap_or(MessageType::Custom);
     let content_type = message_type_label(message_type).to_string();
     let payload = encode_structured_content(&message.content)?;
 
@@ -204,4 +199,3 @@ fn parse_business_type(value: &str) -> BusinessType {
         _ => BusinessType::Other,
     }
 }
-

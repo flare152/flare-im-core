@@ -80,23 +80,23 @@ impl RouteDirectoryService {
                 self.register(svid.clone(), endpoint).await?;
                 info!(%svid, %user_id, "route registration completed");
                 Ok(RouteMessageResponse {
-                success: true,
+                    success: true,
                     response: vec![],
-                error_message: String::new(),
-                status: util::rpc_status_ok(),
+                    error_message: String::new(),
+                    status: util::rpc_status_ok(),
                 })
-        }
+            }
             RouteInstruction::Forward { .. } => {
                 let message =
                     "business payload forwarding is not implemented in the current deployment"
                         .to_string();
                 warn!(%svid, %user_id, "{}", message);
-        Ok(RouteMessageResponse {
-            success: false,
-            response: vec![],
-            error_message: message.clone(),
+                Ok(RouteMessageResponse {
+                    success: false,
+                    response: vec![],
+                    error_message: message.clone(),
                     status: util::rpc_status_error(ErrorCode::OperationNotSupported, &message),
-        })
+                })
             }
         }
     }
@@ -124,7 +124,7 @@ impl RouteDirectoryService {
             match serde_json::from_slice::<RouteCommand>(&payload) {
                 Ok(RouteCommand::Lookup) => return RouteInstruction::Lookup,
                 Ok(RouteCommand::Register { endpoint }) => {
-                    return RouteInstruction::Register { endpoint }
+                    return RouteInstruction::Register { endpoint };
                 }
                 Err(err) => {
                     debug!(error = %err, "failed to parse route command JSON, falling back to forward");
@@ -135,11 +135,7 @@ impl RouteDirectoryService {
         RouteInstruction::Forward { payload }
     }
 
-    async fn lookup_endpoint(
-        &self,
-        svid: &str,
-        user_id: &str,
-    ) -> Result<RouteMessageResponse> {
+    async fn lookup_endpoint(&self, svid: &str, user_id: &str) -> Result<RouteMessageResponse> {
         if let Some(endpoint) = self.resolve_cached(svid).await? {
             debug!(%svid, %user_id, %endpoint, "resolved business route endpoint");
             let body = serde_json::to_vec(&RouteLookupResponse {

@@ -86,6 +86,19 @@ cdn_base_url = "http://localhost:50092/files"
 - `local_storage_dir`：可选的本地缓存目录，在开发环境或转码阶段使用。
 - `cdn_base_url`：对外访问基准 URL，可切换至 CDN。
 
+### 对象存储配置约定
+
+`config/base.toml` 中的对象存储 profile 已统一为 S3 兼容实现，通过配置即可适配 MinIO、AWS S3、阿里云 OSS、腾讯 COS、GCP GCS、七牛等后端。关键字段：
+
+- `presign_url_ttl_seconds`：预签名 URL 默认有效期（秒），未显式传参时用于 `GetFileUrl` 与上传返回的 URL。
+- `use_presign`：布尔开关；为 `true` 时返回预签名 URL，`false` 时直接拼接直链/CDN 地址，由对象存储本身控制权限。
+- `bucket_root_prefix`：桶内的统一根路径前缀（支持多租户、环境隔离），可配置为 `tenant-a/media` 这类多层路径。
+- `force_path_style`：控制 SDK 是否使用 path-style 访问（非 AWS 端点通常需要开启）。
+
+对象实际存储路径遵循：`{bucket_root_prefix?}/{file_type}/{yyyy}/{mm}/{dd}/{file_id}[.ext]`。`file_type` 会根据上传元数据或 MIME 自动归类为 `images` / `videos` / `audio` / `documents` / `others`，便于分级治理与生命周期策略编排。
+
+> ⚠️ 访问策略交由对象存储自身管理：是否公有、读写权限、CORS、带宽限制等都在桶策略/网关层配置；`flare-media` 仅按照 `use_presign` 决定返回预签名还是直链。
+
 ## 模块结构
 
 ```text

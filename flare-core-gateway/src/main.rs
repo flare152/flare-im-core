@@ -5,7 +5,7 @@ mod infrastructure;
 mod server;
 mod transform;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use config::GatewayConfig;
 use flare_im_core::error::FlareError;
 use flare_im_core::{load_config, register_service};

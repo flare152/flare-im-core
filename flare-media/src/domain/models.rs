@@ -3,6 +3,9 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 
+pub const STORAGE_PATH_METADATA_KEY: &str = "storage_path";
+pub const FILE_CATEGORY_METADATA_KEY: &str = "file_category";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaAssetStatus {
     Pending,
@@ -109,6 +112,7 @@ pub struct UploadContext<'a> {
     pub mime_type: &'a str,
     pub file_size: i64,
     pub payload: &'a [u8],
+    pub file_category: String,
     pub user_id: &'a str,
     pub trace_id: Option<&'a str>,
     pub namespace: Option<&'a str>,
@@ -211,4 +215,27 @@ pub struct MultipartChunkPayload {
     pub upload_id: String,
     pub chunk_index: u32,
     pub bytes: Vec<u8>,
+}
+
+pub fn infer_file_category(file_type_hint: Option<&str>, mime_type: &str) -> String {
+    let normalized_hint = file_type_hint
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let category = match normalized_hint.as_str() {
+        "file_type_image" | "image" | "images" => "images",
+        "file_type_video" | "video" | "videos" => "videos",
+        "file_type_audio" | "audio" | "audios" => "audio",
+        "file_type_document" | "document" | "documents" => "documents",
+        "file_type_other" | "other" | "others" => "others",
+        _ => match mime_type.split('/').next().unwrap_or_default() {
+            "image" => "images",
+            "video" => "videos",
+            "audio" => "audio",
+            "text" | "application" => "documents",
+            _ => "others",
+        },
+    };
+
+    category.to_string()
 }

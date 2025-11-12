@@ -19,8 +19,7 @@ pub trait SignalingClient: Send + Sync {
         &self,
         request: GetOnlineStatusRequest,
     ) -> Result<GetOnlineStatusResponse>;
-    async fn route_message(&self, request: RouteMessageRequest)
-        -> Result<RouteMessageResponse>;
+    async fn route_message(&self, request: RouteMessageRequest) -> Result<RouteMessageResponse>;
 }
 
 pub struct GrpcSignalingClient {
@@ -104,10 +103,7 @@ impl SignalingClient for GrpcSignalingClient {
             })
     }
 
-    async fn route_message(
-        &self,
-        request: RouteMessageRequest,
-    ) -> Result<RouteMessageResponse> {
+    async fn route_message(&self, request: RouteMessageRequest) -> Result<RouteMessageResponse> {
         let mut client = self.ensure_client().await?;
         client
             .route_message(request)
@@ -120,4 +116,3 @@ impl SignalingClient for GrpcSignalingClient {
             })
     }
 }
-

@@ -349,12 +349,12 @@ mod tests {
         message.sender_type = "user".into();
         message.message_type = 1;
         message.structured_content = Some(MessageContent {
-            content: Some(flare_proto::communication_core::message_content::Content::Text(
-                TextContent {
+            content: Some(
+                flare_proto::communication_core::message_content::Content::Text(TextContent {
                     text: "hello".into(),
                     mentions: vec![],
-                },
-            )),
+                }),
+            ),
         });
 
         let timeline = TimelineMetadata {
@@ -362,7 +362,8 @@ mod tests {
             ..TimelineMetadata::default()
         };
 
-        let stored = StoredMessage::from_proto(&message, timeline.clone(), "session-1".into(), None);
+        let stored =
+            StoredMessage::from_proto(&message, timeline.clone(), "session-1".into(), None);
         assert!(stored.payload.structured_content_base64.is_some());
 
         let restored = stored.into_proto().unwrap();

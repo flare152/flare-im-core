@@ -11,7 +11,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use toml::Value;
 
 use super::{FlareAppConfig, ObjectStoreConfig};
@@ -44,9 +43,7 @@ impl ConfigManager {
         }
 
         // 如果环境变量未设置或无效，则使用配置文件中指定的配置
-        config
-            .object_store_profile(profile_name)
-            .cloned()
+        config.object_store_profile(profile_name).cloned()
     }
 
     /// 获取当前环境名称
@@ -94,7 +91,10 @@ impl ConfigManager {
     /// # 参数
     /// * `object_storage` - 基础对象存储配置映射，将被修改
     /// * `env_config` - 环境配置值
-    fn merge_config_values(object_storage: &mut HashMap<String, ObjectStoreConfig>, env_config: &Value) {
+    fn merge_config_values(
+        object_storage: &mut HashMap<String, ObjectStoreConfig>,
+        env_config: &Value,
+    ) {
         if let Some(env_object_storage) = env_config.get("object_storage") {
             if let Some(tables) = env_object_storage.as_table() {
                 for (key, value) in tables {
@@ -122,10 +122,14 @@ impl ConfigManager {
                         if let Some(use_ssl) = value.get("use_ssl").and_then(|v| v.as_bool()) {
                             config.use_ssl = Some(use_ssl);
                         }
-                        if let Some(cdn_base_url) = value.get("cdn_base_url").and_then(|v| v.as_str()) {
+                        if let Some(cdn_base_url) =
+                            value.get("cdn_base_url").and_then(|v| v.as_str())
+                        {
                             config.cdn_base_url = Some(cdn_base_url.to_string());
                         }
-                        if let Some(upload_prefix) = value.get("upload_prefix").and_then(|v| v.as_str()) {
+                        if let Some(upload_prefix) =
+                            value.get("upload_prefix").and_then(|v| v.as_str())
+                        {
                             config.upload_prefix = Some(upload_prefix.to_string());
                         }
 

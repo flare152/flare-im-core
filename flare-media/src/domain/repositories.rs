@@ -10,10 +10,11 @@ use crate::domain::models::{
 #[async_trait::async_trait]
 pub trait MediaObjectRepository: Send + Sync {
     async fn put_object(&self, context: &UploadContext<'_>) -> Result<String>;
-    async fn delete_object(&self, file_id: &str) -> Result<()>;
-    async fn presign_object(&self, file_id: &str, expires_in: i64) -> Result<String>;
+    async fn delete_object(&self, object_path: &str) -> Result<()>;
+    async fn presign_object(&self, object_path: &str, expires_in: i64) -> Result<String>;
     fn base_url(&self) -> Option<String>;
     fn cdn_base_url(&self) -> Option<String>;
+    fn use_presigned_urls(&self) -> bool;
 }
 
 #[async_trait::async_trait]

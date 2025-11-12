@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use flare_proto::TenantContext;
 use flare_proto::communication_core::communication_core_server::CommunicationCore;
 use flare_proto::communication_core::*;
-use flare_proto::TenantContext;
 use tonic::{Request, Response, Status};
 
 use crate::config::GatewayConfig;
-use crate::handler::{gateway::tenant_id_label, GatewayHandler};
+use crate::handler::{GatewayHandler, gateway::tenant_id_label};
 use crate::infrastructure::{GrpcPushClient, GrpcSignalingClient, GrpcStorageClient};
 use tracing::debug;
 
@@ -26,10 +26,7 @@ impl CommunicationCoreGatewayServer {
     }
 }
 
-fn request_span<'a>(
-    method: &'static str,
-    tenant: Option<&'a TenantContext>,
-) -> tracing::Span {
+fn request_span<'a>(method: &'static str, tenant: Option<&'a TenantContext>) -> tracing::Span {
     let tenant_label = tenant_id_label(tenant);
     tracing::info_span!(method, tenant = tenant_label)
 }
@@ -40,7 +37,10 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         &self,
         request: Request<LoginRequest>,
     ) -> Result<Response<LoginResponse>, Status> {
-        let span = request_span("communication_core.login", request.get_ref().tenant.as_ref());
+        let span = request_span(
+            "communication_core.login",
+            request.get_ref().tenant.as_ref(),
+        );
         let _guard = span.enter();
         debug!("Gateway login request");
         let response = self
@@ -72,8 +72,10 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         &self,
         request: Request<RouteMessageRequest>,
     ) -> Result<Response<RouteMessageResponse>, Status> {
-        let span =
-            request_span("communication_core.route_message", request.get_ref().tenant.as_ref());
+        let span = request_span(
+            "communication_core.route_message",
+            request.get_ref().tenant.as_ref(),
+        );
         let _guard = span.enter();
         let response = self
             .handler
@@ -87,8 +89,10 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         &self,
         request: Request<StoreMessageRequest>,
     ) -> Result<Response<StoreMessageResponse>, Status> {
-        let span =
-            request_span("communication_core.store_message", request.get_ref().tenant.as_ref());
+        let span = request_span(
+            "communication_core.store_message",
+            request.get_ref().tenant.as_ref(),
+        );
         let _guard = span.enter();
         let response = self
             .handler
@@ -102,8 +106,10 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         &self,
         request: Request<QueryMessagesRequest>,
     ) -> Result<Response<QueryMessagesResponse>, Status> {
-        let span =
-            request_span("communication_core.query_messages", request.get_ref().tenant.as_ref());
+        let span = request_span(
+            "communication_core.query_messages",
+            request.get_ref().tenant.as_ref(),
+        );
         let _guard = span.enter();
         let response = self
             .handler
@@ -117,8 +123,10 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         &self,
         request: Request<PushMessageRequest>,
     ) -> Result<Response<PushMessageResponse>, Status> {
-        let span =
-            request_span("communication_core.push_message", request.get_ref().tenant.as_ref());
+        let span = request_span(
+            "communication_core.push_message",
+            request.get_ref().tenant.as_ref(),
+        );
         let _guard = span.enter();
         let response = self
             .handler
@@ -187,4 +195,3 @@ impl CommunicationCore for CommunicationCoreGatewayServer {
         Err(Status::unimplemented("media operations not yet supported"))
     }
 }
-

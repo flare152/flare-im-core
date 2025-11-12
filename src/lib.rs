@@ -8,8 +8,9 @@ pub mod hooks;
 pub mod registry;
 
 pub use config::{
-    AccessGatewayServiceConfig, ConfigManager, FlareAppConfig, KafkaClusterConfig, MediaServiceConfig,
-    MongoInstanceConfig, ObjectStoreConfig, PostgresInstanceConfig, RedisPoolConfig, ServiceEndpointConfig, ServiceRuntimeConfig, app_config, load_config,
+    AccessGatewayServiceConfig, ConfigManager, FlareAppConfig, KafkaClusterConfig,
+    MediaServiceConfig, MongoInstanceConfig, ObjectStoreConfig, PostgresInstanceConfig,
+    RedisPoolConfig, ServiceEndpointConfig, ServiceRuntimeConfig, app_config, load_config,
 };
 pub use error::*;
 pub use hooks::*;

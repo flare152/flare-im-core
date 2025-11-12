@@ -78,10 +78,21 @@ impl MediaService for MediaGrpcHandler {
             .upload_file(upload_metadata, payload)
             .await
             .map_err(status_internal)?;
+        // 上传完成后，返回预签名URL
+        let presigned = self
+            .query_service
+            .get_file_url(flare_proto::media::GetFileUrlRequest {
+                file_id: metadata.file_id.clone(),
+                expires_in: 0, // 使用服务默认TTL
+                context: None,
+                tenant: None,
+            })
+            .await
+            .map_err(status_internal)?;
         Ok(Response::new(UploadFileResponse {
             file_id: metadata.file_id.clone(),
-            url: metadata.url.clone(),
-            cdn_url: metadata.cdn_url.clone(),
+            url: presigned.url,
+            cdn_url: presigned.cdn_url,
             info: Some(to_proto_file_info(&metadata)),
             success: true,
             error_message: String::new(),
@@ -146,11 +157,21 @@ impl MediaService for MediaGrpcHandler {
             .complete_multipart_upload(req)
             .await
             .map_err(status_internal)?;
-
+        // 完成分片上传后也返回预签名URL
+        let presigned = self
+            .query_service
+            .get_file_url(flare_proto::media::GetFileUrlRequest {
+                file_id: metadata.file_id.clone(),
+                expires_in: 0, // 使用服务默认TTL
+                context: None,
+                tenant: None,
+            })
+            .await
+            .map_err(status_internal)?;
         Ok(Response::new(UploadFileResponse {
             file_id: metadata.file_id.clone(),
-            url: metadata.url.clone(),
-            cdn_url: metadata.cdn_url.clone(),
+            url: presigned.url,
+            cdn_url: presigned.cdn_url,
             info: Some(to_proto_file_info(&metadata)),
             success: true,
             error_message: String::new(),

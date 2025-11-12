@@ -1,6 +1,4 @@
-use flare_im_core::config::{
-    FlareAppConfig, ObjectStoreConfig, PostgresInstanceConfig, RedisPoolConfig,
-};
+use flare_im_core::config::{ObjectStoreConfig, PostgresInstanceConfig, RedisPoolConfig};
 
 #[derive(Clone, Debug)]
 pub struct MediaConfig {
@@ -55,7 +53,9 @@ impl MediaConfig {
         let object_store = service
             .object_store
             .as_deref()
-            .and_then(|name| flare_im_core::config::ConfigManager::select_object_store_config(app, name))
+            .and_then(|name| {
+                flare_im_core::config::ConfigManager::select_object_store_config(app, name)
+            })
             .or_else(|| {
                 // 如果没有找到指定的配置，使用默认配置
                 app.object_store_profile("default").cloned()

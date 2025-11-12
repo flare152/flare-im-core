@@ -8,7 +8,7 @@ use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::domain::models::{MediaAssetStatus, MediaFileMetadata, FileAccessType};
+use crate::domain::models::{FileAccessType, MediaAssetStatus, MediaFileMetadata};
 use crate::domain::repositories::MediaMetadataCache;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ impl MediaMetadataCache for RedisMetadataCache {
             let cached: CachedMetadata = serde_json::from_str(&value)?;
             let status = MediaAssetStatus::from_str(&cached.status)
                 .map_err(|_| anyhow::anyhow!("invalid media asset status: {}", cached.status))?;
-            
+
             let access_type = match cached.access_type.as_str() {
                 "public" => FileAccessType::Public,
                 "private" => FileAccessType::Private,
@@ -110,7 +110,8 @@ impl MediaMetadataCache for RedisMetadataCache {
                     .unwrap_or_else(|| chrono::Utc::now()),
                 reference_count: cached.reference_count,
                 status,
-                grace_expires_at: cached.grace_expires_at
+                grace_expires_at: cached
+                    .grace_expires_at
                     .and_then(|ts| chrono::DateTime::from_timestamp_millis(ts)),
                 access_type,
             }))

@@ -8,7 +8,6 @@
 
 // 首先导入需要的模块和类型
 use std::collections::HashMap;
-use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -120,6 +119,18 @@ pub struct ObjectStoreConfig {
     /// 上传路径前缀
     #[serde(default)]
     pub upload_prefix: Option<String>,
+    /// 预签名URL过期时间（秒）
+    #[serde(default)]
+    pub presign_url_ttl_seconds: Option<u64>,
+    /// 是否优先使用预签名 URL
+    #[serde(default)]
+    pub use_presign: Option<bool>,
+    /// 桶内统一的根路径前缀（支持多租户或业务隔离）
+    #[serde(default)]
+    pub bucket_root_prefix: Option<String>,
+    /// 是否强制使用 path-style 访问（默认非 AWS 端点自动启用）
+    #[serde(default)]
+    pub force_path_style: Option<bool>,
 }
 
 /// 服务端点配置
