@@ -50,7 +50,8 @@ pub fn build_delivery_context(default_tenant_id: &str, task: &PushDispatchTask) 
         session_type: Some(SESSION_TYPE_PUSH.to_string()),
         message_type: Some(message_type),
         sender_id: None,
-        trace_id: task.context.as_ref().and_then(|ctx| ctx.trace_id.clone()),
+        trace_id: task.context.as_ref()
+            .and_then(|ctx| ctx.trace_id.clone()),
         tags,
         attributes,
         request_metadata,

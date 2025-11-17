@@ -3,9 +3,12 @@ name = "flare-signaling-online"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "flare-signaling-online"
-path = "src/main.rs"
+path = "cmd/main.rs"
 
 [dependencies]
 flare-server-core = { workspace = true }
@@ -24,4 +27,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 prost-types = { workspace = true }
+anyhow = { workspace = true }
+tokio-stream = "0.1"
 

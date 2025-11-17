@@ -3,7 +3,6 @@ use std::time::SystemTime;
 
 use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
 use flare_proto::common::{RequestContext, TenantContext};
-use flare_proto::communication_core::MessageType;
 use flare_proto::storage::{Message, StoreMessageRequest};
 use serde_json::json;
 
@@ -44,25 +43,43 @@ pub fn build_hook_context(
 
     if let Some(RequestContext {
         request_id,
-        trace_id,
-        span_id,
-        client_ip,
+        trace,
+        actor: _,
+        device,
+        channel: _,
         user_agent,
-        tags,
+        attributes,
     }) = request.context.as_ref()
     {
         ctx.request_metadata
             .insert("request_id".into(), request_id.clone());
-        ctx.request_metadata
-            .insert("span_id".into(), span_id.clone());
-        ctx.request_metadata
-            .insert("client_ip".into(), client_ip.clone());
-        ctx.request_metadata
-            .insert("user_agent".into(), user_agent.clone());
-        if !trace_id.is_empty() {
-            ctx.trace_id = Some(trace_id.clone());
+        
+        if let Some(trace_ctx) = trace.as_ref() {
+            ctx.request_metadata
+                .insert("span_id".into(), trace_ctx.span_id.clone());
+            if !trace_ctx.trace_id.is_empty() {
+                ctx.trace_id = Some(trace_ctx.trace_id.clone());
+            }
+            // 将 trace tags 添加到 ctx.tags
+            for (k, v) in &trace_ctx.tags {
+                ctx.tags.insert(k.clone(), v.clone());
+            }
         }
-        ctx.tags.extend(tags.clone());
+        
+        if let Some(device_ctx) = device.as_ref() {
+            ctx.request_metadata
+                .insert("client_ip".into(), device_ctx.ip_address.clone());
+        }
+        
+        if !user_agent.is_empty() {
+            ctx.request_metadata
+                .insert("user_agent".into(), user_agent.clone());
+        }
+        
+        // 将 attributes 添加到 ctx.tags
+        for (k, v) in attributes {
+            ctx.tags.insert(k.clone(), v.clone());
+        }
     }
 
     if let Some(tenant) = request.tenant.as_ref() {
@@ -118,7 +135,17 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
         .as_ref()
         .expect("StoreMessageRequest.message must be set");
 
-    let mut draft = MessageDraft::new(message.content.clone());
+    // MessageDraft::new 需要 Vec<u8>，但 message.content 是 Option<MessageContent>
+    // 使用 prost 序列化 MessageContent，或使用空向量
+    use prost::Message as ProstMessage;
+    let content_bytes = message.content.as_ref()
+        .map(|c| {
+            let mut buf = Vec::new();
+            c.encode(&mut buf).unwrap_or_default();
+            buf
+        })
+        .unwrap_or_default();
+    let mut draft = MessageDraft::new(content_bytes);
     let message_type_label = detect_message_type(message);
 
     if let Some(id) = non_empty(message.id.clone()) {
@@ -141,9 +168,19 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
     metadata
         .entry("message_type".into())
         .or_insert(message_type_label.to_string());
+    // content_type 从 MessageContent 推断
+    let content_type_label = message.content.as_ref()
+        .map(|c| match &c.content {
+            Some(flare_proto::storage::message_content::Content::Text(_)) => "text",
+            Some(flare_proto::storage::message_content::Content::Binary(_)) => "binary",
+            Some(flare_proto::storage::message_content::Content::Json(_)) => "json",
+            Some(flare_proto::storage::message_content::Content::Custom(_)) => "custom",
+            None => "unspecified",
+        })
+        .unwrap_or("unspecified");
     metadata
         .entry("content_type".into())
-        .or_insert(message.content_type.clone());
+        .or_insert(content_type_label.to_string());
     metadata
         .entry("sender_id".into())
         .or_insert(message.sender_id.clone());
@@ -163,16 +200,27 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
     draft.extra("sync", json!(request.sync));
     draft.extra("receiver_ids", json!(message.receiver_ids));
 
-    if let Some(context) = request.context.as_ref() {
-        draft.extra(
-            "request_context",
-            json!({
-                "request_id": context.request_id,
-                "trace_id": context.trace_id,
-                "span_id": context.span_id,
-                "tags": context.tags,
-            }),
-        );
+    // request.context 是 RequestContext，我们需要从中提取信息构建 JSON
+    if let Some(request_ctx) = request.context.as_ref() {
+        let mut request_context_json = json!({
+            "request_id": request_ctx.request_id,
+        });
+        
+        if let Some(trace_ctx) = request_ctx.trace.as_ref() {
+            if !trace_ctx.trace_id.is_empty() {
+                request_context_json["trace_id"] = json!(trace_ctx.trace_id);
+            }
+            if !trace_ctx.span_id.is_empty() {
+                request_context_json["span_id"] = json!(trace_ctx.span_id);
+            }
+        }
+        
+        // 将 attributes 添加到 JSON
+        if !request_ctx.attributes.is_empty() {
+            request_context_json["attributes"] = json!(request_ctx.attributes);
+        }
+        
+        draft.extra("request_context", request_context_json);
     }
 
     if let Some(tenant) = request.tenant.as_ref() {
@@ -206,10 +254,19 @@ pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &Message
             message.session_id = conv.clone();
         }
 
-        message.content = draft.payload.clone();
+        // message.content 是 MessageContent，需要根据 draft.payload 构建
+        // message.extra 用于存储扩展信息
         message.extra = draft.metadata.clone();
+        // message_type 从 extra 中的 message_type 获取，如果没有则使用默认值
         if let Some(label) = message.extra.get("message_type") {
-            message.content_type = label.clone();
+            // 根据 label 设置 message_type 枚举
+            use flare_proto::storage::MessageType;
+            message.message_type = match label.as_str() {
+                "text" => MessageType::Text as i32,
+                "binary" => MessageType::Binary as i32,
+                "custom" => MessageType::Custom as i32,
+                _ => MessageType::Unspecified as i32,
+            };
         }
 
         for (key, value) in &draft.extra {
@@ -224,13 +281,23 @@ pub fn build_message_record(
     submission: &MessageSubmission,
     request: &StoreMessageRequest,
 ) -> MessageRecord {
-    let envelope = &submission.stored_message.envelope;
-    let mut metadata: HashMap<String, String> = submission.stored_message.payload.extra.clone();
+    let message = &submission.message;
+    let mut metadata: HashMap<String, String> = message.extra.clone();
 
-    metadata.insert("business_type".into(), envelope.business_type.clone());
-    metadata.insert("session_type".into(), envelope.session_type.clone());
-    metadata.insert("content_type".into(), envelope.content_type.clone());
-    metadata.insert("sender_type".into(), envelope.sender_type.clone());
+    metadata.insert("business_type".into(), message.business_type.clone());
+    metadata.insert("session_type".into(), message.session_type.clone());
+    // 推断 content_type
+    let content_type = message.content.as_ref()
+        .map(|c| match &c.content {
+            Some(flare_proto::storage::message_content::Content::Text(_)) => "text/plain",
+            Some(flare_proto::storage::message_content::Content::Binary(_)) => "application/octet-stream",
+            Some(flare_proto::storage::message_content::Content::Json(_)) => "application/json",
+            Some(flare_proto::storage::message_content::Content::Custom(_)) => "application/custom",
+            None => "application/unknown",
+        })
+        .unwrap_or("application/unknown");
+    metadata.insert("content_type".into(), content_type.to_string());
+    metadata.insert("sender_type".into(), message.sender_type.clone());
 
     if let Some(message) = submission.kafka_payload.message.as_ref() {
         if let Some(client_msg_id) = extract_client_message_id(message) {
@@ -245,12 +312,12 @@ pub fn build_message_record(
     }
 
     MessageRecord {
-        message_id: envelope.message_id.clone(),
+        message_id: message.id.clone(),
         client_message_id: None,
-        conversation_id: envelope.session_id.clone(),
-        sender_id: envelope.sender_id.clone(),
-        session_type: Some(envelope.session_type.clone()),
-        message_type: Some(envelope.content_type.clone()),
+        conversation_id: message.session_id.clone(),
+        sender_id: message.sender_id.clone(),
+        session_type: Some(message.session_type.clone()),
+        message_type: metadata.get("content_type").cloned(),
         persisted_at: SystemTime::now(),
         metadata,
     }
@@ -297,21 +364,46 @@ pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookCo
 }
 
 fn detect_message_type(message: &Message) -> &'static str {
-    match MessageType::from_i32(message.message_type) {
-        Some(MessageType::Text) => "text",
-        Some(MessageType::RichText) => "rich_text",
-        Some(MessageType::Image) => "image",
-        Some(MessageType::Video) => "video",
-        Some(MessageType::Audio) => "audio",
-        Some(MessageType::File) => "file",
-        Some(MessageType::Sticker) => "sticker",
-        Some(MessageType::Location) => "location",
-        Some(MessageType::Card) => "card",
-        Some(MessageType::Command) => "command",
-        Some(MessageType::Event) => "event",
-        Some(MessageType::System) => "system",
-        Some(MessageType::Custom) | Some(MessageType::Unspecified) | None => {
-            infer_from_content_type(&message.content_type)
+    use std::convert::TryFrom;
+    use flare_proto::storage::MessageType;
+    
+    // 优先从 extra 中获取 message_type 标签
+    if let Some(label) = message.extra.get("message_type") {
+        return match label.as_str() {
+            "text" | "text/plain" => "text",
+            "binary" => "binary",
+            "json" => "json",
+            "image" => "image",
+            "video" => "video",
+            "audio" => "audio",
+            "file" => "file",
+            "sticker" => "sticker",
+            "location" => "location",
+            "card" => "card",
+            "command" => "command",
+            "event" => "event",
+            "system" => "system",
+            _ => "custom",
+        };
+    }
+    
+    // 从 MessageType 枚举推断
+    match MessageType::try_from(message.message_type) {
+        Ok(MessageType::Text) => "text",
+        Ok(MessageType::Binary) => "binary",
+        Ok(MessageType::Custom) | Ok(MessageType::Unspecified) | Err(_) => {
+            // 从 MessageContent 推断类型
+            if let Some(content) = message.content.as_ref() {
+                match &content.content {
+                    Some(flare_proto::storage::message_content::Content::Text(_)) => "text",
+                    Some(flare_proto::storage::message_content::Content::Binary(_)) => "binary",
+                    Some(flare_proto::storage::message_content::Content::Json(_)) => "json",
+                    Some(flare_proto::storage::message_content::Content::Custom(_)) => "custom",
+                    None => "unknown",
+                }
+            } else {
+                "unknown"
+            }
         }
     }
 }

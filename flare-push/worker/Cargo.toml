@@ -8,12 +8,12 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "flare-push-worker"
-path = "src/main.rs"
+path = "cmd/main.rs"
 
 [dependencies]
 flare-server-core = { workspace = true }
 flare-proto = { workspace = true }
-flare-im-core = { path = "../.." }
+flare-im-core = { path = "../..", features = ["tracing"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -24,4 +24,5 @@ thiserror = { workspace = true }
 rdkafka = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+uuid = { workspace = true }
 

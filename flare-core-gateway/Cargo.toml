@@ -26,4 +26,9 @@ prost = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+jsonwebtoken = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "postgres", "chrono"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures = "0.3"
 

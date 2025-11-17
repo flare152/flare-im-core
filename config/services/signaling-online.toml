@@ -1,0 +1,20 @@
+# Signaling Online 服务配置
+#
+# 配置说明：
+# - Redis 配置通过 redis 字段引用 base.toml 中的 redis.session_store
+# - 所有基础设施配置都在 base.toml 中定义，services 只引用名称
+
+[services.signaling_online]
+service_name = "flare-signaling-online"
+
+# Redis 配置：引用 base.toml 中的 redis.session_store
+redis = "session_store"
+
+# 在线状态配置
+online_ttl_seconds = 3600
+presence_prefix = "presence:user"
+
+[services.signaling_online.server]
+address = "0.0.0.0"
+port = 50061
+

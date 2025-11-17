@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use flare_proto::storage::{Message, SessionInfo, VisibilityStatus};
+use flare_proto::storage::{Message, VisibilityStatus};
 use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::domain::{
-    MessageStorage, MessageUpdate, SessionStorage, SessionUpdate, VisibilityStorage,
+    MessageStorage, MessageUpdate, VisibilityStorage,
 };
 
 #[derive(Default, Clone)]
@@ -22,17 +22,19 @@ struct StoredMessage {
     updated_at: i64,
 }
 
-#[derive(Default, Clone)]
-struct StoredSession {
-    session: SessionInfo,
-    updated_at: i64,
-}
+// 注意：SessionInfo 类型不存在于 storage.proto 中
+// 会话管理应该由 SessionService 处理，这里暂时注释掉
+// #[derive(Default, Clone)]
+// struct StoredSession {
+//     session: SessionInfo,
+//     updated_at: i64,
+// }
 
 #[derive(Default)]
 pub struct MongoMessageStorage {
     messages: Arc<RwLock<HashMap<String, StoredMessage>>>,
     session_index: Arc<RwLock<HashMap<String, Vec<String>>>>,
-    sessions: Arc<RwLock<HashMap<String, StoredSession>>>,
+    // sessions: Arc<RwLock<HashMap<String, StoredSession>>>, // 会话管理已移除
     visibility: Arc<RwLock<HashMap<(String, String), VisibilityStatus>>>,
 }
 
@@ -145,9 +147,8 @@ impl MessageStorage for MongoMessageStorage {
             if let Some(recalled_at) = updates.recalled_at {
                 message.recalled_at = Some(recalled_at);
             }
-            if let Some(reason) = updates.recall_reason {
-                message.recall_reason = reason;
-            }
+            // recall_reason字段在proto中不存在，已移除
+            // 如果需要记录撤回原因，可以存储在extra字段中
             if let Some(read_by) = updates.read_by {
                 message.read_by = read_by;
             }
@@ -162,6 +163,12 @@ impl MessageStorage for MongoMessageStorage {
                         .await
                         .insert((message_id.to_string(), user_id), status);
                 }
+            }
+            if let Some(attributes) = updates.attributes {
+                message.attributes.extend(attributes);
+            }
+            if let Some(tags) = updates.tags {
+                message.tags = tags;
             }
             record.updated_at = Utc::now().timestamp_millis();
         }
@@ -183,99 +190,141 @@ impl MessageStorage for MongoMessageStorage {
         }
         Ok(updated)
     }
-}
 
-#[async_trait::async_trait]
-impl SessionStorage for MongoMessageStorage {
-    async fn create_session(
-        &self,
-        session: &SessionInfo,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(
-            session.session_id.clone(),
-            StoredSession {
-                session: session.clone(),
-                updated_at: Utc::now().timestamp_millis(),
-            },
-        );
-        Ok(())
-    }
-
-    async fn get_session(
+    async fn count_messages(
         &self,
         session_id: &str,
-    ) -> Result<Option<SessionInfo>, Box<dyn std::error::Error>> {
-        let sessions = self.sessions.read().await;
-        Ok(sessions
-            .get(session_id)
-            .map(|record| record.session.clone()))
-    }
+        _user_id: Option<&str>,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        let session_index = self.session_index.read().await;
+        let messages = self.messages.read().await;
 
-    async fn update_session(
-        &self,
-        session_id: &str,
-        updates: SessionUpdate,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut sessions = self.sessions.write().await;
-        let Some(record) = sessions.get_mut(session_id) else {
-            warn!(session_id, "update_session on missing session");
-            return Ok(());
-        };
+        let ids = session_index.get(session_id).cloned().unwrap_or_default();
 
-        if let Some(last_message_id) = updates.last_message_id {
-            record.session.last_message_id = last_message_id;
-        }
-        if let Some(last_message_time) = updates.last_message_time {
-            record.session.last_message_time = Some(last_message_time);
-        }
-        if let Some(unread) = updates.unread_count {
-            for (user, count) in unread {
-                record.session.unread_count.insert(user, count);
-            }
-        }
-        if let Some(status) = updates.status {
-            record.session.status = status;
-        }
-        if let Some(metadata) = updates.metadata {
-            for (k, v) in metadata {
-                record.session.metadata.insert(k, v);
+        let start_ms = start_time
+            .map(|ts| ts.timestamp_millis())
+            .unwrap_or(i64::MIN);
+        let end_ms = end_time.map(|ts| ts.timestamp_millis()).unwrap_or(i64::MAX);
+
+        let mut count = 0i64;
+        for message_id in &ids {
+            if let Some(record) = messages.get(message_id) {
+                if record.session_id != session_id {
+                    continue;
+                }
+                if record.updated_at >= start_ms && record.updated_at <= end_ms {
+                    count += 1;
+                }
             }
         }
 
-        record.updated_at = Utc::now().timestamp_millis();
-        Ok(())
+        Ok(count)
     }
 
-    async fn query_user_sessions(
+    async fn search_messages(
         &self,
-        user_id: &str,
-        business_type: Option<&str>,
+        filters: &[flare_proto::common::FilterExpression],
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
         limit: i32,
-        _cursor: Option<&str>,
-    ) -> Result<(Vec<SessionInfo>, Option<String>), Box<dyn std::error::Error>> {
-        let sessions = self.sessions.read().await;
-        let mut collected: Vec<&StoredSession> = sessions
-            .values()
-            .filter(|record| {
-                let participates = record.session.participants.iter().any(|p| p == user_id);
-                let matches_business = business_type
-                    .map(|b| record.session.business_type == b)
-                    .unwrap_or(true);
-                participates && matches_business
-            })
-            .collect();
+    ) -> Result<Vec<Message>, Box<dyn std::error::Error>> {
+        let messages = self.messages.read().await;
 
-        collected.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        collected.truncate(limit.max(0) as usize);
+        let start_ms = start_time
+            .map(|ts| ts.timestamp_millis())
+            .unwrap_or(i64::MIN);
+        let end_ms = end_time.map(|ts| ts.timestamp_millis()).unwrap_or(i64::MAX);
 
-        let sessions = collected
-            .into_iter()
-            .map(|record| record.session.clone())
-            .collect();
-        Ok((sessions, None))
+        let mut results = Vec::new();
+        for (_message_id, record) in messages.iter() {
+            // 时间范围过滤
+            if record.updated_at < start_ms || record.updated_at > end_ms {
+                continue;
+            }
+
+            // 应用过滤器（简化实现：只支持基本的字段过滤和 EQUAL 操作）
+            let mut matched = true;
+            for filter in filters {
+                if !filter.field.is_empty() && !filter.values.is_empty() {
+                    let value = &filter.values[0]; // 简化实现：只使用第一个值
+                    match filter.field.as_str() {
+                        "sender_id" => {
+                            if record.message.sender_id != *value {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        "session_id" => {
+                            if record.session_id != *value {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        "message_type" => {
+                            if let Ok(msg_type) = value.parse::<i32>() {
+                                if record.message.message_type() as i32 != msg_type {
+                                    matched = false;
+                                    break;
+                                }
+                            }
+                        }
+                        _ => {
+                            // 其他字段暂不支持，忽略
+                        }
+                    }
+                }
+                if !matched {
+                    break;
+                }
+            }
+
+            if matched {
+                results.push(record.message.clone());
+                if results.len() as i32 >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn update_message_attributes(
+        &self,
+        message_id: &str,
+        attributes: std::collections::HashMap<String, String>,
+        tags: Vec<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut messages = self.messages.write().await;
+        if let Some(record) = messages.get_mut(message_id) {
+            let message = &mut record.message;
+            message.attributes.extend(attributes);
+            message.tags = tags;
+            record.updated_at = Utc::now().timestamp_millis();
+        }
+        Ok(())
+    }
+
+    async fn list_all_tags(
+        &self,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let messages = self.messages.read().await;
+        let mut tag_set = std::collections::HashSet::new();
+
+        for (_message_id, record) in messages.iter() {
+            for tag in &record.message.tags {
+                tag_set.insert(tag.clone());
+            }
+        }
+
+        Ok(tag_set.into_iter().collect())
     }
 }
+
+// 注意：会话管理不属于 StorageService，已移除
+// 会话管理应该由 SessionService 处理
 
 #[async_trait::async_trait]
 impl VisibilityStorage for MongoMessageStorage {

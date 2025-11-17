@@ -27,6 +27,8 @@ struct CachedMetadata {
     status: String,
     grace_expires_at: Option<i64>,
     access_type: String,
+    storage_bucket: Option<String>,
+    storage_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,8 @@ impl MediaMetadataCache for RedisMetadataCache {
                 FileAccessType::Public => "public".to_string(),
                 FileAccessType::Private => "private".to_string(),
             },
+            storage_bucket: metadata.storage_bucket().map(|value| value.to_string()),
+            storage_path: metadata.storage_path().map(|value| value.to_string()),
         };
 
         let payload = serde_json::to_string(&cached)?;
@@ -114,6 +118,8 @@ impl MediaMetadataCache for RedisMetadataCache {
                     .grace_expires_at
                     .and_then(|ts| chrono::DateTime::from_timestamp_millis(ts)),
                 access_type,
+                storage_bucket: cached.storage_bucket.clone(),
+                storage_path: cached.storage_path.clone(),
             }))
         } else {
             Ok(None)

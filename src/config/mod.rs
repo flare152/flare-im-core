@@ -189,6 +189,12 @@ pub struct AccessGatewayServiceConfig {
     /// 会话存储过期时间（秒）
     #[serde(default)]
     pub session_store_ttl_seconds: Option<u64>,
+    /// 网关ID（用于跨地区路由，如果不设置则自动生成）
+    #[serde(default)]
+    pub gateway_id: Option<String>,
+    /// 网关所在地区（用于跨地区路由）
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 /// 媒体服务配置
@@ -325,6 +331,9 @@ pub struct PushWorkerServiceConfig {
 /// 消息编排服务配置
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct MessageOrchestratorServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
     /// Kafka 配置
     #[serde(default)]
     pub kafka: Option<String>,
@@ -346,6 +355,144 @@ pub struct MessageOrchestratorServiceConfig {
     /// Hook 配置目录
     #[serde(default)]
     pub hook_config_dir: Option<String>,
+}
+
+/// 信令在线服务配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SignalingOnlineServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// Redis 配置
+    #[serde(default)]
+    pub redis: Option<String>,
+    /// 在线状态过期时间（秒）
+    #[serde(default)]
+    pub online_ttl_seconds: Option<u64>,
+    /// 在线状态前缀
+    #[serde(default)]
+    pub presence_prefix: Option<String>,
+}
+
+/// 信令路由服务配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SignalingRouteServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// 默认业务服务端点（可选，通过环境变量配置）
+    #[serde(default)]
+    pub default_services: Option<Vec<(String, String)>>,
+}
+
+/// 存储读取服务配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StorageReaderServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// MongoDB 配置
+    #[serde(default)]
+    pub mongo: Option<String>,
+    /// Redis 配置（可选，用于缓存）
+    #[serde(default)]
+    pub redis: Option<String>,
+    /// 默认分页大小
+    #[serde(default)]
+    pub default_page_size: Option<u32>,
+    /// 最大分页大小
+    #[serde(default)]
+    pub max_page_size: Option<u32>,
+}
+
+/// 存储写入服务配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StorageWriterServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// Kafka 配置
+    #[serde(default)]
+    pub kafka: Option<String>,
+    /// 消费者组
+    #[serde(default)]
+    pub consumer_group: Option<String>,
+    /// Kafka 主题
+    #[serde(default)]
+    pub kafka_topic: Option<String>,
+    /// MongoDB 配置
+    #[serde(default)]
+    pub mongo: Option<String>,
+    /// PostgreSQL 配置（可选，用于归档）
+    #[serde(default)]
+    pub postgres: Option<String>,
+    /// WAL 存储
+    #[serde(default)]
+    pub wal_store: Option<String>,
+    /// WAL 哈希键
+    #[serde(default)]
+    pub wal_hash_key: Option<String>,
+    /// WAL 过期时间（秒）
+    #[serde(default)]
+    pub wal_ttl_seconds: Option<u64>,
+    /// 批量大小
+    #[serde(default)]
+    pub batch_size: Option<u32>,
+    /// 批量间隔（毫秒）
+    #[serde(default)]
+    pub batch_interval_ms: Option<u64>,
+}
+
+/// 会话策略配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionPolicyConfig {
+    /// 冲突解决策略
+    #[serde(default)]
+    pub conflict_resolution: Option<String>,
+    /// 最大设备数
+    #[serde(default)]
+    pub max_devices: Option<i32>,
+    /// 是否允许匿名用户
+    #[serde(default)]
+    pub allow_anonymous: Option<bool>,
+    /// 是否允许历史同步
+    #[serde(default)]
+    pub allow_history_sync: Option<bool>,
+}
+
+/// 会话服务配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// Redis 配置
+    #[serde(default)]
+    pub redis: Option<String>,
+    /// PostgreSQL 配置（可选，用于会话元数据存储）
+    #[serde(default)]
+    pub postgres: Option<String>,
+    /// 会话状态前缀
+    #[serde(default)]
+    pub session_state_prefix: Option<String>,
+    /// 会话未读前缀
+    #[serde(default)]
+    pub session_unread_prefix: Option<String>,
+    /// 用户游标前缀
+    #[serde(default)]
+    pub user_cursor_prefix: Option<String>,
+    /// 在线状态前缀
+    #[serde(default)]
+    pub presence_prefix: Option<String>,
+    /// 消息存储服务端点（可选）
+    #[serde(default)]
+    pub storage_reader_endpoint: Option<String>,
+    /// 最近消息限制
+    #[serde(default)]
+    pub recent_message_limit: Option<i32>,
+    /// 默认策略配置
+    #[serde(default)]
+    pub default_policy: Option<SessionPolicyConfig>,
 }
 
 /// Flare 应用配置主结构体
@@ -438,6 +585,31 @@ impl FlareAppConfig {
             .unwrap_or_default()
     }
 
+    /// 获取信令在线服务配置
+    pub fn signaling_online_service(&self) -> SignalingOnlineServiceConfig {
+        self.services.signaling_online.clone().unwrap_or_default()
+    }
+
+    /// 获取信令路由服务配置
+    pub fn signaling_route_service(&self) -> SignalingRouteServiceConfig {
+        self.services.signaling_route.clone().unwrap_or_default()
+    }
+
+    /// 获取存储读取服务配置
+    pub fn storage_reader_service(&self) -> StorageReaderServiceConfig {
+        self.services.storage_reader.clone().unwrap_or_default()
+    }
+
+    /// 获取存储写入服务配置
+    pub fn storage_writer_service(&self) -> StorageWriterServiceConfig {
+        self.services.storage_writer.clone().unwrap_or_default()
+    }
+
+    /// 获取会话服务配置
+    pub fn session_service(&self) -> SessionServiceConfig {
+        self.services.session.clone().unwrap_or_default()
+    }
+
     /// 组合服务配置
     pub fn compose_service_config(
         &self,
@@ -477,9 +649,152 @@ impl FlareAppConfig {
             self.core.server.port = 50051;
         }
     }
+
+    /// 验证配置引用
+    ///
+    /// 检查服务配置中引用的基础设施配置是否存在
+    ///
+    /// # 返回
+    /// 如果所有引用都有效，返回 Ok(())，否则返回错误信息
+    pub fn validate_references(&self) -> Result<()> {
+        // 验证接入网关配置
+        if let Some(cfg) = &self.services.access_gateway {
+            if let Some(token_store) = &cfg.token_store {
+                self.redis_profile(token_store)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (token_store)", token_store))?;
+            }
+            if let Some(session_store) = &cfg.session_store {
+                self.redis_profile(session_store)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (session_store)", session_store))?;
+            }
+        }
+
+        // 验证媒体服务配置
+        if let Some(cfg) = &self.services.media {
+            if let Some(metadata_store) = &cfg.metadata_store {
+                self.postgres_profile(metadata_store)
+                    .ok_or_else(|| anyhow!("PostgreSQL config '{}' not found (metadata_store)", metadata_store))?;
+            }
+            if let Some(metadata_cache) = &cfg.metadata_cache {
+                self.redis_profile(metadata_cache)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (metadata_cache)", metadata_cache))?;
+            }
+            if let Some(object_store) = &cfg.object_store {
+                self.object_store_profile(object_store)
+                    .ok_or_else(|| anyhow!("Object storage config '{}' not found (object_store)", object_store))?;
+            }
+            if let Some(upload_session_store) = &cfg.upload_session_store {
+                self.redis_profile(upload_session_store)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (upload_session_store)", upload_session_store))?;
+            }
+        }
+
+        // 验证推送服务配置
+        if let Some(cfg) = &self.services.push_proxy {
+            if let Some(kafka) = &cfg.kafka {
+                self.kafka_profile(kafka)
+                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (push_proxy)", kafka))?;
+            }
+        }
+
+        if let Some(cfg) = &self.services.push_server {
+            if let Some(kafka) = &cfg.kafka {
+                self.kafka_profile(kafka)
+                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (push_server)", kafka))?;
+            }
+            if let Some(redis) = &cfg.redis {
+                self.redis_profile(redis)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (push_server)", redis))?;
+            }
+        }
+
+        if let Some(cfg) = &self.services.push_worker {
+            if let Some(kafka) = &cfg.kafka {
+                self.kafka_profile(kafka)
+                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (push_worker)", kafka))?;
+            }
+        }
+
+        // 验证消息编排服务配置
+        if let Some(cfg) = &self.services.message_orchestrator {
+            if let Some(kafka) = &cfg.kafka {
+                self.kafka_profile(kafka)
+                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (message_orchestrator)", kafka))?;
+            }
+            if let Some(wal_store) = &cfg.wal_store {
+                self.redis_profile(wal_store)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (wal_store)", wal_store))?;
+            }
+        }
+
+        // 验证信令在线服务配置
+        if let Some(cfg) = &self.services.signaling_online {
+            if let Some(redis) = &cfg.redis {
+                self.redis_profile(redis)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (signaling_online)", redis))?;
+            }
+        }
+
+        // 验证存储读取服务配置
+        if let Some(cfg) = &self.services.storage_reader {
+            if let Some(mongo) = &cfg.mongo {
+                self.mongodb_profile(mongo)
+                    .ok_or_else(|| anyhow!("MongoDB config '{}' not found (storage_reader)", mongo))?;
+            }
+            if let Some(redis) = &cfg.redis {
+                self.redis_profile(redis)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (storage_reader)", redis))?;
+            }
+        }
+
+        // 验证存储写入服务配置
+        if let Some(cfg) = &self.services.storage_writer {
+            if let Some(kafka) = &cfg.kafka {
+                self.kafka_profile(kafka)
+                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (storage_writer)", kafka))?;
+            }
+            if let Some(mongo) = &cfg.mongo {
+                self.mongodb_profile(mongo)
+                    .ok_or_else(|| anyhow!("MongoDB config '{}' not found (storage_writer)", mongo))?;
+            }
+            if let Some(postgres) = &cfg.postgres {
+                self.postgres_profile(postgres)
+                    .ok_or_else(|| anyhow!("PostgreSQL config '{}' not found (storage_writer)", postgres))?;
+            }
+            if let Some(wal_store) = &cfg.wal_store {
+                self.redis_profile(wal_store)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (storage_writer.wal_store)", wal_store))?;
+            }
+        }
+
+        // 验证会话服务配置
+        if let Some(cfg) = &self.services.session {
+            if let Some(redis) = &cfg.redis {
+                self.redis_profile(redis)
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (session)", redis))?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// 加载配置
+///
+/// # 参数
+/// * `path` - 配置路径，可以是目录或文件。如果为 None，尝试加载 "config" 目录或 "config.toml" 文件
+///
+/// # 返回
+/// 返回全局配置实例（使用 OnceLock 确保只初始化一次）
+///
+/// # 示例
+/// ```
+/// // 从默认路径加载配置
+/// let config = load_config(None);
+///
+/// // 从指定路径加载配置
+/// let config = load_config(Some("config"));
+/// ```
 pub fn load_config(path: Option<&str>) -> &'static FlareAppConfig {
     let candidates: Vec<PathBuf> = match path {
         Some(p) => vec![PathBuf::from(p)],
@@ -492,8 +807,42 @@ pub fn load_config(path: Option<&str>) -> &'static FlareAppConfig {
         if let Err(e) = manager::ConfigManager::load_environment_config(&mut cfg) {
             warn!("failed to load environment config: {}", e);
         }
+        // 验证配置引用（可选，生产环境建议启用）
+        if let Err(e) = cfg.validate_references() {
+            warn!("configuration reference validation failed: {}", e);
+            // 注意：这里只警告，不失败，允许配置在开发环境中不完整
+            // 生产环境应该确保所有引用都有效
+        }
         cfg
     })
+}
+
+/// 加载并验证配置
+///
+/// 与 `load_config` 相同，但会严格验证配置引用，如果验证失败会返回错误
+///
+/// # 参数
+/// * `path` - 配置路径
+/// * `strict` - 是否严格验证（如果为 true，验证失败会返回错误）
+///
+/// # 返回
+/// 成功返回配置实例，失败返回错误
+pub fn load_config_with_validation(
+    path: Option<&str>,
+    strict: bool,
+) -> Result<&'static FlareAppConfig> {
+    let config = load_config(path);
+    
+    if strict {
+        config.validate_references()
+            .with_context(|| "configuration validation failed")?;
+    } else {
+        if let Err(e) = config.validate_references() {
+            warn!("configuration reference validation failed: {}", e);
+        }
+    }
+    
+    Ok(config)
 }
 
 /// 获取应用配置
@@ -674,21 +1023,36 @@ fn default_config() -> FlareAppConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ServicesConfig {
     /// 接入网关服务配置
-    #[serde(default)]
+    #[serde(default, rename = "access_gateway")]
     pub access_gateway: Option<AccessGatewayServiceConfig>,
     /// 媒体服务配置
-    #[serde(default)]
+    #[serde(default, rename = "media")]
     pub media: Option<MediaServiceConfig>,
     /// 推送代理服务配置
-    #[serde(default)]
+    #[serde(default, rename = "push_proxy")]
     pub push_proxy: Option<PushProxyServiceConfig>,
     /// 推送服务器服务配置
-    #[serde(default)]
+    #[serde(default, rename = "push_server")]
     pub push_server: Option<PushServerServiceConfig>,
     /// 推送工作服务配置
-    #[serde(default)]
+    #[serde(default, rename = "push_worker")]
     pub push_worker: Option<PushWorkerServiceConfig>,
     /// 消息编排服务配置
-    #[serde(default)]
+    #[serde(default, rename = "message_orchestrator")]
     pub message_orchestrator: Option<MessageOrchestratorServiceConfig>,
+    /// 信令在线服务配置
+    #[serde(default, rename = "signaling_online")]
+    pub signaling_online: Option<SignalingOnlineServiceConfig>,
+    /// 信令路由服务配置
+    #[serde(default, rename = "signaling_route")]
+    pub signaling_route: Option<SignalingRouteServiceConfig>,
+    /// 存储读取服务配置
+    #[serde(default, rename = "storage_reader")]
+    pub storage_reader: Option<StorageReaderServiceConfig>,
+    /// 存储写入服务配置
+    #[serde(default, rename = "storage_writer")]
+    pub storage_writer: Option<StorageWriterServiceConfig>,
+    /// 会话服务配置
+    #[serde(default, rename = "session")]
+    pub session: Option<SessionServiceConfig>,
 }

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use flare_proto::storage::Message;
-use flare_storage_model::StoredMessage;
 
 use super::events::AckEvent;
 use super::message_persistence::MediaAttachmentMetadata;
@@ -13,12 +12,12 @@ pub trait MessageIdempotencyRepository: Send + Sync {
 
 #[async_trait]
 pub trait HotCacheRepository: Send + Sync {
-    async fn store_hot(&self, stored: &StoredMessage) -> Result<()>;
+    async fn store_hot(&self, message: &Message) -> Result<()>;
 }
 
 #[async_trait]
 pub trait RealtimeStoreRepository: Send + Sync {
-    async fn store_realtime(&self, stored: &StoredMessage) -> Result<()>;
+    async fn store_realtime(&self, message: &Message) -> Result<()>;
 }
 
 #[async_trait]
@@ -29,6 +28,16 @@ pub trait ArchiveStoreRepository: Send + Sync {
 #[async_trait]
 pub trait WalCleanupRepository: Send + Sync {
     async fn remove(&self, message_id: &str) -> Result<()>;
+}
+
+#[async_trait]
+pub trait SessionStateRepository: Send + Sync {
+    async fn apply_message(&self, message: &Message) -> Result<()>;
+}
+
+#[async_trait]
+pub trait UserSyncCursorRepository: Send + Sync {
+    async fn advance_cursor(&self, session_id: &str, user_id: &str, message_ts: i64) -> Result<()>;
 }
 
 #[async_trait]

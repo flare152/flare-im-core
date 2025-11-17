@@ -73,18 +73,30 @@ services:
     networks:
       - flare-network
     ports:
-      - "29092:9092"
+      - "29092:29092"
     environment:
       CLUSTER_ID: 4LZEfdh1SPSb9z7J1Hf0sw
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_NODE_ID: 1
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      # 关键修复：EXTERNAL listener 必须返回宿主机可访问的地址
+      # 使用 127.0.0.1 而不是 localhost，避免 DNS 解析问题
+      # PLAINTEXT listener 用于容器内通信，EXTERNAL 用于宿主机连接
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://127.0.0.1:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # 自动创建 topic (KRaft + Kafka 3.7.0)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # 默认分区数（自动创建的 topic）
+      KAFKA_NUM_PARTITIONS: "1"
+      # 消息大小限制（100MB，与代码中的 10MB 限制配合使用）
+      # 注意：代码层面已经限制了消息大小为 10MB，这里设置为 100MB 是为了避免 Kafka broker 拒绝消息
+      KAFKA_MESSAGE_MAX_BYTES: "104857600"
+      # Replica fetch 最大字节数（必须 >= message.max.bytes）
+      KAFKA_REPLICA_FETCH_MAX_BYTES: "104857600"
     volumes:
       - ./data/kafka:/var/lib/kafka/data
     healthcheck:
@@ -153,6 +165,27 @@ services:
       timeout: 10s
       retries: 3
 
+  # ===== Tempo - 分布式追踪 =====
+  tempo:
+    image: grafana/tempo:latest
+    container_name: flare-tempo
+    networks:
+      - flare-network
+    ports:
+      - "3200:3200"   # Tempo API
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    command:
+      - "-config.file=/etc/tempo/tempo.yaml"
+    volumes:
+      - ./tempo-config.yml:/etc/tempo/tempo.yaml:ro
+      - ./data/tempo:/var/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:3200/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # ===== Grafana - 可视化与告警 =====
   grafana:
     image: grafana/grafana:latest
@@ -162,6 +195,7 @@ services:
     depends_on:
       - loki
       - prometheus
+      - tempo
     ports:
       - "23000:3000"
     environment:

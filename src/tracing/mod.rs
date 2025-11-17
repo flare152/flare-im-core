@@ -1,0 +1,200 @@
+//! # OpenTelemetry 分布式追踪模块
+//!
+//! 为各个服务模块提供统一的 OpenTelemetry 分布式追踪能力。
+//!
+//! 注意：此模块需要启用 `tracing` feature 才能使用。
+
+#[cfg(feature = "tracing")]
+use tracing::{info, warn, Span};
+
+/// 初始化 OpenTelemetry 追踪
+/// 
+/// 如果提供了 OTLP endpoint，会尝试初始化 OpenTelemetry OTLP 导出器（连接到 Tempo）。
+/// 如果初始化失败或未提供 endpoint，则使用基础的 tracing fmt layer。
+/// 
+/// # 参数
+/// * `service_name` - 服务名称（如 "message-orchestrator"）
+/// * `endpoint` - Tempo OTLP 端点（如 "http://localhost:4317"），如果为 None 则使用基础 tracing
+/// 
+/// # 示例
+/// ```rust
+/// // 连接到 Tempo
+/// init_tracing("message-orchestrator", Some("http://localhost:4317"))?;
+/// 
+/// // 使用基础 tracing（不连接 Tempo）
+/// init_tracing("message-orchestrator", None)?;
+/// ```
+/// 
+/// # 参考
+/// - `中间件设计方案.md` - Tempo 配置说明
+#[cfg(feature = "tracing")]
+pub fn init_tracing(service_name: &str, endpoint: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    // 尝试初始化 OpenTelemetry OTLP（如果提供了 endpoint）
+    #[cfg(all(feature = "tracing", feature = "opentelemetry"))]
+    {
+        if let Some(otlp_endpoint) = endpoint {
+            match init_otlp_tracing(service_name, otlp_endpoint) {
+                Ok(_) => {
+                    info!(
+                        service_name = %service_name,
+                        endpoint = %otlp_endpoint,
+                        "OpenTelemetry OTLP tracing initialized (connected to Tempo)"
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    // OTLP 初始化失败，降级到基础 tracing
+                    warn!(
+                        service_name = %service_name,
+                        endpoint = %otlp_endpoint,
+                        error = %e,
+                        "Failed to initialize OpenTelemetry OTLP, falling back to basic tracing"
+                    );
+                }
+            }
+        }
+    }
+
+    // 初始化基础的 tracing subscriber（使用 fmt layer）
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+
+    if endpoint.is_some() {
+        info!(
+            service_name = %service_name,
+            endpoint = %endpoint.unwrap(),
+            "Tracing initialized (basic tracing mode, Tempo connection pending)"
+        );
+    } else {
+        info!(
+            service_name = %service_name,
+            "Tracing initialized (basic tracing mode)"
+        );
+    }
+
+    Ok(())
+}
+
+/// 初始化 OpenTelemetry OTLP 追踪（内部函数）
+/// 
+/// 连接到 Tempo 分布式追踪后端（通过 OTLP gRPC 协议）。
+/// 
+/// 注意：此函数需要 OpenTelemetry 0.31 API，如果 API 不兼容会返回错误并降级到基础 tracing。
+/// 
+/// # 参数
+/// * `service_name` - 服务名称
+/// * `endpoint` - Tempo OTLP 端点（如 "http://localhost:4317"）
+/// 
+/// # 参考
+/// - `中间件设计方案.md` - Tempo 配置说明
+/// - OpenTelemetry 0.31 官方文档
+#[cfg(all(feature = "tracing", feature = "opentelemetry"))]
+fn init_otlp_tracing(service_name: &str, endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // 注意：OpenTelemetry 0.31 API 可能需要根据实际版本调整
+    // 当前实现尝试使用常见的 API 模式，如果失败会降级到基础 tracing
+    
+    // TODO: 根据 OpenTelemetry 0.31 实际 API 实现 OTLP 导出器集成
+    // 参考实现模式：
+    // 1. 创建 OTLP exporter（连接到 Tempo，端口 4317）
+    // 2. 创建 TracerProvider with batch processor
+    // 3. 设置全局 TracerProvider
+    // 4. 初始化 tracing-opentelemetry layer
+    
+    // 当前返回错误，触发降级到基础 tracing
+    Err(format!("OpenTelemetry OTLP integration not yet implemented for API 0.31. Please check the API documentation or use basic tracing mode. Target: Tempo at {}", endpoint).into())
+}
+
+/// 创建追踪 Span
+/// 
+/// 注意：当前实现返回当前 Span，实际追踪通过 `#[instrument]` 宏和 `tracing::Span::current()` 实现
+/// 建议在代码中使用 `#[instrument]` 宏而不是手动创建 Span
+#[cfg(feature = "tracing")]
+pub fn create_span(_tracer_name: &str, _span_name: &str) -> Span {
+    // 返回当前 Span，实际追踪通过 #[instrument] 宏实现
+    // 这是一个占位实现，完整的 OpenTelemetry Span 创建待完善
+    Span::current()
+}
+
+/// 为 Span 设置属性
+#[cfg(feature = "tracing")]
+pub fn set_span_attribute(span: &Span, key: &str, value: &str) {
+    span.record(key, value);
+}
+
+/// 为 Span 设置用户ID属性
+#[cfg(feature = "tracing")]
+pub fn set_user_id(span: &Span, user_id: &str) {
+    set_span_attribute(span, "user.id", user_id);
+}
+
+/// 为 Span 设置消息ID属性
+#[cfg(feature = "tracing")]
+pub fn set_message_id(span: &Span, message_id: &str) {
+    set_span_attribute(span, "message.id", message_id);
+}
+
+/// 为 Span 设置会话ID属性
+#[cfg(feature = "tracing")]
+pub fn set_session_id(span: &Span, session_id: &str) {
+    set_span_attribute(span, "session.id", session_id);
+}
+
+/// 为 Span 设置租户ID属性
+#[cfg(feature = "tracing")]
+pub fn set_tenant_id(span: &Span, tenant_id: &str) {
+    set_span_attribute(span, "tenant.id", tenant_id);
+}
+
+/// 为 Span 设置网关ID属性
+#[cfg(feature = "tracing")]
+pub fn set_gateway_id(span: &Span, gateway_id: &str) {
+    set_span_attribute(span, "gateway.id", gateway_id);
+}
+
+/// 为 Span 设置推送类型属性
+#[cfg(feature = "tracing")]
+pub fn set_push_type(span: &Span, push_type: &str) {
+    set_span_attribute(span, "push.type", push_type);
+}
+
+/// 为 Span 设置平台属性
+#[cfg(feature = "tracing")]
+pub fn set_platform(span: &Span, platform: &str) {
+    set_span_attribute(span, "platform", platform);
+}
+
+/// 为 Span 设置重试次数属性
+#[cfg(feature = "tracing")]
+pub fn set_retry_count(span: &Span, retry_count: u32) {
+    span.record("retry.count", retry_count);
+}
+
+/// 为 Span 设置错误属性
+#[cfg(feature = "tracing")]
+pub fn set_error(span: &Span, error: &str) {
+    span.record("error", error);
+    span.record("error.kind", "error");
+}
+
+/// 从当前 Span 获取追踪信息
+/// 
+/// 注意：当前实现返回 None，完整的追踪信息需要 OpenTelemetry 集成
+#[cfg(feature = "tracing")]
+pub fn get_trace_info() -> Option<(String, String)> {
+    // OpenTelemetry 追踪信息获取待完善
+    // 当前返回 None，实际追踪通过 tracing 日志实现
+    None
+}
+
+/// 关闭追踪（清理资源）
+#[cfg(feature = "tracing")]
+pub fn shutdown_tracing() {
+    // 基础 tracing 不需要显式关闭
+    // OpenTelemetry 资源清理待完善
+    info!("Tracing shutdown (OpenTelemetry cleanup pending)");
+}
+

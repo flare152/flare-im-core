@@ -6,11 +6,14 @@ use flare_proto::media::{
     AbortMultipartUploadRequest, AbortMultipartUploadResponse, CleanupOrphanedAssetsRequest,
     CleanupOrphanedAssetsResponse, CompleteMultipartUploadRequest, CreateReferenceRequest,
     CreateReferenceResponse, DeleteFileRequest, DeleteFileResponse, DeleteReferenceRequest,
-    DeleteReferenceResponse, GetFileInfoRequest, GetFileInfoResponse, GetFileUrlRequest,
-    GetFileUrlResponse, InitiateMultipartUploadRequest, InitiateMultipartUploadResponse,
+    DeleteReferenceResponse, DescribeBucketRequest, DescribeBucketResponse,
+    GenerateUploadUrlRequest, GenerateUploadUrlResponse, GetFileInfoRequest, GetFileInfoResponse,
+    GetFileUrlRequest, GetFileUrlResponse, InitiateMultipartUploadRequest,
+    InitiateMultipartUploadResponse, ListObjectsRequest, ListObjectsResponse,
     ListReferencesRequest, ListReferencesResponse, ProcessImageRequest, ProcessImageResponse,
-    ProcessVideoRequest, ProcessVideoResponse, UploadFileRequest, UploadFileResponse,
-    UploadMultipartChunkRequest, UploadMultipartChunkResponse,
+    ProcessVideoRequest, ProcessVideoResponse, SetObjectAclRequest, SetObjectAclResponse,
+    UploadFileRequest, UploadFileResponse, UploadMultipartChunkRequest,
+    UploadMultipartChunkResponse,
 };
 use flare_server_core::error::{ErrorBuilder, ErrorCode, ok_status};
 use prost_types::Timestamp;
@@ -86,6 +89,8 @@ impl MediaService for MediaGrpcHandler {
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
                 tenant: None,
+                download: false,
+                response_headers: Default::default(),
             })
             .await
             .map_err(status_internal)?;
@@ -165,6 +170,8 @@ impl MediaService for MediaGrpcHandler {
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
                 tenant: None,
+                download: false,
+                response_headers: Default::default(),
             })
             .await
             .map_err(status_internal)?;
@@ -321,10 +328,12 @@ impl MediaService for MediaGrpcHandler {
             .await
             .map_err(status_internal)?;
 
+        let scanned = cleaned.len() as u32;
         Ok(Response::new(CleanupOrphanedAssetsResponse {
             file_ids: cleaned,
             success: true,
             error_message: String::new(),
+            scanned,
             status: Some(ok_status()),
         }))
     }
@@ -427,6 +436,34 @@ impl MediaService for MediaGrpcHandler {
             status: Some(ok_status()),
         }))
     }
+
+    async fn set_object_acl(
+        &self,
+        _request: Request<SetObjectAclRequest>,
+    ) -> Result<Response<SetObjectAclResponse>, Status> {
+        Err(unimplemented_status("SetObjectAcl"))
+    }
+
+    async fn list_objects(
+        &self,
+        _request: Request<ListObjectsRequest>,
+    ) -> Result<Response<ListObjectsResponse>, Status> {
+        Err(unimplemented_status("ListObjects"))
+    }
+
+    async fn generate_upload_url(
+        &self,
+        _request: Request<GenerateUploadUrlRequest>,
+    ) -> Result<Response<GenerateUploadUrlResponse>, Status> {
+        Err(unimplemented_status("GenerateUploadUrl"))
+    }
+
+    async fn describe_bucket(
+        &self,
+        _request: Request<DescribeBucketRequest>,
+    ) -> Result<Response<DescribeBucketResponse>, Status> {
+        Err(unimplemented_status("DescribeBucket"))
+    }
 }
 
 fn status_internal<E: std::fmt::Display>(err: E) -> Status {
@@ -447,4 +484,8 @@ fn to_proto_timestamp(value: chrono::DateTime<chrono::Utc>) -> Timestamp {
         seconds: value.timestamp(),
         nanos: value.timestamp_subsec_nanos() as i32,
     }
+}
+
+fn unimplemented_status(method: &str) -> Status {
+    Status::unimplemented(format!("{method} is not implemented yet"))
 }

@@ -45,14 +45,14 @@ namespace = "flare:message:wal"
 ttl_seconds = 86400
 
 [kafka.push]
-bootstrap_servers = "localhost:29092"
+bootstrap_servers = "127.0.0.1:29092"
 client_id = "flare-im"
-timeout_ms = 5000
+timeout_ms = 30000
 
 [kafka.message]
-bootstrap_servers = "localhost:29092"
+bootstrap_servers = "127.0.0.1:29092"
 client_id = "flare-message-orchestrator"
-timeout_ms = 5000
+timeout_ms = 30000
 
 [postgres.media]
 url = "postgres://flare:flare123@localhost:25432/flare"

@@ -5,9 +5,10 @@ use async_trait::async_trait;
 use mongodb::bson::{Document, doc};
 use mongodb::options::{ClientOptions, IndexOptions, UpdateOptions};
 use mongodb::{Client, Collection, IndexModel};
+use prost::Message as _;
 
+use crate::config::StorageWriterConfig;
 use crate::domain::repositories::RealtimeStoreRepository;
-use crate::infrastructure::config::StorageWriterConfig;
 
 pub struct MongoMessageStore {
     collection: Collection<Document>,
@@ -66,16 +67,30 @@ async fn ensure_indexes(collection: &Collection<Document>) -> Result<()> {
 
 #[async_trait]
 impl RealtimeStoreRepository for MongoMessageStore {
-    async fn store_realtime(&self, stored: &flare_storage_model::StoredMessage) -> Result<()> {
-        let stored_doc = mongodb::bson::to_document(stored)?;
-        let document = doc! {
-            "message_id": &stored.envelope.message_id,
-            "session_id": &stored.envelope.session_id,
-            "ingestion_ts": stored.timeline.ingestion_ts,
-            "stored": stored_doc,
+    async fn store_realtime(&self, message: &flare_proto::storage::Message) -> Result<()> {
+        // 将 Message 编码为 BSON
+        let mut buf = Vec::new();
+        message.encode(&mut buf)?;
+        let message_doc = mongodb::bson::Binary {
+            subtype: mongodb::bson::spec::BinarySubtype::Generic,
+            bytes: buf,
         };
 
-        let filter = doc! {"message_id": &stored.envelope.message_id};
+        // 从 extra 中提取 ingestion_ts
+        let ingestion_ts = flare_im_core::utils::extract_timeline_from_extra(
+            &message.extra,
+            flare_im_core::utils::current_millis(),
+        )
+        .ingestion_ts;
+
+        let document = doc! {
+            "message_id": &message.id,
+            "session_id": &message.session_id,
+            "ingestion_ts": ingestion_ts,
+            "message": message_doc,
+        };
+
+        let filter = doc! {"message_id": &message.id};
         let update = doc! {"$set": document};
         let options = UpdateOptions::builder().upsert(true).build();
 

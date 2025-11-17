@@ -3,16 +3,19 @@ name = "flare-storage-writer"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "flare-storage-writer"
-path = "src/main.rs"
+path = "cmd/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 flare-server-core = { path = "../../../flare-server-core" }
 flare-proto = { path = "../../../flare-proto" }
-flare-storage-model = { path = "../model" }
+flare-im-core = { path = "../..", features = ["tracing"] }
 mongodb = { workspace = true }
 bson = { workspace = true }
 rdkafka = { workspace = true }
@@ -29,4 +32,13 @@ thiserror = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 uuid = { workspace = true }
+base64 = { workspace = true }
 
+[dev-dependencies]
+tokio-stream = "0.1"
+rdkafka = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+prost-types = { workspace = true }
+tracing-subscriber = { workspace = true }
+prost = { workspace = true }

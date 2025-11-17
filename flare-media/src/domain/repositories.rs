@@ -15,6 +15,12 @@ pub trait MediaObjectRepository: Send + Sync {
     fn base_url(&self) -> Option<String>;
     fn cdn_base_url(&self) -> Option<String>;
     fn use_presigned_urls(&self) -> bool;
+    fn bucket_name(&self) -> Option<String> {
+        None
+    }
+    fn storage_provider(&self) -> Option<String> {
+        None
+    }
 }
 
 #[async_trait::async_trait]

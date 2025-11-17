@@ -1,0 +1,34 @@
+# Storage Writer 服务配置
+#
+# 配置说明：
+# - Kafka 配置通过 kafka 字段引用 base.toml 中的 kafka.message
+# - MongoDB 配置通过 mongo 字段引用 base.toml 中的 mongodb.primary
+# - PostgreSQL 配置通过 postgres 字段引用 base.toml 中的 postgres.media（可选）
+# - Redis 配置通过 wal_store 字段引用 base.toml 中的 redis.message_wal
+# - 所有基础设施配置都在 base.toml 中定义
+
+[services.storage_writer]
+service_name = "flare-storage-writer"
+
+# Kafka 配置：引用 base.toml 中的 kafka.message
+kafka = "message"
+consumer_group = "storage-writer"
+kafka_topic = "storage-messages"
+
+# MongoDB 配置：引用 base.toml 中的 mongodb.primary
+mongo = "primary"
+
+# PostgreSQL 配置（可选，用于归档）
+# postgres = "media"
+
+# Redis 配置（WAL 存储）：引用 base.toml 中的 redis.message_wal
+wal_store = "message_wal"
+wal_hash_key = "flare:message:wal"
+wal_ttl_seconds = 86400
+
+# 批量写入配置
+batch_size = 1000
+batch_interval_ms = 100
+
+# 注意：此服务不提供 gRPC 接口，仅作为 Kafka 消费者运行
+

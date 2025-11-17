@@ -8,7 +8,10 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Row};
 
-use crate::domain::models::{FileAccessType, MediaAssetStatus, MediaFileMetadata, MediaReference};
+use crate::domain::models::{
+    FileAccessType, MediaAssetStatus, MediaFileMetadata, MediaReference,
+    STORAGE_BUCKET_METADATA_KEY, STORAGE_PATH_METADATA_KEY,
+};
 use crate::domain::repositories::{MediaMetadataStore, MediaReferenceStore};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
@@ -41,6 +44,9 @@ impl TryFrom<MediaAssetRow> for MediaFileMetadata {
             None => HashMap::new(),
         };
 
+        let storage_path = metadata_map.get(STORAGE_PATH_METADATA_KEY).cloned();
+        let storage_bucket = metadata_map.get(STORAGE_BUCKET_METADATA_KEY).cloned();
+
         let status = MediaAssetStatus::from_str(&row.status)
             .map_err(|_| anyhow!("invalid media asset status: {}", row.status))?;
 
@@ -65,6 +71,8 @@ impl TryFrom<MediaAssetRow> for MediaFileMetadata {
             status,
             grace_expires_at: row.grace_expires_at,
             access_type,
+            storage_bucket,
+            storage_path,
         })
     }
 }

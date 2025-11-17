@@ -1,9 +1,7 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
+use flare_im_core::utils::{TimelineMetadata, current_millis, datetime_to_timestamp, timestamp_to_millis, embed_timeline_in_extra};
 use flare_proto::storage::StoreMessageRequest;
-use flare_storage_model::{
-    StoredMessage, TimelineMetadata, current_millis, datetime_to_timestamp, timestamp_to_millis,
-};
 use uuid::Uuid;
 
 use crate::domain::message_kind::MessageProfile;
@@ -19,8 +17,9 @@ pub struct MessageDefaults {
 #[derive(Clone)]
 pub struct MessageSubmission {
     pub kafka_payload: StoreMessageRequest,
-    pub stored_message: StoredMessage,
+    pub message: flare_proto::storage::Message,
     pub message_id: String,
+    pub timeline: TimelineMetadata,
 }
 
 impl MessageSubmission {
@@ -102,32 +101,20 @@ impl MessageSubmission {
                 .or_insert(tenant.clone());
         }
 
-        message
-            .extra
-            .entry("ingestion_ts".to_string())
-            .or_insert(ingestion_ts.to_string());
+        let timeline = TimelineMetadata {
+            emit_ts,
+            ingestion_ts,
+            ..TimelineMetadata::default()
+        };
 
-        let stored_message = StoredMessage::from_proto(
-            &message,
-            TimelineMetadata {
-                emit_ts,
-                ingestion_ts,
-                ..TimelineMetadata::default()
-            },
-            shard_key,
-            tenant_id,
-        );
+        // 将时间线信息嵌入到消息的 extra 中
+        embed_timeline_in_extra(&mut message, &timeline);
 
-        let kafka_message = stored_message
-            .clone()
-            .into_proto()
-            .context("failed to convert stored message back to proto")?;
-
-        let message_id = kafka_message.id.clone();
+        let message_id = message.id.clone();
 
         let kafka_payload = StoreMessageRequest {
             session_id: request.session_id,
-            message: Some(kafka_message),
+            message: Some(message.clone()),
             sync: request.sync,
             context: request.context,
             tenant: request.tenant,
@@ -136,8 +123,9 @@ impl MessageSubmission {
 
         Ok(Self {
             kafka_payload,
-            stored_message,
+            message,
             message_id,
+            timeline,
         })
     }
 }

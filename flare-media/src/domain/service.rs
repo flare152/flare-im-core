@@ -12,8 +12,8 @@ use uuid::Uuid;
 use crate::domain::models::{
     FILE_CATEGORY_METADATA_KEY, FileAccessType, MediaAssetStatus, MediaFileMetadata,
     MediaReference, MediaReferenceScope, MultipartChunkPayload, MultipartUploadInit,
-    MultipartUploadSession, PresignedUrl, STORAGE_PATH_METADATA_KEY, UploadContext, UploadSession,
-    UploadSessionStatus, infer_file_category,
+    MultipartUploadSession, PresignedUrl, STORAGE_BUCKET_METADATA_KEY, STORAGE_PATH_METADATA_KEY,
+    UploadContext, UploadSession, UploadSessionStatus, infer_file_category,
 };
 use crate::domain::repositories::{
     LocalStoreRef, MetadataCacheRef, MetadataStoreRef, ObjectRepositoryRef, ReferenceStoreRef,
@@ -352,6 +352,11 @@ impl MediaService {
             "计算文件MD5哈希"
         );
 
+        let storage_bucket = self
+            .object_repo
+            .as_ref()
+            .and_then(|repo| repo.bucket_name());
+
         let (url, cdn_url, storage_path) = if let Some(object_repo) = &self.object_repo {
             tracing::debug!(file_id = context.file_id, "使用对象存储存储文件");
             let path = object_repo.put_object(&context).await.map_err(|err| {
@@ -416,10 +421,15 @@ impl MediaService {
             return Err(anyhow!("no media storage backend configured"));
         };
 
-        if let Some(path) = storage_path {
+        if let Some(ref path) = storage_path {
             context
                 .metadata
-                .insert(STORAGE_PATH_METADATA_KEY.to_string(), path);
+                .insert(STORAGE_PATH_METADATA_KEY.to_string(), path.clone());
+        }
+        if let Some(ref bucket) = storage_bucket {
+            context
+                .metadata
+                .insert(STORAGE_BUCKET_METADATA_KEY.to_string(), bucket.clone());
         }
 
         tracing::debug!(
@@ -452,6 +462,8 @@ impl MediaService {
                 None
             },
             access_type: FileAccessType::default(), // 默认使用私有访问类型
+            storage_bucket: storage_bucket.clone(),
+            storage_path: storage_path.clone(),
         };
 
         tracing::debug!(file_id = context.file_id, "准备保存文件元数据");
@@ -505,7 +517,10 @@ impl MediaService {
             return Ok(());
         }
 
-        let storage_path = metadata.metadata.get(STORAGE_PATH_METADATA_KEY).cloned();
+        let storage_path = metadata
+            .storage_path()
+            .map(|s| s.to_string())
+            .or_else(|| metadata.metadata.get(STORAGE_PATH_METADATA_KEY).cloned());
 
         if let Some(repo) = &self.object_repo {
             let target = storage_path.as_deref().unwrap_or(file_id);
@@ -565,9 +580,8 @@ impl MediaService {
         let expires_at = Utc::now() + Duration::seconds(expires_in);
 
         let object_path = metadata
-            .metadata
-            .get(STORAGE_PATH_METADATA_KEY)
-            .cloned()
+            .storage_path()
+            .map(|s| s.to_string())
             .unwrap_or_else(|| metadata.file_id.clone());
 
         let mut url = metadata.url.clone();
@@ -758,9 +772,9 @@ impl MediaService {
 
         for asset in &expired {
             let storage_path = asset
-                .metadata
-                .get(STORAGE_PATH_METADATA_KEY)
-                .cloned()
+                .storage_path()
+                .map(|s| s.to_string())
+                .or_else(|| asset.metadata.get(STORAGE_PATH_METADATA_KEY).cloned())
                 .unwrap_or_else(|| asset.file_id.clone());
 
             if let Some(repo) = &self.object_repo {

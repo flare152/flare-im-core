@@ -1,0 +1,245 @@
+use anyhow::Result;
+use flare_im_core::config::FlareAppConfig;
+use std::env;
+
+#[derive(Clone, Debug)]
+pub struct StorageWriterConfig {
+    pub kafka_bootstrap: String,
+    pub kafka_topic: String,
+    pub kafka_group: String,
+    pub kafka_ack_topic: Option<String>,
+    pub kafka_timeout_ms: u64,
+    // 批量消费配置
+    pub max_poll_records: usize,
+    pub fetch_min_bytes: usize,
+    pub fetch_max_wait_ms: u64,
+    pub redis_url: Option<String>,
+    pub redis_hot_ttl_seconds: u64,
+    pub redis_idempotency_ttl_seconds: u64,
+    pub wal_hash_key: Option<String>,
+    pub postgres_url: Option<String>,
+    pub mongo_url: Option<String>,
+    pub mongo_database: String,
+    pub mongo_collection: String,
+    pub media_service_endpoint: Option<String>,
+}
+
+impl StorageWriterConfig {
+    /// 从应用配置加载（新方式，推荐）
+    pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
+        let service_config = app.storage_writer_service();
+        
+        // 解析 Kafka 配置引用
+        let kafka_bootstrap = env::var("STORAGE_KAFKA_BOOTSTRAP_SERVERS")
+            .ok()
+            .or_else(|| {
+                if let Some(kafka_name) = &service_config.kafka {
+                    app.kafka_profile(kafka_name)
+                        .map(|profile| profile.bootstrap_servers.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "127.0.0.1:29092".to_string());
+
+        let kafka_topic = env::var("STORAGE_KAFKA_STORAGE_TOPIC")
+            .ok()
+            .or_else(|| service_config.kafka_topic.clone())
+            .unwrap_or_else(|| "storage-messages".to_string());
+
+        let kafka_group = env::var("STORAGE_KAFKA_STORAGE_GROUP")
+            .ok()
+            .or_else(|| service_config.consumer_group.clone())
+            .unwrap_or_else(|| "storage-writer".to_string());
+
+        let kafka_ack_topic = env::var("STORAGE_KAFKA_ACK_TOPIC").ok();
+
+        let kafka_timeout_ms = env::var("STORAGE_KAFKA_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| {
+                service_config.kafka.as_ref()
+                    .and_then(|kafka_name| app.kafka_profile(kafka_name))
+                    .and_then(|profile| profile.timeout_ms)
+            })
+            .unwrap_or(5000);
+
+        // 批量消费配置
+        let max_poll_records = env::var("STORAGE_MAX_POLL_RECORDS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100);
+        
+        let fetch_min_bytes = env::var("STORAGE_FETCH_MIN_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1024);
+        
+        let fetch_max_wait_ms = env::var("STORAGE_FETCH_MAX_WAIT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100);
+
+        // 解析 Redis 配置引用（WAL 存储）
+        let redis_url = env::var("STORAGE_REDIS_URL")
+            .ok()
+            .or_else(|| {
+                if let Some(redis_name) = &service_config.wal_store {
+                    app.redis_profile(redis_name)
+                        .map(|profile| profile.url.clone())
+                } else {
+                    None
+                }
+            });
+
+        let redis_hot_ttl_seconds = env::var("STORAGE_REDIS_HOT_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(7 * 24 * 3600);
+
+        let redis_idempotency_ttl_seconds = env::var("STORAGE_REDIS_IDEMPOTENCY_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(24 * 3600);
+
+        let wal_hash_key = env::var("STORAGE_WAL_HASH_KEY")
+            .ok()
+            .or_else(|| service_config.wal_hash_key.clone())
+            .or_else(|| redis_url.as_ref().map(|_| "storage:wal:buffer".to_string()));
+
+        // 解析 PostgreSQL 配置引用（可选）
+        let postgres_url = env::var("STORAGE_POSTGRES_URL")
+            .ok()
+            .or_else(|| {
+                if let Some(postgres_name) = &service_config.postgres {
+                    app.postgres_profile(postgres_name)
+                        .map(|profile| profile.url.clone())
+                } else {
+                    None
+                }
+            });
+
+        // 解析 MongoDB 配置引用
+        let mongo_url = env::var("STORAGE_MONGO_URL")
+            .ok()
+            .or_else(|| {
+                if let Some(mongo_name) = &service_config.mongo {
+                    app.mongodb_profile(mongo_name)
+                        .map(|profile| profile.url.clone())
+                } else {
+                    None
+                }
+            });
+
+        let mongo_database = mongo_url
+            .as_ref()
+            .and_then(|_| {
+                if let Some(mongo_name) = &service_config.mongo {
+                    app.mongodb_profile(mongo_name)
+                        .and_then(|profile| profile.database.clone())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| env::var("STORAGE_MONGO_DATABASE").ok())
+            .unwrap_or_else(|| "flare_im".to_string());
+
+        let mongo_collection = env::var("STORAGE_MONGO_MESSAGE_COLLECTION")
+            .unwrap_or_else(|_| "messages".to_string());
+
+        let media_service_endpoint = env::var("MEDIA_SERVICE_ENDPOINT").ok();
+
+        Ok(Self {
+            kafka_bootstrap,
+            kafka_topic,
+            kafka_group,
+            kafka_ack_topic,
+            kafka_timeout_ms,
+            max_poll_records,
+            fetch_min_bytes,
+            fetch_max_wait_ms,
+            redis_url,
+            redis_hot_ttl_seconds,
+            redis_idempotency_ttl_seconds,
+            wal_hash_key,
+            postgres_url,
+            mongo_url,
+            mongo_database,
+            mongo_collection,
+            media_service_endpoint,
+        })
+    }
+
+    /// 从环境变量加载（保留用于向后兼容，但不推荐使用）
+    #[deprecated(note = "Use from_app_config instead")]
+    pub fn from_env() -> Self {
+        let kafka_bootstrap = env::var("STORAGE_KAFKA_BOOTSTRAP_SERVERS")
+            .unwrap_or_else(|_| "localhost:9092".to_string());
+        let kafka_topic = env::var("STORAGE_KAFKA_STORAGE_TOPIC")
+            .unwrap_or_else(|_| "storage-messages".to_string());
+        let kafka_group = env::var("STORAGE_KAFKA_STORAGE_GROUP")
+            .unwrap_or_else(|_| "storage-writer".to_string());
+        let kafka_ack_topic = env::var("STORAGE_KAFKA_ACK_TOPIC").ok();
+        let kafka_timeout_ms = env::var("STORAGE_KAFKA_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5000);
+
+        // 批量消费配置（向后兼容）
+        let max_poll_records = env::var("STORAGE_MAX_POLL_RECORDS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100);
+        
+        let fetch_min_bytes = env::var("STORAGE_FETCH_MIN_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1024);
+        
+        let fetch_max_wait_ms = env::var("STORAGE_FETCH_MAX_WAIT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100);
+
+        let redis_url = env::var("STORAGE_REDIS_URL").ok();
+        let redis_hot_ttl_seconds = env::var("STORAGE_REDIS_HOT_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(7 * 24 * 3600);
+        let redis_idempotency_ttl_seconds = env::var("STORAGE_REDIS_IDEMPOTENCY_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(24 * 3600);
+        let wal_hash_key = env::var("STORAGE_WAL_HASH_KEY")
+            .ok()
+            .or_else(|| redis_url.as_ref().map(|_| "storage:wal:buffer".to_string()));
+
+        let postgres_url = env::var("STORAGE_POSTGRES_URL").ok();
+        let mongo_url = env::var("STORAGE_MONGO_URL").ok();
+        let mongo_database =
+            env::var("STORAGE_MONGO_DATABASE").unwrap_or_else(|_| "flare_im".to_string());
+        let mongo_collection =
+            env::var("STORAGE_MONGO_MESSAGE_COLLECTION").unwrap_or_else(|_| "messages".to_string());
+        let media_service_endpoint = env::var("MEDIA_SERVICE_ENDPOINT").ok();
+
+        Self {
+            kafka_bootstrap,
+            kafka_topic,
+            kafka_group,
+            kafka_ack_topic,
+            kafka_timeout_ms,
+            max_poll_records,
+            fetch_min_bytes,
+            fetch_max_wait_ms,
+            redis_url,
+            redis_hot_ttl_seconds,
+            redis_idempotency_ttl_seconds,
+            wal_hash_key,
+            postgres_url,
+            mongo_url,
+            mongo_database,
+            mongo_collection,
+            media_service_endpoint,
+        }
+    }
+}

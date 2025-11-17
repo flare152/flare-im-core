@@ -23,7 +23,7 @@ enum RouteCommand {
 enum RouteInstruction {
     Lookup,
     Register { endpoint: String },
-    Forward { payload: Vec<u8> },
+    Forward { _payload: Vec<u8> },
 }
 
 #[derive(Debug, Serialize)]
@@ -132,7 +132,7 @@ impl RouteDirectoryService {
             }
         }
 
-        RouteInstruction::Forward { payload }
+        RouteInstruction::Forward { _payload: payload }
     }
 
     async fn lookup_endpoint(&self, svid: &str, user_id: &str) -> Result<RouteMessageResponse> {

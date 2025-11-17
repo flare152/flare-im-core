@@ -1,6 +1,7 @@
 # Message Orchestrator 服务配置
 
 [services.message_orchestrator]
+service_name = "flare-message-orchestrator"
 kafka = "message"
 kafka_topic = "storage-messages"
 wal_store = "message_wal"
@@ -8,3 +9,7 @@ wal_hash_key = "flare:message:wal"
 wal_ttl_seconds = 86400
 hook_config = "config/hooks.toml"
 # hook_config_dir = "config/hooks.d"
+
+[services.message_orchestrator.server]
+address = "0.0.0.0"
+port = 50081

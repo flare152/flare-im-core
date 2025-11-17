@@ -38,7 +38,7 @@ clean:
 .PHONY: run-access-gateway run-core-gateway run-signaling-online run-signaling-route \
 	run-push-proxy run-push-server run-push-worker \
 	run-message-orchestrator run-storage-writer run-storage-reader \
-	run-media
+	run-media run-session
 
 run-access-gateway:
 	$(CARGO) run -p flare-access-gateway --bin flare-access-gateway
@@ -72,3 +72,9 @@ run-storage-reader:
 
 run-media:
 	$(CARGO) run -p flare-media --bin flare-media
+
+run-hook-engine:
+	$(CARGO) run -p flare-hook-engine --bin flare-hook-engine
+
+run-session:
+	$(CARGO) run -p flare-session --bin flare-session

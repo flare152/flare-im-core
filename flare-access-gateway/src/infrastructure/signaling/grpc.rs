@@ -19,11 +19,11 @@ pub struct GrpcSignalingGateway {
 }
 
 impl GrpcSignalingGateway {
-    pub fn new(endpoint: String) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(endpoint: String) -> Self {
+        Self {
             endpoint,
             client: Mutex::new(None),
-        })
+        }
     }
 
     async fn ensure_client(&self) -> InfraResult<SignalingServiceClient<Channel>> {

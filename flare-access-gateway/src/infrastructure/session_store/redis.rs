@@ -9,8 +9,7 @@ use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::domain::SessionStore;
-use crate::domain::session::Session;
+use crate::domain::{Session, SessionStore};
 
 const SESSION_PREFIX: &str = "session:";
 const USER_SESSIONS_PREFIX: &str = "user_sessions:";

@@ -23,6 +23,14 @@ pub trait MessageStorage: Send + Sync {
         limit: i32,
     ) -> Result<Vec<Message>, Box<dyn std::error::Error>>;
 
+    async fn count_messages(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+    ) -> Result<i64, Box<dyn std::error::Error>>;
+
     async fn get_message(
         &self,
         message_id: &str,
@@ -40,49 +48,49 @@ pub trait MessageStorage: Send + Sync {
         user_id: &str,
         visibility: VisibilityStatus,
     ) -> Result<usize, Box<dyn std::error::Error>>;
+
+    async fn search_messages(
+        &self,
+        filters: &[flare_proto::common::FilterExpression],
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+        limit: i32,
+    ) -> Result<Vec<Message>, Box<dyn std::error::Error>>;
+
+    async fn update_message_attributes(
+        &self,
+        message_id: &str,
+        attributes: std::collections::HashMap<String, String>,
+        tags: Vec<String>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    async fn list_all_tags(
+        &self,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>>;
 }
 
 pub struct MessageUpdate {
     pub is_recalled: Option<bool>,
     pub recalled_at: Option<Timestamp>,
-    pub recall_reason: Option<String>,
+    // recall_reason字段在proto中不存在，已移除
+    // 如果需要记录撤回原因，可以存储在extra字段中
     pub visibility: Option<HashMap<String, VisibilityStatus>>,
     pub read_by: Option<Vec<MessageReadRecord>>,
     pub operations: Option<Vec<MessageOperation>>,
+    pub attributes: Option<HashMap<String, String>>,
+    pub tags: Option<Vec<String>>,
 }
 
-#[async_trait::async_trait]
-pub trait SessionStorage: Send + Sync {
-    async fn create_session(&self, session: &SessionInfo)
-    -> Result<(), Box<dyn std::error::Error>>;
-
-    async fn get_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<SessionInfo>, Box<dyn std::error::Error>>;
-
-    async fn update_session(
-        &self,
-        session_id: &str,
-        updates: SessionUpdate,
-    ) -> Result<(), Box<dyn std::error::Error>>;
-
-    async fn query_user_sessions(
-        &self,
-        user_id: &str,
-        business_type: Option<&str>,
-        limit: i32,
-        cursor: Option<&str>,
-    ) -> Result<(Vec<SessionInfo>, Option<String>), Box<dyn std::error::Error>>;
-}
-
-pub struct SessionUpdate {
-    pub last_message_id: Option<String>,
-    pub last_message_time: Option<Timestamp>,
-    pub unread_count: Option<HashMap<String, i32>>,
-    pub status: Option<String>,
-    pub metadata: Option<HashMap<String, String>>,
-}
+// 注意：会话管理不属于 StorageService，已移除
+// 会话管理应该由 SessionService 处理
+// #[async_trait::async_trait]
+// pub trait SessionStorage: Send + Sync {
+//     ...
+// }
+// 
+// pub struct SessionUpdate {
+//     ...
+// }
 
 #[async_trait::async_trait]
 pub trait VisibilityStorage: Send + Sync {

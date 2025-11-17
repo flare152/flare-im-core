@@ -6,3 +6,17 @@ target
 Cargo.lock
 data
 /deploy/data
+
+# 本地配置覆盖（不提交到 Git）
+config/overrides/local.toml
+.env.local
+.env.*.local
+
+dev/
+doc/
+tests/
+
+# 临时文件
+*.log
+*.tmp
+/tmp

@@ -329,6 +329,14 @@ impl MediaObjectRepository for S3ObjectStore {
     fn use_presigned_urls(&self) -> bool {
         self.use_presign
     }
+
+    fn bucket_name(&self) -> Option<String> {
+        Some(self.bucket.clone())
+    }
+
+    fn storage_provider(&self) -> Option<String> {
+        Some("s3".to_string())
+    }
 }
 
 pub type S3ObjectStoreRef = Arc<S3ObjectStore>;

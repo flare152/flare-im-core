@@ -1,0 +1,19 @@
+# Signaling Route 服务配置
+#
+# 配置说明：
+# - 服务注册配置继承自 base.toml 的 [registry]
+# - 路由表存储位置通过环境变量配置（可选）
+
+[services.signaling_route]
+service_name = "flare-signaling-route"
+
+# 默认业务服务端点（可选，可通过环境变量覆盖）
+# 格式: SERVICE_ID=ENDPOINT
+# 示例环境变量：
+#   BUSINESS_SERVICE_IM_ENDPOINT=http://localhost:50091
+#   BUSINESS_SERVICE_CS_ENDPOINT=http://localhost:50092
+
+[services.signaling_route.server]
+address = "0.0.0.0"
+port = 50062
+

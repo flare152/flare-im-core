@@ -1,5 +1,7 @@
+pub mod models;
 pub mod repositories;
-pub mod session;
+pub mod service;
 
-pub use repositories::{SessionStore, SignalingGateway};
-pub use session::Session;
+pub use models::{ConnectionInfo, Session};
+pub use repositories::{ConnectionQuery, SessionStore, SignalingGateway};
+pub use service::GatewayService;

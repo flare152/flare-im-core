@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 use std::convert::TryInto;
 
+use crate::config::StorageWriterConfig;
 use crate::domain::repositories::MessageIdempotencyRepository;
-use crate::infrastructure::config::StorageWriterConfig;
 
 pub struct RedisIdempotencyRepository {
     client: Arc<redis::Client>,

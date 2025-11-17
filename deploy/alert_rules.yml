@@ -1,0 +1,132 @@
+groups:
+  - name: flare_im_alerts
+    interval: 30s
+    rules:
+      # 推送成功率告警
+      - alert: PushSuccessRateLow
+        expr: |
+          (
+            sum(rate(online_push_success_total[5m])) by (tenant_id)
+            /
+            sum(rate(push_tasks_processed_total[5m])) by (tenant_id)
+          ) < 0.99
+        for: 5m
+        labels:
+          severity: warning
+          component: push
+        annotations:
+          summary: "推送成功率低于 99%"
+          description: "租户 {{ $labels.tenant_id }} 的推送成功率在过去 5 分钟内低于 99%，当前值: {{ $value | humanizePercentage }}"
+
+      # 推送延迟告警
+      - alert: PushLatencyHigh
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(push_latency_seconds_bucket[5m])) by (le, tenant_id)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: push
+        annotations:
+          summary: "推送延迟 P99 超过 100ms"
+          description: "租户 {{ $labels.tenant_id }} 的推送延迟 P99 在过去 5 分钟内超过 100ms，当前值: {{ $value | humanizeDuration }}"
+
+      # 死信队列积压告警
+      - alert: DeadLetterQueueBacklog
+        expr: |
+          sum(rate(dead_letter_queue_messages_total[5m])) by (tenant_id) > 1000
+        for: 5m
+        labels:
+          severity: critical
+          component: push
+        annotations:
+          summary: "死信队列积压超过 1000 条"
+          description: "租户 {{ $labels.tenant_id }} 的死信队列积压超过 1000 条，当前值: {{ $value }}"
+
+      # ACK 确认率告警
+      - alert: AckConfirmationRateLow
+        expr: |
+          (
+            sum(rate(client_ack_received_total[5m])) by (tenant_id)
+            /
+            sum(rate(messages_sent_total[5m])) by (tenant_id)
+          ) < 0.95
+        for: 5m
+        labels:
+          severity: warning
+          component: message
+        annotations:
+          summary: "ACK 确认率低于 95%"
+          description: "租户 {{ $labels.tenant_id }} 的 ACK 确认率在过去 5 分钟内低于 95%，当前值: {{ $value | humanizePercentage }}"
+
+      # 消息发送失败率告警
+      - alert: MessageSendFailureRateHigh
+        expr: |
+          (
+            sum(rate(kafka_produce_failure_total[5m])) by (tenant_id)
+            /
+            sum(rate(messages_sent_total[5m])) by (tenant_id)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          component: message
+        annotations:
+          summary: "消息发送失败率超过 1%"
+          description: "租户 {{ $labels.tenant_id }} 的消息发送失败率在过去 5 分钟内超过 1%，当前值: {{ $value | humanizePercentage }}"
+
+      # 消息持久化延迟告警
+      - alert: MessagePersistenceLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(messages_persisted_duration_seconds_bucket[5m])) by (le, tenant_id)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "消息持久化延迟 P99 超过 100ms"
+          description: "租户 {{ $labels.tenant_id }} 的消息持久化延迟 P99 在过去 5 分钟内超过 100ms，当前值: {{ $value | humanizeDuration }}"
+
+      # Kafka 消费延迟告警
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          kafka_consumer_lag_sum > 10000
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "Kafka 消费延迟过高"
+          description: "Kafka 消费延迟超过 10000 条消息，当前值: {{ $value }}"
+
+      # 服务可用性告警
+      - alert: ServiceDown
+        expr: |
+          up{job=~"message-orchestrator|storage-writer|push-server|access-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: service
+        annotations:
+          summary: "服务 {{ $labels.job }} 不可用"
+          description: "服务 {{ $labels.job }} 在过去 1 分钟内不可用"
+
+      # 高错误率告警
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: service
+        annotations:
+          summary: "服务 {{ $labels.service }} 错误率超过 5%"
+          description: "服务 {{ $labels.service }} 的错误率在过去 5 分钟内超过 5%，当前值: {{ $value | humanizePercentage }}"
+

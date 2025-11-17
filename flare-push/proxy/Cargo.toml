@@ -11,6 +11,7 @@ name = "flare-push-proxy"
 path = "src/main.rs"
 
 [dependencies]
+uuid = { workspace = true }
 flare-server-core = { workspace = true }
 flare-proto = { workspace = true }
 flare-im-core = { path = "../.." }

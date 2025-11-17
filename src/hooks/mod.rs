@@ -18,6 +18,7 @@ pub use registry::{GlobalHookRegistry, HookRegistry, HookRegistryBuilder, PreSen
 pub use runtime::HookDispatcher;
 pub use selector::{HookSelector, MatchRule};
 pub use types::{
-    DeliveryEvent, HookContext, HookErrorPolicy, HookKind, HookMetadata, MessageDraft,
-    MessageRecord, PreSendDecision, RecallEvent,
+    DeliveryEvent, DeliveryHook, HookContext, HookErrorPolicy, HookGroup, HookKind, HookMetadata,
+    MessageDraft, MessageRecord, PostSendHook, PreSendDecision, PreSendHook, RecallEvent,
+    RecallHook,
 };

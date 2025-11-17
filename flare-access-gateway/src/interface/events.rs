@@ -119,7 +119,7 @@ impl ServerEventHandler for GatewayEventHandler {
 
     /// 处理连接错误事件
     async fn on_error(&self, connection_id: &str, error: &str) -> Result<()> {
-        error!(
+        tracing::error!(
             "[EventHandler] ❌ 连接错误: connection_id={}, error={}",
             connection_id, error
         );

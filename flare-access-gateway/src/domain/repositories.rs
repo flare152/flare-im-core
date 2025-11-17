@@ -7,7 +7,7 @@ use flare_proto::signaling::{
 };
 use flare_server_core::error::Result;
 
-use super::Session;
+use super::models::{ConnectionInfo, Session};
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -32,4 +32,11 @@ pub trait SignalingGateway: Send + Sync {
         &self,
         request: GetOnlineStatusRequest,
     ) -> Result<GetOnlineStatusResponse>;
+}
+
+/// 连接查询接口
+#[async_trait]
+pub trait ConnectionQuery: Send + Sync {
+    /// 查询用户的所有连接
+    async fn query_user_connections(&self, user_id: &str) -> Result<Vec<ConnectionInfo>>;
 }

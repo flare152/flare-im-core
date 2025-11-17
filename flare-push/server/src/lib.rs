@@ -1,6 +1,9 @@
 pub mod application;
+pub mod config;
 pub mod domain;
 pub mod hooks;
 pub mod infrastructure;
-pub mod interfaces;
-pub mod server;
+pub mod interface;
+pub mod service;
+
+pub use service::ApplicationBootstrap;

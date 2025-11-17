@@ -21,8 +21,10 @@ pub enum HookKind {
 /// Hook 执行策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HookErrorPolicy {
-    /// 失败时终止主流程
+    /// 失败时终止主流程（快速失败）
     FailFast,
+    /// 失败时重试（超过最大重试次数后记录告警）
+    Retry,
     /// 失败时忽略（记录告警）
     Ignore,
 }
@@ -30,6 +32,34 @@ pub enum HookErrorPolicy {
 impl Default for HookErrorPolicy {
     fn default() -> Self {
         HookErrorPolicy::FailFast
+    }
+}
+
+/// Hook分组
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookGroup {
+    /// 校验类Hook组（串行执行，快速失败）
+    Validation,
+    /// 关键业务处理Hook组（串行执行，保证顺序）
+    Critical,
+    /// 非关键业务处理Hook组（并发执行，容错）
+    Business,
+}
+
+impl HookGroup {
+    /// 根据priority自动分组
+    pub fn from_priority(priority: i32) -> Self {
+        if priority >= 100 {
+            HookGroup::Validation
+        } else {
+            HookGroup::Business
+        }
+    }
+}
+
+impl Default for HookGroup {
+    fn default() -> Self {
+        HookGroup::Business
     }
 }
 

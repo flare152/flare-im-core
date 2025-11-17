@@ -3,9 +3,12 @@ name = "flare-message-orchestrator"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "flare-message-orchestrator"
-path = "src/main.rs"
+path = "cmd/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -14,7 +17,6 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 flare-server-core = { path = "../../flare-server-core" }
 flare-proto = { path = "../../flare-proto" }
-flare-storage-model = { path = "../flare-storage/model" }
 redis = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -27,5 +29,7 @@ thiserror = { workspace = true }
 rdkafka = { workspace = true }
 uuid = { workspace = true }
 prost = { workspace = true }
-flare-im-core = { path = ".." }
+prost-types = { workspace = true }
+flare-im-core = { path = "..", features = ["tracing"] }
+flare-hook-engine = { path = "../flare-hook-engine" }
 

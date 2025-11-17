@@ -29,6 +29,7 @@ impl PushCommandService {
                     user_id: user_id.clone(),
                     code: error_code_internal(),
                     error_message: err.to_string(),
+                    metadata: std::collections::HashMap::new(),
                 })
                 .collect();
             return Ok(PushMessageResponse {
@@ -36,6 +37,7 @@ impl PushCommandService {
                 fail_count: user_ids.len() as i32,
                 failed_user_ids: user_ids,
                 failures,
+                task_id: String::new(), // TODO: 生成任务ID
                 status: Some(rpc_status_internal("failed to enqueue push message")),
             });
         }
@@ -45,6 +47,7 @@ impl PushCommandService {
             fail_count: 0,
             failed_user_ids: Vec::new(),
             failures: Vec::new(),
+            task_id: uuid::Uuid::new_v4().to_string(), // 生成任务ID
             status: rpc_status_success(),
         })
     }
@@ -61,12 +64,14 @@ impl PushCommandService {
                     user_id: user_id.clone(),
                     code: error_code_internal(),
                     error_message: err.to_string(),
+                    metadata: std::collections::HashMap::new(),
                 })
                 .collect();
             return Ok(PushNotificationResponse {
                 success_count: 0,
                 fail_count: user_ids.len() as i32,
                 failures,
+                task_id: String::new(), // TODO: 生成任务ID
                 status: Some(rpc_status_internal("failed to enqueue push notification")),
             });
         }
@@ -75,6 +80,7 @@ impl PushCommandService {
             success_count: user_ids.len() as i32,
             fail_count: 0,
             failures: Vec::new(),
+            task_id: uuid::Uuid::new_v4().to_string(), // 生成任务ID
             status: rpc_status_success(),
         })
     }
@@ -89,6 +95,7 @@ fn rpc_status_success() -> Option<flare_proto::common::RpcStatus> {
         code: flare_proto::common::ErrorCode::Ok as i32,
         message: String::new(),
         details: Default::default(),
+        context: None,
     })
 }
 
@@ -97,5 +104,6 @@ fn rpc_status_internal(message: &str) -> flare_proto::common::RpcStatus {
         code: error_code_internal(),
         message: message.to_string(),
         details: Default::default(),
+        context: None,
     }
 }

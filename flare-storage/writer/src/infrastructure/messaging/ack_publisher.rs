@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde_json::to_vec;
 
+use crate::config::StorageWriterConfig;
 use crate::domain::events::AckEvent;
 use crate::domain::repositories::AckPublisher;
-use crate::infrastructure::config::StorageWriterConfig;
 
 pub struct KafkaAckPublisher {
     producer: Arc<FutureProducer>,

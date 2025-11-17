@@ -1,8 +1,6 @@
 use anyhow::{Result, anyhow};
+use flare_im_core::utils::{TimelineMetadata, current_millis, extract_timeline_from_extra};
 use flare_proto::storage::StoreMessageRequest;
-use flare_storage_model::{
-    StoredMessage, TimelineMetadata, current_millis, extract_timeline_from_extra,
-};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -20,7 +18,6 @@ pub struct PreparedMessage {
     pub session_id: String,
     pub message_id: String,
     pub message: flare_proto::storage::Message,
-    pub stored_message: StoredMessage,
     pub timeline: TimelineMetadata,
     pub sync: bool,
 }
@@ -53,21 +50,13 @@ impl PreparedMessage {
         let persisted_ts = current_millis();
         timeline.persisted_ts = Some(persisted_ts);
 
-        let shard_key = message
-            .extra
-            .get("shard_key")
-            .cloned()
-            .unwrap_or_else(|| session_id.clone());
-        let tenant_id = message.extra.get("tenant_id").cloned();
-
-        let stored_message =
-            StoredMessage::from_proto(&message, timeline.clone(), shard_key, tenant_id);
+        // 确保时间线信息嵌入到消息的 extra 中
+        flare_im_core::utils::embed_timeline_in_extra(&mut message, &timeline);
 
         Ok(Self {
             session_id,
             message_id: message.id.clone(),
             message,
-            stored_message,
             timeline,
             sync: request.sync,
         })

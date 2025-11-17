@@ -1,0 +1,24 @@
+# Storage Reader 服务配置
+#
+# 配置说明：
+# - MongoDB 配置通过 mongo 字段引用 base.toml 中的 mongodb.primary
+# - Redis 配置通过 redis 字段引用 base.toml 中的 redis.session_store（可选）
+# - 所有基础设施配置都在 base.toml 中定义
+
+[services.storage_reader]
+service_name = "flare-storage-reader"
+
+# MongoDB 配置：引用 base.toml 中的 mongodb.primary
+mongo = "primary"
+
+# Redis 配置（可选，用于缓存）
+# redis = "session_store"
+
+# 查询配置
+default_page_size = 20
+max_page_size = 1000
+
+[services.storage_reader.server]
+address = "0.0.0.0"
+port = 60083
+

@@ -1,3 +1,5 @@
+use anyhow::Result;
+use flare_im_core::config::FlareAppConfig;
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -6,7 +8,9 @@ pub struct RouteConfig {
 }
 
 impl RouteConfig {
-    pub fn from_env() -> Self {
+    /// 从应用配置加载（新方式，推荐）
+    pub fn from_app_config(_app: &FlareAppConfig) -> Result<Self> {
+        // 路由服务的默认服务端点通过环境变量配置（支持动态发现）
         let default: Vec<(String, String)> = vec![
             (
                 "IM".to_string(),
@@ -25,7 +29,7 @@ impl RouteConfig {
         .filter(|(_, endpoint)| !endpoint.is_empty())
         .collect();
 
-        Self {
+        Ok(Self {
             default_services: if default.is_empty() {
                 vec![
                     ("IM".to_string(), "http://localhost:50091".to_string()),
@@ -38,6 +42,6 @@ impl RouteConfig {
             } else {
                 default
             },
-        }
+        })
     }
 }

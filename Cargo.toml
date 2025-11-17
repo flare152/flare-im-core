@@ -17,12 +17,15 @@ members = [
     "flare-push/worker",
     
     # 通信核心层 - 存储系统
-    "flare-storage/model",
     "flare-storage/writer",
     "flare-storage/reader",
+    "flare-session",
 
     # 消息编排服务
     "flare-message-orchestrator",
+    
+    # Hook引擎
+    "flare-hook-engine",
     
     # 媒体服务
     "flare-media",
@@ -96,6 +99,9 @@ flare-server-core = { path = "../flare-server-core" }
 # Flare Proto
 flare-proto = { path = "../flare-proto" }
 
+# Prometheus 指标收集
+prometheus = "0.14"
+
 # Big integers (for crypto / math utilities)
 num-bigint-dig = { version = "0.8.5", default-features = false, features = ["std", "u64_digit", "prime", "rand", "zeroize"] }
 
@@ -126,4 +132,34 @@ async-trait = { workspace = true }
 reqwest = { workspace = true }
 base64 = { workspace = true }
 prost-types = { workspace = true }
+chrono = { workspace = true }
 flare-core = { workspace = true }
+prometheus = { workspace = true }
+
+# OpenTelemetry 分布式追踪（可选功能）
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry-otlp = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", optional = true }
+tracing-opentelemetry = { version = "0.25", optional = true }
+
+[features]
+default = []
+tracing = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+prost = "0.14"
+redis = { workspace = true }
+sqlx = { workspace = true }
+
+[[bench]]
+name = "message_orchestrator_bench"
+harness = false
+
+[[bench]]
+name = "storage_writer_bench"
+harness = false
+
+[[bench]]
+name = "push_server_bench"
+harness = false

@@ -4,7 +4,6 @@ use anyhow::Result;
 use flare_proto::media::media_service_client::MediaServiceClient;
 use flare_proto::media::*;
 use std::error::Error;
-use tonic::transport::Channel;
 use tracing::info;
 
 #[tokio::test]
@@ -78,6 +77,7 @@ async fn test_upload_file() -> Result<()> {
         trace_id: "test-trace-id-readme".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     // 创建流式请求
@@ -135,9 +135,91 @@ async fn test_upload_file() -> Result<()> {
 
 // 简化测试实现，避免复杂性
 #[tokio::test]
-async fn test_file_access_types() -> Result<()> {
+async fn test_set_object_acl() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
-    assert!(true); // 占位符
+
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?
+        .connect()
+        .await?;
+    let mut client = MediaServiceClient::new(channel);
+
+    let readme_path = "tests/README.md";
+    let readme_content = std::fs::read_to_string(readme_path)?;
+    let readme_bytes = readme_content.as_bytes().to_vec();
+    let readme_size = readme_bytes.len() as i64;
+
+    let metadata = UploadFileMetadata {
+        file_name: "test-set-object-acl.md".to_string(),
+        mime_type: "text/markdown".to_string(),
+        file_size: readme_size,
+        file_type: FileType::Document as i32,
+        upload_id: "".to_string(),
+        context: None,
+        tenant: None,
+        metadata: std::collections::HashMap::new(),
+        user_id: "test-user".to_string(),
+        trace_id: "test-trace-id-set-acl".to_string(),
+        namespace: "test-namespace".to_string(),
+        business_tag: "integration-test".to_string(),
+        ..Default::default()
+    };
+
+    let requests = vec![
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::Metadata(metadata)),
+        },
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::ChunkData(readme_bytes)),
+        },
+    ];
+
+    let upload_request = tonic::Request::new(tokio_stream::iter(requests));
+    let upload_response = client.upload_file(upload_request).await?;
+    let upload_inner = upload_response.into_inner();
+    let file_id = upload_inner.file_id.clone();
+
+    let request = tonic::Request::new(SetObjectAclRequest {
+        file_id: file_id.clone(),
+        context: None,
+        tenant: None,
+        entries: vec![AccessControlEntry {
+            principal: "user:test-user".to_string(),
+            permissions: vec!["read".to_string(), "write".to_string()],
+        }],
+    });
+
+    let response = client.set_object_acl(request).await;
+
+    info!("SetObjectAcl response: {:?}", response);
+    if let Err(e) = &response {
+        info!("Error code: {:?}", e.code());
+        info!("Error message: {:?}", e.message());
+        info!("Error metadata: {:?}", e.metadata());
+        if let Some(source) = e.source() {
+            info!("Error source: {:?}", source);
+        }
+    }
+
+    match response {
+        Ok(resp) => {
+            let inner = resp.into_inner();
+            info!("SetObjectAcl status: {:?}", inner.status);
+        }
+        Err(status) => {
+            assert!(
+                matches!(
+                    status.code(),
+                    tonic::Code::Unimplemented
+                        | tonic::Code::PermissionDenied
+                        | tonic::Code::FailedPrecondition
+                        | tonic::Code::InvalidArgument
+                ),
+                "SetObjectAcl request should succeed or return an expected error, but got: {:?}",
+                status
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -170,6 +252,7 @@ async fn test_create_reference() -> Result<()> {
         trace_id: "test-trace-id-reference".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -194,6 +277,7 @@ async fn test_create_reference() -> Result<()> {
         metadata: std::collections::HashMap::new(),
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用创建引用接口
@@ -262,6 +346,7 @@ async fn test_delete_reference() -> Result<()> {
         trace_id: "test-trace-id-delete-ref".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -286,6 +371,7 @@ async fn test_delete_reference() -> Result<()> {
         metadata: std::collections::HashMap::new(),
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     let create_response = client.create_reference(create_request).await?;
@@ -365,6 +451,7 @@ async fn test_initiate_multipart_upload() -> Result<()> {
         trace_id: "test-trace-id-multipart".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     // 构造初始化分片上传请求
@@ -444,6 +531,7 @@ async fn test_upload_multipart_chunk() -> Result<()> {
         trace_id: "test-trace-id-chunk".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let initiate_request = tonic::Request::new(InitiateMultipartUploadRequest {
@@ -537,6 +625,7 @@ async fn test_complete_multipart_upload() -> Result<()> {
         trace_id: "test-trace-id-complete".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let initiate_request = tonic::Request::new(InitiateMultipartUploadRequest {
@@ -639,6 +728,7 @@ async fn test_single_multipart_upload_flow() -> Result<()> {
         trace_id: "test-trace-id-single-multipart".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let initiate_request = tonic::Request::new(InitiateMultipartUploadRequest {
@@ -764,6 +854,7 @@ async fn test_list_references() -> Result<()> {
         trace_id: "test-trace-id-list-refs".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -789,6 +880,7 @@ async fn test_list_references() -> Result<()> {
             metadata: std::collections::HashMap::new(),
             context: None,
             tenant: None,
+            ..Default::default()
         });
 
         let _create_response = client.create_reference(create_request).await?;
@@ -800,6 +892,7 @@ async fn test_list_references() -> Result<()> {
         pagination: None,
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用列出引用接口
@@ -876,6 +969,7 @@ async fn test_get_file_url() -> Result<()> {
         trace_id: "test-trace-id-get-url".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -897,6 +991,7 @@ async fn test_get_file_url() -> Result<()> {
         expires_in: 3600, // 1小时过期
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用获取文件URL接口
@@ -983,6 +1078,7 @@ async fn test_get_file_info() -> Result<()> {
         trace_id: "test-trace-id-get-info".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -1003,6 +1099,7 @@ async fn test_get_file_info() -> Result<()> {
         file_id: file_id.clone(),
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用获取文件信息接口
@@ -1075,6 +1172,7 @@ async fn test_delete_file() -> Result<()> {
         trace_id: "test-trace-id-delete-file".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -1095,6 +1193,7 @@ async fn test_delete_file() -> Result<()> {
         file_id: file_id.clone(),
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用删除文件接口
@@ -1129,30 +1228,327 @@ async fn test_delete_file() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_multipart_upload() -> Result<()> {
+async fn test_list_objects() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
-    assert!(true); // 占位符
+
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?
+        .connect()
+        .await?;
+    let mut client = MediaServiceClient::new(channel);
+
+    let readme_path = "tests/README.md";
+    let readme_content = std::fs::read_to_string(readme_path)?;
+    let readme_bytes = readme_content.as_bytes().to_vec();
+    let readme_size = readme_bytes.len() as i64;
+
+    let metadata = UploadFileMetadata {
+        file_name: "test-list-objects.md".to_string(),
+        mime_type: "text/markdown".to_string(),
+        file_size: readme_size,
+        file_type: FileType::Document as i32,
+        upload_id: "".to_string(),
+        context: None,
+        tenant: None,
+        metadata: std::collections::HashMap::new(),
+        user_id: "test-user".to_string(),
+        trace_id: "test-trace-id-list-objects".to_string(),
+        namespace: "test-namespace".to_string(),
+        business_tag: "integration-test".to_string(),
+        ..Default::default()
+    };
+
+    let requests = vec![
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::Metadata(metadata)),
+        },
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::ChunkData(readme_bytes)),
+        },
+    ];
+
+    let upload_request = tonic::Request::new(tokio_stream::iter(requests));
+    let upload_response = client.upload_file(upload_request).await?;
+    let upload_inner = upload_response.into_inner();
+    let file_id = upload_inner.file_id.clone();
+    let (bucket, object_key) = upload_inner
+        .info
+        .as_ref()
+        .map(|info| {
+            (
+                if info.bucket.is_empty() {
+                    "test-bucket".to_string()
+                } else {
+                    info.bucket.clone()
+                },
+                info.object_key.clone(),
+            )
+        })
+        .unwrap_or_else(|| ("test-bucket".to_string(), String::new()));
+
+    let request = tonic::Request::new(ListObjectsRequest {
+        context: None,
+        tenant: None,
+        bucket: bucket.clone(),
+        prefix: object_key.clone(),
+        pagination: None,
+        filters: vec![],
+        sort: vec![],
+    });
+
+    let response = client.list_objects(request).await;
+
+    info!("ListObjects response: {:?}", response);
+    if let Err(e) = &response {
+        info!("Error code: {:?}", e.code());
+        info!("Error message: {:?}", e.message());
+        info!("Error metadata: {:?}", e.metadata());
+        if let Some(source) = e.source() {
+            info!("Error source: {:?}", source);
+        }
+    }
+
+    match response {
+        Ok(resp) => {
+            let inner = resp.into_inner();
+            info!(
+                "Listed {} objects under bucket: {}, prefix: {}",
+                inner.files.len(),
+                bucket,
+                object_key
+            );
+            if !object_key.is_empty() {
+                let found = inner
+                    .files
+                    .iter()
+                    .any(|file| file.object_key == object_key || file.file_id == file_id);
+                assert!(
+                    found,
+                    "Uploaded object should be present in list objects response"
+                );
+            }
+        }
+        Err(status) => {
+            assert!(
+                matches!(
+                    status.code(),
+                    tonic::Code::Unimplemented
+                        | tonic::Code::PermissionDenied
+                        | tonic::Code::FailedPrecondition
+                        | tonic::Code::NotFound
+                        | tonic::Code::InvalidArgument
+                ),
+                "ListObjects request should succeed or return an expected error, but got: {:?}",
+                status
+            );
+        }
+    }
+
     Ok(())
 }
 
 #[tokio::test]
-async fn test_reference_management() -> Result<()> {
+async fn test_generate_upload_url() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
-    assert!(true); // 占位符
+
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?
+        .connect()
+        .await?;
+    let mut client = MediaServiceClient::new(channel);
+
+    let readme_path = "tests/README.md";
+    let readme_content = std::fs::read_to_string(readme_path)?;
+    let readme_bytes = readme_content.as_bytes().to_vec();
+    let readme_size = readme_bytes.len() as i64;
+
+    let metadata = UploadFileMetadata {
+        file_name: "test-generate-upload-url.md".to_string(),
+        mime_type: "text/markdown".to_string(),
+        file_size: readme_size,
+        file_type: FileType::Document as i32,
+        upload_id: "".to_string(),
+        context: None,
+        tenant: None,
+        metadata: std::collections::HashMap::new(),
+        user_id: "test-user".to_string(),
+        trace_id: "test-trace-id-generate-upload-url".to_string(),
+        namespace: "test-namespace".to_string(),
+        business_tag: "integration-test".to_string(),
+        ..Default::default()
+    };
+
+    let requests = vec![
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::Metadata(metadata)),
+        },
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::ChunkData(readme_bytes)),
+        },
+    ];
+
+    let upload_request = tonic::Request::new(tokio_stream::iter(requests));
+    let upload_response = client.upload_file(upload_request).await?;
+    let upload_inner = upload_response.into_inner();
+    let bucket = upload_inner
+        .info
+        .as_ref()
+        .map(|info| info.bucket.clone())
+        .filter(|bucket| !bucket.is_empty())
+        .unwrap_or_else(|| "test-bucket".to_string());
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs();
+
+    let object_key = format!("integration-tests/generated-upload-url-{}", timestamp);
+
+    let request = tonic::Request::new(GenerateUploadUrlRequest {
+        context: None,
+        tenant: None,
+        bucket: bucket.clone(),
+        object_key: object_key.clone(),
+        mime_type: "application/octet-stream".to_string(),
+        expected_size: 1024,
+        expires_in: 600,
+    });
+
+    let response = client.generate_upload_url(request).await;
+
+    info!("GenerateUploadUrl response: {:?}", response);
+    if let Err(e) = &response {
+        info!("Error code: {:?}", e.code());
+        info!("Error message: {:?}", e.message());
+        info!("Error metadata: {:?}", e.metadata());
+        if let Some(source) = e.source() {
+            info!("Error source: {:?}", source);
+        }
+    }
+
+    match response {
+        Ok(resp) => {
+            let inner = resp.into_inner();
+            assert!(
+                !inner.upload_url.is_empty(),
+                "Upload URL should not be empty"
+            );
+            info!(
+                "Generated upload URL for bucket: {}, object_key: {}",
+                bucket, object_key
+            );
+        }
+        Err(status) => {
+            assert!(
+                matches!(
+                    status.code(),
+                    tonic::Code::Unimplemented
+                        | tonic::Code::PermissionDenied
+                        | tonic::Code::FailedPrecondition
+                        | tonic::Code::InvalidArgument
+                        | tonic::Code::NotFound
+                ),
+                "GenerateUploadUrl request should succeed or return an expected error, but got: {:?}",
+                status
+            );
+        }
+    }
+
     Ok(())
 }
 
 #[tokio::test]
-async fn test_file_operations() -> Result<()> {
+async fn test_describe_bucket() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
-    assert!(true); // 占位符
-    Ok(())
-}
 
-#[tokio::test]
-async fn test_media_processing() -> Result<()> {
-    let _ = tracing_subscriber::fmt::try_init();
-    assert!(true); // 占位符
+    let channel = tonic::transport::Endpoint::new("http://localhost:60081")?
+        .connect()
+        .await?;
+    let mut client = MediaServiceClient::new(channel);
+
+    let readme_path = "tests/README.md";
+    let readme_content = std::fs::read_to_string(readme_path)?;
+    let readme_bytes = readme_content.as_bytes().to_vec();
+    let readme_size = readme_bytes.len() as i64;
+
+    let metadata = UploadFileMetadata {
+        file_name: "test-describe-bucket.md".to_string(),
+        mime_type: "text/markdown".to_string(),
+        file_size: readme_size,
+        file_type: FileType::Document as i32,
+        upload_id: "".to_string(),
+        context: None,
+        tenant: None,
+        metadata: std::collections::HashMap::new(),
+        user_id: "test-user".to_string(),
+        trace_id: "test-trace-id-describe-bucket".to_string(),
+        namespace: "test-namespace".to_string(),
+        business_tag: "integration-test".to_string(),
+        ..Default::default()
+    };
+
+    let requests = vec![
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::Metadata(metadata)),
+        },
+        UploadFileRequest {
+            request: Some(upload_file_request::Request::ChunkData(readme_bytes)),
+        },
+    ];
+
+    let upload_request = tonic::Request::new(tokio_stream::iter(requests));
+    let upload_response = client.upload_file(upload_request).await?;
+    let upload_inner = upload_response.into_inner();
+    let bucket = upload_inner
+        .info
+        .as_ref()
+        .map(|info| info.bucket.clone())
+        .filter(|bucket| !bucket.is_empty())
+        .unwrap_or_else(|| "test-bucket".to_string());
+
+    let request = tonic::Request::new(DescribeBucketRequest {
+        context: None,
+        tenant: None,
+        bucket: bucket.clone(),
+    });
+
+    let response = client.describe_bucket(request).await;
+
+    info!("DescribeBucket response: {:?}", response);
+    if let Err(e) = &response {
+        info!("Error code: {:?}", e.code());
+        info!("Error message: {:?}", e.message());
+        info!("Error metadata: {:?}", e.metadata());
+        if let Some(source) = e.source() {
+            info!("Error source: {:?}", source);
+        }
+    }
+
+    match response {
+        Ok(resp) => {
+            let inner = resp.into_inner();
+            assert_eq!(
+                inner.bucket, bucket,
+                "Describe bucket response should match requested bucket"
+            );
+            info!(
+                "Bucket description - bucket: {}, region: {}, storage_class: {}",
+                inner.bucket, inner.region, inner.storage_class
+            );
+        }
+        Err(status) => {
+            assert!(
+                matches!(
+                    status.code(),
+                    tonic::Code::Unimplemented
+                        | tonic::Code::PermissionDenied
+                        | tonic::Code::FailedPrecondition
+                        | tonic::Code::NotFound
+                ),
+                "DescribeBucket request should succeed or return an expected error, but got: {:?}",
+                status
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -1171,6 +1567,7 @@ async fn test_cleanup_orphaned_assets() -> Result<()> {
         limit: 10, // 限制清理10个
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用清理孤立媒资接口
@@ -1231,6 +1628,7 @@ async fn test_abort_multipart_upload() -> Result<()> {
         trace_id: "test-trace-id-abort".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let initiate_request = tonic::Request::new(InitiateMultipartUploadRequest {
@@ -1324,6 +1722,7 @@ async fn test_process_image() -> Result<()> {
         trace_id: "test-trace-id-process-image".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -1355,6 +1754,7 @@ async fn test_process_image() -> Result<()> {
         operations: vec![image_operation],
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用处理图片接口
@@ -1420,6 +1820,7 @@ async fn test_process_video() -> Result<()> {
         trace_id: "test-trace-id-process-video".to_string(),
         namespace: "test-namespace".to_string(),
         business_tag: "integration-test".to_string(),
+        ..Default::default()
     };
 
     let requests = vec![
@@ -1439,6 +1840,7 @@ async fn test_process_video() -> Result<()> {
     let transcode_operation = TranscodeOperation {
         format: "mp4".to_string(),
         quality: "medium".to_string(),
+        ..Default::default()
     };
 
     let video_operation = VideoOperation {
@@ -1450,6 +1852,7 @@ async fn test_process_video() -> Result<()> {
         operations: vec![video_operation],
         context: None,
         tenant: None,
+        ..Default::default()
     });
 
     // 调用处理视频接口

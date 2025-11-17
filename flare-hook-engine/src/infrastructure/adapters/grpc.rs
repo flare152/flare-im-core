@@ -1,0 +1,334 @@
+//! # gRPC Hook适配器
+//!
+//! 提供基于gRPC的Hook传输适配器实现。
+//! 支持两种模式：
+//! 1. 直接地址模式（外部系统/开发测试）
+//! 2. 服务发现模式（生产环境内部服务）
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::time::Duration;
+
+use anyhow::{Context, Result};
+use tonic::transport::{Channel, Endpoint};
+use tonic::Request;
+
+use flare_proto::hooks::hook_extension_client::HookExtensionClient;
+use flare_proto::hooks::{
+    PreSendHookRequest, PostSendHookRequest, DeliveryHookRequest, RecallHookRequest,
+};
+use flare_im_core::{
+    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+};
+
+use crate::domain::models::LoadBalanceStrategy;
+use crate::infrastructure::adapters::conversion::{
+    hook_context_to_proto, message_draft_to_proto,
+    message_record_to_proto, delivery_event_to_proto, recall_event_to_proto,
+    proto_to_pre_send_decision, proto_to_recall_decision,
+};
+
+/// gRPC Hook适配器
+pub struct GrpcHookAdapter {
+    // 模式1: 直接地址模式（固定客户端）
+    client: Option<Arc<Mutex<HookExtensionClient<Channel>>>>,
+    
+    // 模式2: 服务发现模式（动态选择实例）
+    service_registry: Option<Arc<dyn flare_server_core::registry::ServiceRegistryTrait>>,
+    service_name: String,
+    load_balance_strategy: LoadBalanceStrategy,
+    load_balancer: Option<Arc<Mutex<flare_server_core::registry::LoadBalancer>>>,
+    
+    // 通用配置
+    metadata: HashMap<String, String>,
+    timeout: Duration,
+}
+
+impl GrpcHookAdapter {
+    /// 从直接地址创建gRPC Hook适配器（模式1: 直接地址模式）
+    pub async fn new_from_endpoint(
+        endpoint: String,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
+        let channel = Endpoint::from_shared(endpoint.clone())?
+            .connect()
+            .await
+            .context("Failed to connect to gRPC endpoint")?;
+        
+        let client = HookExtensionClient::new(channel);
+        
+        tracing::info!(endpoint = %endpoint, "Created gRPC adapter from endpoint");
+        
+        Ok(Self {
+            client: Some(Arc::new(Mutex::new(client))),
+            service_registry: None,
+            service_name: String::new(),
+            load_balance_strategy: LoadBalanceStrategy::RoundRobin,
+            load_balancer: None,
+            metadata,
+            timeout: Duration::from_secs(5),
+        })
+    }
+    
+    /// 从服务发现创建gRPC Hook适配器（模式2: 服务发现模式）
+    pub async fn new_from_service_discovery(
+        registry: Arc<dyn flare_server_core::registry::ServiceRegistryTrait>,
+        service_name: String,
+        load_balance_strategy: LoadBalanceStrategy,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
+        // 从服务注册中心发现服务实例
+        let services = registry
+            .discover(&service_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to discover service: {}", e))?;
+        
+        if services.is_empty() {
+            return Err(anyhow::anyhow!(
+                "No service instances found for: {}", service_name
+            ));
+        }
+        
+        // 创建负载均衡器
+        let strategy = match load_balance_strategy {
+            LoadBalanceStrategy::RoundRobin => flare_server_core::registry::LoadBalanceStrategy::RoundRobin,
+            LoadBalanceStrategy::Random => flare_server_core::registry::LoadBalanceStrategy::Random,
+            LoadBalanceStrategy::ConsistentHash => flare_server_core::registry::LoadBalanceStrategy::ConsistentHash,
+            LoadBalanceStrategy::LeastConn => flare_server_core::registry::LoadBalanceStrategy::LeastConnections,
+        };
+        
+        let load_balancer = Arc::new(Mutex::new(flare_server_core::registry::LoadBalancer::new(strategy)));
+        
+        tracing::info!(
+            service_name = %service_name,
+            instances = services.len(),
+            strategy = ?load_balance_strategy,
+            "Created gRPC adapter from service discovery"
+        );
+        
+        Ok(Self {
+            client: None,
+            service_registry: Some(registry),
+            service_name,
+            load_balance_strategy,
+            load_balancer: Some(load_balancer),
+            metadata,
+            timeout: Duration::from_secs(5),
+        })
+    }
+    
+    /// 获取客户端（自动选择模式）
+    async fn get_client(&self, key: Option<&str>) -> Result<HookExtensionClient<Channel>> {
+        // 模式1: 直接地址模式
+        if let Some(ref client) = self.client {
+            return Ok(client.lock().await.clone());
+        }
+        
+        // 模式2: 服务发现模式
+        if let (Some(registry), Some(lb)) = (&self.service_registry, &self.load_balancer) {
+            // 从服务注册中心发现服务实例
+            let services = registry
+                .discover(&self.service_name)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to discover service instances: {}", e))?;
+            
+            if services.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No service instances available for: {}", self.service_name
+                ));
+            }
+            
+            // 使用负载均衡器选择实例
+            let selected = {
+                let mut balancer = lb.lock().await;
+                match self.load_balance_strategy {
+                    LoadBalanceStrategy::RoundRobin => {
+                        balancer.select(&services, None).await
+                    }
+                    LoadBalanceStrategy::Random => {
+                        balancer.select(&services, None).await
+                    }
+                    LoadBalanceStrategy::ConsistentHash => {
+                        balancer.select(&services, key).await
+                    }
+                    LoadBalanceStrategy::LeastConn => {
+                        balancer.select(&services, None).await
+                    }
+                }
+            };
+            
+            if let Some(instance) = selected {
+                let endpoint = format!("http://{}:{}", instance.address, instance.port);
+                let channel = Endpoint::from_shared(endpoint.clone())?
+                    .timeout(self.timeout)
+                    .connect()
+                    .await
+                    .context(format!("Failed to connect to service instance: {}", endpoint))?;
+                
+                return Ok(HookExtensionClient::new(channel));
+            }
+            
+            return Err(anyhow::anyhow!(
+                "Failed to select service instance for: {}", self.service_name
+            ));
+        }
+        
+        Err(anyhow::anyhow!("No client available: neither endpoint nor service discovery configured"))
+    }
+    
+    /// 设置请求元数据
+    fn set_request_metadata<T>(&self, mut request: Request<T>) -> Request<T> {
+        for (key, value) in &self.metadata {
+            if let Ok(key) = key.parse::<tonic::metadata::MetadataKey<_>>() {
+                if let Ok(value) = value.parse::<tonic::metadata::MetadataValue<_>>() {
+                    request.metadata_mut().insert(key, value);
+                } else {
+                    tracing::warn!("Invalid metadata value: {}", value);
+                }
+            } else {
+                tracing::warn!("Invalid metadata key: {}", key);
+            }
+        }
+        request
+    }
+    
+    /// 执行PreSend Hook
+    pub async fn pre_send(
+        &self,
+        ctx: &HookContext,
+        draft: &mut MessageDraft,
+    ) -> Result<PreSendDecision> {
+        let request = PreSendHookRequest {
+            context: Some(hook_context_to_proto(ctx)),
+            draft: Some(message_draft_to_proto(draft)),
+        };
+        
+        let mut request = Request::new(request);
+        request = self.set_request_metadata(request);
+        
+        // 使用一致性哈希时，以 session_id 作为 key
+        let key = ctx.session_id.as_deref();
+        let mut client = self.get_client(key).await?;
+        
+        let response = client.invoke_pre_send(request)
+            .await
+            .context("gRPC PreSend hook call failed")?
+            .into_inner();
+        
+        Ok(proto_to_pre_send_decision(&response, draft))
+    }
+    
+    /// 执行PostSend Hook
+    pub async fn post_send(
+        &self,
+        ctx: &HookContext,
+        record: &MessageRecord,
+        draft: &MessageDraft,
+    ) -> Result<()> {
+        let request = PostSendHookRequest {
+            context: Some(hook_context_to_proto(ctx)),
+            record: Some(message_record_to_proto(record)),
+            draft: Some(message_draft_to_proto(draft)),
+        };
+        
+        let mut request = Request::new(request);
+        request = self.set_request_metadata(request);
+        
+        // 使用一致性哈希时，以 session_id 作为 key
+        let key = ctx.session_id.as_deref();
+        let mut client = self.get_client(key).await?;
+        
+        let response = client.invoke_post_send(request)
+            .await
+            .context("gRPC PostSend hook call failed")?
+            .into_inner();
+        
+        if response.success {
+            Ok(())
+        } else {
+            use flare_im_core::error::{ErrorBuilder, ErrorCode};
+            let error = response.status
+                .map(|s| {
+                    ErrorBuilder::new(
+                        ErrorCode::from_u32(s.code as u32).unwrap_or(ErrorCode::GeneralError),
+                        &s.message,
+                    )
+                    .build_error()
+                })
+                .unwrap_or_else(|| {
+                    ErrorBuilder::new(ErrorCode::InternalError, "PostSend hook failed").build_error()
+                });
+            Err(error.into())
+        }
+    }
+    
+    /// 执行Delivery Hook
+    pub async fn delivery(
+        &self,
+        ctx: &HookContext,
+        event: &DeliveryEvent,
+    ) -> Result<()> {
+        let request = DeliveryHookRequest {
+            context: Some(hook_context_to_proto(ctx)),
+            event: Some(delivery_event_to_proto(event)),
+        };
+        
+        let mut request = Request::new(request);
+        request = self.set_request_metadata(request);
+        
+        // 使用一致性哈希时，以 user_id 作为 key
+        let key = Some(event.user_id.as_str());
+        let mut client = self.get_client(key).await?;
+        
+        let response = client.notify_delivery(request)
+            .await
+            .context("gRPC Delivery hook call failed")?
+            .into_inner();
+        
+        if response.success {
+            Ok(())
+        } else {
+            use flare_im_core::error::{ErrorBuilder, ErrorCode};
+            let error = response.status
+                .map(|s| {
+                    ErrorBuilder::new(
+                        ErrorCode::from_u32(s.code as u32).unwrap_or(ErrorCode::GeneralError),
+                        &s.message,
+                    )
+                    .build_error()
+                })
+                .unwrap_or_else(|| {
+                    ErrorBuilder::new(ErrorCode::InternalError, "Delivery hook failed").build_error()
+                });
+            Err(error.into())
+        }
+    }
+    
+    /// 执行Recall Hook
+    pub async fn recall(
+        &self,
+        ctx: &HookContext,
+        event: &RecallEvent,
+    ) -> Result<PreSendDecision> {
+        let request = RecallHookRequest {
+            context: Some(hook_context_to_proto(ctx)),
+            event: Some(recall_event_to_proto(event)),
+        };
+        
+        let mut request = Request::new(request);
+        request = self.set_request_metadata(request);
+        
+        // 使用一致性哈希时，以 session_id 作为 key
+        let key = ctx.session_id.as_deref();
+        let mut client = self.get_client(key).await?;
+        
+        let response = client.notify_recall(request)
+            .await
+            .context("gRPC Recall hook call failed")?
+            .into_inner();
+        
+        Ok(proto_to_recall_decision(&response))
+    }
+}
+

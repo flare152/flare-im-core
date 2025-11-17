@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use serde_json::to_vec;
+use serde_json::{to_vec, json};
 
 use crate::domain::models::PushDispatchTask;
 use crate::domain::repositories::PushTaskPublisher;
-use crate::infrastructure::config::PushServerConfig;
+use crate::config::PushServerConfig;
 
 pub struct KafkaPushTaskPublisher {
     config: Arc<PushServerConfig>,
@@ -59,6 +59,79 @@ impl PushTaskPublisher for KafkaPushTaskPublisher {
             .await
             .map_err(|(err, _)| {
                 ErrorBuilder::new(ErrorCode::ServiceUnavailable, "failed to enqueue push task")
+                    .details(err.to_string())
+                    .build_error()
+            })?;
+
+        Ok(())
+    }
+    
+    async fn publish_offline_batch(&self, tasks: &[PushDispatchTask]) -> Result<()> {
+        let timeout = Duration::from_millis(self.config.kafka_timeout_ms);
+        
+        // 批量发送离线推送任务
+        for task in tasks {
+            let payload = to_vec(task).map_err(|err| {
+                ErrorBuilder::new(
+                    ErrorCode::SerializationError,
+                    "failed to encode offline task",
+                )
+                .details(err.to_string())
+                .build_error()
+            })?;
+
+            let record = FutureRecord::to(&self.config.offline_topic)
+                .payload(&payload)
+                .key(&task.user_id);
+
+            self.producer
+                .send(record, timeout)
+                .await
+                .map_err(|(err, _)| {
+                    ErrorBuilder::new(
+                        ErrorCode::ServiceUnavailable,
+                        "failed to enqueue offline task",
+                    )
+                    .details(err.to_string())
+                    .build_error()
+                })?;
+        }
+
+        Ok(())
+    }
+    
+    async fn publish_to_dlq(
+        &self,
+        task: &PushDispatchTask,
+        error: &str,
+        retry_count: u32,
+    ) -> Result<()> {
+        // 构建死信队列记录
+        let dlq_record = json!({
+            "task": task,
+            "error": error,
+            "retry_count": retry_count,
+            "failed_at": chrono::Utc::now().to_rfc3339(),
+        });
+
+        let payload = to_vec(&dlq_record).map_err(|err| {
+            ErrorBuilder::new(
+                ErrorCode::SerializationError,
+                "failed to encode dlq record",
+            )
+            .details(err.to_string())
+            .build_error()
+        })?;
+
+        let record = FutureRecord::to(&self.config.dlq_topic)
+            .payload(&payload)
+            .key(&task.message_id);
+
+        self.producer
+            .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
+            .await
+            .map_err(|(err, _)| {
+                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "failed to enqueue dlq record")
                     .details(err.to_string())
                     .build_error()
             })?;

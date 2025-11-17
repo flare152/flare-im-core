@@ -8,11 +8,17 @@ use tonic::IntoRequest;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::error::{ErrorBuilder, ErrorCode, Result, from_rpc_status};
+use flare_proto::Message as ProtoStorageMessage;
+use flare_proto::common::{
+    ActorContext as ProtoActorContext, ActorType as ProtoActorType,
+    DeviceContext as ProtoDeviceContext, TraceContext as ProtoTraceContext,
+};
 use flare_proto::{
     HookExtensionClient, ProtoDeliveryHookRequest, ProtoDeliveryHookResponse,
     ProtoHookDeliveryEvent, ProtoHookInvocationContext, ProtoHookMessageDraft,
     ProtoHookMessageRecord, ProtoPostSendHookRequest, ProtoPreSendHookRequest,
-    ProtoRecallHookRequest, ProtoRecallHookResponse,
+    ProtoRecallHookRequest, ProtoRecallHookResponse, RequestContext as ProtoRequestContext,
+    TenantContext as ProtoTenantContext,
 };
 
 use super::super::config::HookDefinition;
@@ -225,7 +231,7 @@ impl RecallHook for GrpcRecallHook {
         match client.notify_recall(request).await {
             Ok(resp) => {
                 let inner: ProtoRecallHookResponse = resp.into_inner();
-                if inner.success {
+                if inner.allow {
                     HookOutcome::Completed
                 } else {
                     let status = inner.status.unwrap_or_default();
@@ -246,24 +252,259 @@ fn build_context(
     ctx: &HookContext,
     static_metadata: &HashMap<String, String>,
 ) -> ProtoHookInvocationContext {
+    let corridor = ctx
+        .attributes
+        .get("corridor")
+        .cloned()
+        .or_else(|| ctx.session_type.clone())
+        .unwrap_or_else(|| "messaging".to_string());
+
     let mut attributes = ctx.attributes.clone();
     for (key, value) in static_metadata {
         attributes
             .entry(key.clone())
             .or_insert_with(|| value.clone());
     }
+    for (key, value) in &ctx.request_metadata {
+        attributes
+            .entry(format!("request.{key}"))
+            .or_insert_with(|| value.clone());
+    }
 
     ProtoHookInvocationContext {
-        tenant_id: ctx.tenant_id.clone(),
+        request_context: build_request_context(ctx),
+        tenant: Some(build_tenant_context(ctx)),
         session_id: ctx.session_id.clone().unwrap_or_default(),
         session_type: ctx.session_type.clone().unwrap_or_default(),
-        message_type: ctx.message_type.clone().unwrap_or_default(),
-        sender_id: ctx.sender_id.clone().unwrap_or_default(),
-        trace_id: ctx.trace_id.clone().unwrap_or_default(),
+        corridor,
         tags: ctx.tags.clone(),
-        request_context: None,
-        tenant: None,
         attributes,
+    }
+}
+
+fn build_request_context(ctx: &HookContext) -> Option<ProtoRequestContext> {
+    let mut has_context = false;
+
+    let request_id = ctx
+        .request_metadata
+        .get("request_id")
+        .cloned()
+        .or_else(|| ctx.trace_id.clone());
+
+    let trace = ctx.trace_id.as_ref().map(|trace_id| {
+        has_context = true;
+        ProtoTraceContext {
+            trace_id: trace_id.clone(),
+            span_id: ctx
+                .request_metadata
+                .get("span_id")
+                .cloned()
+                .unwrap_or_default(),
+            parent_span_id: ctx
+                .request_metadata
+                .get("parent_span_id")
+                .cloned()
+                .unwrap_or_default(),
+            sampled: ctx
+                .request_metadata
+                .get("trace_sampled")
+                .cloned()
+                .unwrap_or_default(),
+            tags: ctx
+                .request_metadata
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let Some(rest) = k.strip_prefix("trace.tag.") {
+                        Some((rest.to_string(), v.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    });
+
+    let actor_id = ctx
+        .sender_id
+        .clone()
+        .or_else(|| ctx.request_metadata.get("actor_id").cloned());
+
+    let actor = actor_id.map(|id| {
+        has_context = true;
+        let roles = ctx
+            .attributes
+            .get("actor_roles")
+            .map(|raw| {
+                raw.split(',')
+                    .filter_map(|r| {
+                        let trimmed = r.trim();
+                        (!trimmed.is_empty()).then(|| trimmed.to_string())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let actor_type = ctx
+            .attributes
+            .get("actor_type")
+            .and_then(|v| match v.to_ascii_lowercase().as_str() {
+                "service" => Some(ProtoActorType::Service),
+                "tenant_admin" | "tenant-admin" => Some(ProtoActorType::TenantAdmin),
+                "system" => Some(ProtoActorType::System),
+                "guest" => Some(ProtoActorType::Guest),
+                "user" => Some(ProtoActorType::User),
+                "unspecified" => Some(ProtoActorType::Unspecified),
+                _ => None,
+            })
+            .unwrap_or(ProtoActorType::User);
+
+        ProtoActorContext {
+            actor_id: id,
+            r#type: actor_type as i32,
+            roles,
+            attributes: ctx
+                .attributes
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let Some(rest) = k.strip_prefix("actor.attr.") {
+                        Some((rest.to_string(), v.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        }
+    });
+
+    let device = {
+        let device_id = ctx
+            .request_metadata
+            .get("device_id")
+            .cloned()
+            .or_else(|| ctx.attributes.get("device_id").cloned());
+        if device_id.is_some() {
+            has_context = true;
+        }
+        device_id.map(|id| ProtoDeviceContext {
+            device_id: id,
+            platform: ctx
+                .request_metadata
+                .get("device_platform")
+                .cloned()
+                .or_else(|| ctx.attributes.get("device_platform").cloned())
+                .unwrap_or_default(),
+            model: ctx
+                .request_metadata
+                .get("device_model")
+                .cloned()
+                .unwrap_or_default(),
+            os_version: ctx
+                .request_metadata
+                .get("os_version")
+                .cloned()
+                .unwrap_or_else(|| {
+                    ctx.attributes
+                        .get("os_version")
+                        .cloned()
+                        .unwrap_or_default()
+                }),
+            app_version: ctx
+                .request_metadata
+                .get("app_version")
+                .cloned()
+                .unwrap_or_else(|| {
+                    ctx.attributes
+                        .get("app_version")
+                        .cloned()
+                        .unwrap_or_default()
+                }),
+            locale: ctx
+                .request_metadata
+                .get("locale")
+                .cloned()
+                .unwrap_or_default(),
+            timezone: ctx
+                .request_metadata
+                .get("timezone")
+                .cloned()
+                .unwrap_or_default(),
+            ip_address: ctx
+                .request_metadata
+                .get("ip_address")
+                .cloned()
+                .unwrap_or_default(),
+            attributes: ctx
+                .request_metadata
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let Some(rest) = k.strip_prefix("device.attr.") {
+                        Some((rest.to_string(), v.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        })
+    };
+
+    if !has_context && request_id.is_none() {
+        return None;
+    }
+
+    Some(ProtoRequestContext {
+        request_id: request_id.unwrap_or_default(),
+        trace,
+        actor,
+        device,
+        channel: ctx
+            .attributes
+            .get("channel")
+            .cloned()
+            .or_else(|| ctx.request_metadata.get("channel").cloned())
+            .unwrap_or_else(|| "grpc".to_string()),
+        user_agent: ctx
+            .request_metadata
+            .get("user_agent")
+            .cloned()
+            .unwrap_or_default(),
+        attributes: ctx
+            .request_metadata
+            .iter()
+            .filter_map(|(k, v)| {
+                if let Some(rest) = k.strip_prefix("request.attr.") {
+                    Some((rest.to_string(), v.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    })
+}
+
+fn build_tenant_context(ctx: &HookContext) -> ProtoTenantContext {
+    let business_type = ctx
+        .attributes
+        .get("tenant_business_type")
+        .cloned()
+        .unwrap_or_default();
+    let environment = ctx
+        .attributes
+        .get("tenant_environment")
+        .cloned()
+        .unwrap_or_default();
+    let organization_id = ctx
+        .attributes
+        .get("tenant_organization_id")
+        .cloned()
+        .unwrap_or_default();
+
+    ProtoTenantContext {
+        tenant_id: ctx.tenant_id.clone(),
+        business_type,
+        environment,
+        organization_id,
+        labels: HashMap::new(),
+        attributes: HashMap::new(),
     }
 }
 
@@ -294,14 +535,48 @@ fn apply_draft(target: &mut MessageDraft, source: ProtoHookMessageDraft) {
 }
 
 fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
+    let persisted_ts = system_time_to_timestamp(record.persisted_at);
+
+    let mut message = ProtoStorageMessage::default();
+    message.id = record.message_id.clone();
+    message.session_id = record.conversation_id.clone();
+    message.sender_id = record.sender_id.clone();
+    message.session_type = record.session_type.clone().unwrap_or_default();
+    message.extra = record.metadata.clone();
+    message.timestamp = Some(persisted_ts.clone());
+    message.message_type = record
+        .message_type
+        .as_deref()
+        .map(|kind| match kind.to_ascii_lowercase().as_str() {
+            "text" | "message_type_text" => flare_proto::storage::MessageType::Text as i32,
+            "binary"
+            | "image"
+            | "video"
+            | "audio"
+            | "file"
+            | "attachment"
+            | "message_type_binary" => flare_proto::storage::MessageType::Binary as i32,
+            "custom" | "message_type_custom" => flare_proto::storage::MessageType::Custom as i32,
+            _ => flare_proto::storage::MessageType::Unspecified as i32,
+        })
+        .unwrap_or(flare_proto::storage::MessageType::Unspecified as i32);
+    if let Some(message_type) = &record.message_type {
+        message
+            .extra
+            .entry("message_type".into())
+            .or_insert_with(|| message_type.clone());
+    }
+
+    if let Some(client_id) = record.client_message_id.as_ref() {
+        message
+            .extra
+            .entry("client_message_id".into())
+            .or_insert_with(|| client_id.clone());
+    }
+
     ProtoHookMessageRecord {
-        message_id: record.message_id.clone(),
-        client_message_id: record.client_message_id.clone().unwrap_or_default(),
-        conversation_id: record.conversation_id.clone(),
-        sender_id: record.sender_id.clone(),
-        session_type: record.session_type.clone().unwrap_or_default(),
-        message_type: record.message_type.clone().unwrap_or_default(),
-        persisted_at: Some(system_time_to_timestamp(record.persisted_at)),
+        message: Some(message),
+        persisted_at: Some(persisted_ts),
         metadata: record.metadata.clone(),
     }
 }

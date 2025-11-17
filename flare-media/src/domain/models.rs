@@ -4,6 +4,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 
 pub const STORAGE_PATH_METADATA_KEY: &str = "storage_path";
+pub const STORAGE_BUCKET_METADATA_KEY: &str = "storage_bucket";
 pub const FILE_CATEGORY_METADATA_KEY: &str = "file_category";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,8 @@ pub struct MediaFileMetadata {
     pub grace_expires_at: Option<DateTime<Utc>>,
     /// 文件访问类型
     pub access_type: FileAccessType,
+    pub storage_bucket: Option<String>,
+    pub storage_path: Option<String>,
 }
 
 impl Default for MediaFileMetadata {
@@ -94,7 +97,27 @@ impl Default for MediaFileMetadata {
             status: MediaAssetStatus::default(),
             grace_expires_at: None,
             access_type: FileAccessType::default(),
+            storage_bucket: None,
+            storage_path: None,
         }
+    }
+}
+
+impl MediaFileMetadata {
+    pub fn storage_bucket(&self) -> Option<&str> {
+        self.storage_bucket.as_deref().or_else(|| {
+            self.metadata
+                .get(STORAGE_BUCKET_METADATA_KEY)
+                .map(|s| s.as_str())
+        })
+    }
+
+    pub fn storage_path(&self) -> Option<&str> {
+        self.storage_path.as_deref().or_else(|| {
+            self.metadata
+                .get(STORAGE_PATH_METADATA_KEY)
+                .map(|s| s.as_str())
+        })
     }
 }
 

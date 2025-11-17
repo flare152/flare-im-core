@@ -150,14 +150,18 @@ fn prepare_envelope(
     let conversation_id = format!("{SESSION_TYPE_PUSH}:{user_id}");
 
     if let Some(req) = request {
-        if let Some(trace_id) = (!req.trace_id.is_empty()).then_some(req.trace_id.clone()) {
-            extra_metadata.insert("trace_id".to_string(), trace_id);
+        if let Some(trace_ctx) = req.trace.as_ref() {
+            if !trace_ctx.trace_id.is_empty() {
+                extra_metadata.insert("trace_id".to_string(), trace_ctx.trace_id.clone());
+            }
+            if !trace_ctx.span_id.is_empty() {
+                extra_metadata.insert("span_id".to_string(), trace_ctx.span_id.clone());
+            }
         }
-        if let Some(span_id) = (!req.span_id.is_empty()).then_some(req.span_id.clone()) {
-            extra_metadata.insert("span_id".to_string(), span_id);
-        }
-        if !req.client_ip.is_empty() {
-            extra_metadata.insert("client_ip".to_string(), req.client_ip.clone());
+        if let Some(device_ctx) = req.device.as_ref() {
+            if !device_ctx.ip_address.is_empty() {
+                extra_metadata.insert("client_ip".to_string(), device_ctx.ip_address.clone());
+            }
         }
         if !req.user_agent.is_empty() {
             extra_metadata.insert("user_agent".to_string(), req.user_agent.clone());
@@ -184,11 +188,13 @@ fn prepare_envelope(
         if !req.request_id.is_empty() {
             request_metadata.insert("request_id".to_string(), req.request_id.clone());
         }
-        if !req.trace_id.is_empty() {
-            request_metadata.insert("trace_id".to_string(), req.trace_id.clone());
-        }
-        if !req.span_id.is_empty() {
-            request_metadata.insert("span_id".to_string(), req.span_id.clone());
+        if let Some(trace_ctx) = req.trace.as_ref() {
+            if !trace_ctx.trace_id.is_empty() {
+                request_metadata.insert("trace_id".to_string(), trace_ctx.trace_id.clone());
+            }
+            if !trace_ctx.span_id.is_empty() {
+                request_metadata.insert("span_id".to_string(), trace_ctx.span_id.clone());
+            }
         }
     }
 
@@ -204,8 +210,10 @@ fn prepare_envelope(
         .occurred_now();
 
     if let Some(req) = request {
-        if !req.trace_id.is_empty() {
-            context = context.with_trace(req.trace_id.clone());
+        if let Some(trace_ctx) = req.trace.as_ref() {
+            if !trace_ctx.trace_id.is_empty() {
+                context = context.with_trace(trace_ctx.trace_id.clone());
+            }
         }
     }
 

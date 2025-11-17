@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use flare_proto::storage::storage_service_client::StorageServiceClient;
+// Note: Storage service client is not directly used here
+// Storage operations are handled through Message Orchestrator
 use flare_proto::storage::{
     BatchStoreMessageRequest, BatchStoreMessageResponse, QueryMessagesRequest,
     QueryMessagesResponse, StoreMessageRequest, StoreMessageResponse,
@@ -23,77 +24,47 @@ pub trait StorageClient: Send + Sync {
 
 pub struct GrpcStorageClient {
     endpoint: String,
-    client: Mutex<Option<StorageServiceClient<Channel>>>,
+    // Note: Storage operations are handled through Message Orchestrator
+    // This client is kept for backward compatibility but may not be fully implemented
 }
 
 impl GrpcStorageClient {
     pub fn new(endpoint: String) -> Arc<Self> {
         Arc::new(Self {
             endpoint,
-            client: Mutex::new(None),
         })
-    }
-
-    async fn ensure_client(&self) -> Result<StorageServiceClient<Channel>> {
-        let mut guard = self.client.lock().await;
-        if let Some(client) = guard.as_ref() {
-            return Ok(client.clone());
-        }
-
-        let client = StorageServiceClient::connect(self.endpoint.clone())
-            .await
-            .context("failed to connect storage service")
-            .map_err(|err| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "storage service unavailable")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
-        *guard = Some(client.clone());
-        Ok(client)
     }
 }
 
 #[async_trait]
 impl StorageClient for GrpcStorageClient {
-    async fn store_message(&self, request: StoreMessageRequest) -> Result<StoreMessageResponse> {
-        let mut client = self.ensure_client().await?;
-        client
-            .store_message(request)
-            .await
-            .map(|resp| resp.into_inner())
-            .map_err(|status| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "store message failed")
-                    .details(status.to_string())
-                    .build_error()
-            })
+    async fn store_message(&self, _request: StoreMessageRequest) -> Result<StoreMessageResponse> {
+        // Note: Storage operations should go through Message Orchestrator
+        Err(ErrorBuilder::new(
+            ErrorCode::ServiceUnavailable,
+            "store_message should be called through Message Orchestrator",
+        )
+        .build_error())
     }
 
     async fn batch_store_message(
         &self,
-        request: BatchStoreMessageRequest,
+        _request: BatchStoreMessageRequest,
     ) -> Result<BatchStoreMessageResponse> {
-        let mut client = self.ensure_client().await?;
-        client
-            .batch_store_message(request)
-            .await
-            .map(|resp| resp.into_inner())
-            .map_err(|status| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "batch store message failed")
-                    .details(status.to_string())
-                    .build_error()
-            })
+        // Note: Storage operations should go through Message Orchestrator
+        Err(ErrorBuilder::new(
+            ErrorCode::ServiceUnavailable,
+            "batch_store_message should be called through Message Orchestrator",
+        )
+        .build_error())
     }
 
-    async fn query_messages(&self, request: QueryMessagesRequest) -> Result<QueryMessagesResponse> {
-        let mut client = self.ensure_client().await?;
-        client
-            .query_messages(request)
-            .await
-            .map(|resp| resp.into_inner())
-            .map_err(|status| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "query messages failed")
-                    .details(status.to_string())
-                    .build_error()
-            })
+    async fn query_messages(&self, _request: QueryMessagesRequest) -> Result<QueryMessagesResponse> {
+        // Note: Query operations should go through Storage Reader Service
+        Err(ErrorBuilder::new(
+            ErrorCode::ServiceUnavailable,
+            "query_messages should be called through Storage Reader Service",
+        )
+        .build_error())
     }
 }

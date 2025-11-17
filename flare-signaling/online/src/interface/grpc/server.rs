@@ -2,41 +2,21 @@ use std::sync::Arc;
 
 use flare_proto::signaling::signaling_service_server::SignalingService;
 use flare_proto::signaling::*;
-use flare_server_core::Config;
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
-use redis::Client;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
-use crate::application::OnlineStatusService;
-use crate::config::OnlineConfig;
-use crate::infrastructure::persistence::redis::RedisSessionRepository;
 use crate::interface::grpc::handler::OnlineHandler;
 
+#[derive(Clone)]
 pub struct SignalingOnlineServer {
     handler: Arc<OnlineHandler>,
 }
 
 impl SignalingOnlineServer {
-    pub async fn new(_config: Config) -> Result<Self> {
-        let online_config = Arc::new(OnlineConfig::from_env());
-        let redis_client = Arc::new(Client::open(online_config.redis_url.as_str()).map_err(
-            |err| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "failed to create redis client",
-                )
-                .details(err.to_string())
-                .build_error()
-            },
-        )?);
-        let repository = Arc::new(RedisSessionRepository::new(
-            redis_client,
-            online_config.clone(),
-        ));
-        let service = Arc::new(OnlineStatusService::new(online_config, repository));
-        let handler = Arc::new(OnlineHandler::new(service));
-        Ok(Self { handler })
+    /// 从已有的 handler 创建服务器（用于 bootstrap）
+    pub fn from_handler(handler: Arc<OnlineHandler>) -> Self {
+        Self { handler }
     }
 }
 
@@ -76,5 +56,35 @@ impl SignalingService for SignalingOnlineServer {
         request: Request<RouteMessageRequest>,
     ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
         self.handler.handle_route_message(request).await
+    }
+
+    async fn subscribe(
+        &self,
+        request: Request<SubscribeRequest>,
+    ) -> std::result::Result<Response<SubscribeResponse>, Status> {
+        self.handler.handle_subscribe(request).await
+    }
+
+    async fn unsubscribe(
+        &self,
+        request: Request<UnsubscribeRequest>,
+    ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
+        self.handler.handle_unsubscribe(request).await
+    }
+
+    async fn publish_signal(
+        &self,
+        request: Request<PublishSignalRequest>,
+    ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
+        self.handler.handle_publish_signal(request).await
+    }
+
+    type WatchPresenceStream = ReceiverStream<std::result::Result<PresenceEvent, Status>>;
+
+    async fn watch_presence(
+        &self,
+        request: Request<WatchPresenceRequest>,
+    ) -> std::result::Result<Response<Self::WatchPresenceStream>, Status> {
+        self.handler.handle_watch_presence(request).await
     }
 }
