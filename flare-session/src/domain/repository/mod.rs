@@ -55,6 +55,21 @@ pub trait SessionRepository: Send + Sync {
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<SessionSummary>, usize)>;
+
+    /// 标记消息为已读（更新 last_read_msg_seq）
+    async fn mark_as_read(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        seq: i64,
+    ) -> Result<()>;
+
+    /// 获取未读数（基于 last_message_seq - last_read_msg_seq）
+    async fn get_unread_count(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<i32>;
 }
 
 #[async_trait]
@@ -79,4 +94,28 @@ pub trait MessageProvider: Send + Sync {
         limit_per_session: i32,
         client_cursor: &HashMap<String, i64>,
     ) -> Result<Vec<Message>>;
+
+    /// 基于 seq 的消息同步（可选，用于优化性能）
+    /// 
+    /// # 参数
+    /// * `session_id` - 会话ID
+    /// * `after_seq` - 起始 seq（不包含）
+    /// * `before_seq` - 结束 seq（可选，不包含）
+    /// * `limit` - 返回消息数量限制
+    /// 
+    /// # 返回
+    /// * `Ok(MessageSyncResult)` - 消息同步结果，包含消息列表和游标
+    /// 
+    /// # 注意
+    /// 如果实现不支持基于 seq 的同步，可以返回 `Err` 或降级到基于时间戳的同步
+    async fn sync_messages_by_seq(
+        &self,
+        session_id: &str,
+        after_seq: i64,
+        before_seq: Option<i64>,
+        limit: i32,
+    ) -> Result<MessageSyncResult> {
+        // 默认实现：返回错误，提示使用基于时间戳的同步
+        Err(anyhow::anyhow!("sync_messages_by_seq not implemented, use sync_messages instead"))
+    }
 }

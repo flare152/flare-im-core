@@ -34,5 +34,5 @@ jsonwebtoken = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "postgres", "chrono"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 

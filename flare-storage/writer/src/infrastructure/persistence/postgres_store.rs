@@ -37,6 +37,11 @@ impl PostgresMessageStore {
 }
 
 impl PostgresMessageStore {
+    /// 获取数据库连接池（用于创建 SeqGenerator 和 SessionRepository）
+    pub fn pool(&self) -> &Pool<Postgres> {
+        &self.pool
+    }
+    
     /// 初始化数据库表结构（如果不存在）
     /// 
     /// 注意：表结构必须与 deploy/init.sql 中的定义一致
@@ -163,6 +168,10 @@ impl PostgresMessageStore {
 
 #[async_trait]
 impl ArchiveStoreRepository for PostgresMessageStore {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    
     async fn store_archive(&self, message: &Message) -> Result<()> {
         let timestamp = message
             .timestamp
@@ -273,14 +282,20 @@ impl ArchiveStoreRepository for PostgresMessageStore {
             })
             .map(|s| s.to_string());
 
+        // 从 extra 中提取 seq（如果存在）
+        let seq: Option<i64> = extra_value
+            .get("seq")
+            .and_then(|v| v.as_i64());
+
         sqlx::query(
             r#"
             INSERT INTO messages (
                 id, session_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
-                status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds
+                status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
+                seq, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $8)
             ON CONFLICT (timestamp, id) DO UPDATE
             SET session_id = EXCLUDED.session_id,
                 sender_id = EXCLUDED.sender_id,
@@ -290,7 +305,9 @@ impl ArchiveStoreRepository for PostgresMessageStore {
                 status = EXCLUDED.status,
                 extra = EXCLUDED.extra,
                 business_type = EXCLUDED.business_type,
-                message_type = EXCLUDED.message_type
+                message_type = EXCLUDED.message_type,
+                seq = EXCLUDED.seq,
+                updated_at = EXCLUDED.updated_at
             "#,
         )
         .bind(&message.id)
@@ -322,6 +339,8 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         .bind(message.recalled_at.as_ref().and_then(|ts| timestamp_to_datetime(ts)))
         .bind(message.is_burn_after_read)
         .bind(message.burn_after_seconds)
+        .bind(seq)
+        .bind(timestamp) // updated_at 使用 timestamp
         .execute(&self.pool)
         .await?;
 

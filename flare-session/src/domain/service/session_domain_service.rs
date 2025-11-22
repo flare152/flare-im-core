@@ -7,6 +7,7 @@ use anyhow::{Result, anyhow};
 use flare_proto::common::Message;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+use flare_core::common::session_id::{generate_server_session_id, SessionType, validate_session_id};
 
 use crate::domain::model::{
     ConflictResolutionPolicy, DevicePresence, DeviceState, MessageSyncResult, Session,
@@ -137,21 +138,8 @@ impl SessionDomainService {
                         }
                     }
                     
-                    // 计算未读数：基于server_cursor_ts和用户游标的差值
-                    // 简化实现：通过查询消息数量来估算未读数
-                    if summary.server_cursor_ts.is_some() {
-                        let user_cursor_ts = bootstrap.cursor_map.get(&summary.session_id).copied().unwrap_or(0);
-                        let server_ts = summary.server_cursor_ts.unwrap_or(0);
-                        if server_ts > user_cursor_ts {
-                            // 尝试查询未读消息数量
-                            if let Ok(sync_result) = provider
-                                .sync_messages(&summary.session_id, user_cursor_ts, None, 1000)
-                                .await
-                            {
-                                summary.unread_count = sync_result.messages.len() as i32;
-                            }
-                        }
-                    }
+                    // 未读数已在 load_bootstrap 中从数据库读取（基于 seq）
+                    // 这里不再需要重新计算
                 }
             }
         }
@@ -343,6 +331,15 @@ impl SessionDomainService {
     ) -> Result<Session> {
         // 尝试从 attributes 中提取指定的 session_id
         if let Some(requested_session_id) = attributes.remove("session_id") {
+            // 验证会话ID格式（如果格式不正确，记录警告但继续处理，保持向后兼容）
+            if let Err(e) = validate_session_id(&requested_session_id) {
+                warn!(
+                    session_id = %requested_session_id,
+                    error = %e,
+                    "Invalid session ID format, but continuing for backward compatibility"
+                );
+            }
+            
             // 检查会话是否已存在
             if let Ok(Some(existing_session)) = self.session_repo.get_session(&requested_session_id).await {
                 // 会话已存在，更新参与者（确保所有参与者都在会话中）
@@ -407,8 +404,23 @@ impl SessionDomainService {
                 Ok(session)
             }
         } else {
-            // 没有指定 session_id，生成新的 UUID
-            let session_id = Uuid::new_v4().to_string();
+            // 没有指定 session_id，根据会话类型生成
+            let session_id = match session_type.as_str() {
+                "group" => generate_server_session_id(SessionType::Group),
+                "assistant" | "ai" => generate_server_session_id(SessionType::Ai),
+                "system" => generate_server_session_id(SessionType::System),
+                "customer" => generate_server_session_id(SessionType::Customer),
+                "temp" => generate_server_session_id(SessionType::Temp),
+                _ => {
+                    // 默认使用UUID（向后兼容）
+                    warn!(
+                        session_type = %session_type,
+                        "Unknown session type, using UUID for session_id (backward compatibility)"
+                    );
+                    Uuid::new_v4().to_string()
+                }
+            };
+            
             let session = Session {
                 session_id: session_id.clone(),
                 session_type,
@@ -424,7 +436,10 @@ impl SessionDomainService {
             };
 
             self.session_repo.create_session(&session).await?;
-            info!(session_id = %session_id, "Session created with generated session_id");
+            info!(
+                session_id = %session_id,
+                "Session created with generated session_id"
+            );
             Ok(session)
         }
     }
@@ -508,6 +523,38 @@ impl SessionDomainService {
             .await?;
         info!(user_id = %user_id, count = cursors.len(), "Batch acknowledge completed");
         Ok(())
+    }
+
+    /// 标记消息为已读（业务逻辑）
+    /// 
+    /// 更新用户的 last_read_msg_seq，并重新计算未读数
+    pub async fn mark_as_read(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        seq: i64,
+    ) -> Result<()> {
+        self.session_repo
+            .mark_as_read(user_id, session_id, seq)
+            .await?;
+        info!(
+            user_id = %user_id,
+            session_id = %session_id,
+            seq,
+            "Marked messages as read"
+        );
+        Ok(())
+    }
+
+    /// 获取未读数（业务逻辑）
+    pub async fn get_unread_count(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<i32> {
+        self.session_repo
+            .get_unread_count(user_id, session_id)
+            .await
     }
 
     /// 搜索会话（业务逻辑）

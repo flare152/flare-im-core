@@ -92,8 +92,15 @@ impl StorageReaderMessageProvider {
         }
     }
 
+    fn last_seq(messages: &[flare_proto::common::Message]) -> Option<i64> {
+        messages
+            .last()
+            .and_then(|msg| flare_im_core::utils::extract_seq_from_message(msg))
+    }
+
     fn map_response(resp: flare_proto::storage::QueryMessagesResponse) -> MessageSyncResult {
         let server_cursor_ts = Self::last_timestamp(&resp.messages);
+        let server_cursor_seq = Self::last_seq(&resp.messages);
         MessageSyncResult {
             messages: resp.messages,
             next_cursor: if resp.next_cursor.is_empty() {
@@ -102,6 +109,7 @@ impl StorageReaderMessageProvider {
                 Some(resp.next_cursor)
             },
             server_cursor_ts,
+            server_cursor_seq,
         }
     }
 }
@@ -144,5 +152,52 @@ impl MessageProvider for StorageReaderMessageProvider {
             messages.extend(response.messages);
         }
         Ok(messages)
+    }
+
+    async fn sync_messages_by_seq(
+        &self,
+        session_id: &str,
+        after_seq: i64,
+        before_seq: Option<i64>,
+        limit: i32,
+    ) -> Result<MessageSyncResult> {
+        let mut client = self.client().await?;
+        let request = flare_proto::storage::QueryMessagesBySeqRequest {
+            session_id: session_id.to_string(),
+            after_seq,
+            before_seq: before_seq.unwrap_or(0),
+            limit,
+            user_id: String::new(), // 可选，用于过滤已删除消息
+            context: None,
+            tenant: Some(TenantContext {
+                tenant_id: String::new(),
+                ..Default::default()
+            }),
+        };
+        
+        let response = client
+            .query_messages_by_seq(Request::new(request))
+            .await
+            .context("call storage reader query_messages_by_seq")?
+            .into_inner();
+        
+        // 构建 MessageSyncResult
+        let server_cursor_ts = Self::last_timestamp(&response.messages);
+        let server_cursor_seq = if response.last_seq > 0 {
+            Some(response.last_seq)
+        } else {
+            None
+        };
+        
+        Ok(MessageSyncResult {
+            messages: response.messages,
+            next_cursor: if response.next_cursor.is_empty() {
+                None
+            } else {
+                Some(response.next_cursor)
+            },
+            server_cursor_ts,
+            server_cursor_seq,
+        })
     }
 }

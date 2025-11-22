@@ -1,10 +1,13 @@
 //! 工具函数模块
 //!
-//! 提供时间戳转换、时间线提取等通用工具函数
+//! 提供时间戳转换、时间线提取、seq 操作、未读数计算等通用工具函数
 
 pub mod helpers;
 
 pub use helpers::ServiceHelper;
+
+#[cfg(test)]
+mod seq_utils_tests;
 
 use chrono::{DateTime, TimeZone, Utc};
 use prost_types::Timestamp;
@@ -119,5 +122,128 @@ pub fn embed_timeline_in_extra(
 
 fn parse_i64(value: &String) -> Option<i64> {
     value.parse::<i64>().ok()
+}
+
+/// 从消息的 extra 字段中提取 seq
+///
+/// # 参数
+/// * `message` - 消息对象
+///
+/// # 返回
+/// * `Option<i64>` - 如果消息包含 seq，返回 seq 值；否则返回 None
+///
+/// # 示例
+/// ```
+/// use flare_im_core::utils::extract_seq_from_message;
+/// use flare_proto::common::Message;
+///
+/// let mut message = Message::default();
+/// message.extra.insert("seq".to_string(), "100".to_string());
+///
+/// let seq = extract_seq_from_message(&message);
+/// assert_eq!(seq, Some(100));
+/// ```
+pub fn extract_seq_from_message(message: &flare_proto::common::Message) -> Option<i64> {
+    message
+        .extra
+        .get("seq")
+        .and_then(|seq_str| seq_str.parse::<i64>().ok())
+}
+
+/// 将 seq 嵌入到消息的 extra 字段中
+///
+/// # 参数
+/// * `message` - 消息对象（可变引用）
+/// * `seq` - 序列号
+///
+/// # 示例
+/// ```
+/// use flare_im_core::utils::embed_seq_in_message;
+/// use flare_proto::common::Message;
+///
+/// let mut message = Message::default();
+/// embed_seq_in_message(&mut message, 100);
+///
+/// assert_eq!(message.extra.get("seq"), Some(&"100".to_string()));
+/// ```
+pub fn embed_seq_in_message(message: &mut flare_proto::common::Message, seq: i64) {
+    message.extra.insert("seq".to_string(), seq.to_string());
+}
+
+/// 从消息的 extra 字段中提取 seq（从 HashMap 直接提取）
+///
+/// # 参数
+/// * `extra` - 消息的 extra 字段
+///
+/// # 返回
+/// * `Option<i64>` - 如果 extra 包含 seq，返回 seq 值；否则返回 None
+///
+/// # 示例
+/// ```
+/// use std::collections::HashMap;
+/// use flare_im_core::utils::extract_seq_from_extra;
+///
+/// let mut extra = HashMap::new();
+/// extra.insert("seq".to_string(), "100".to_string());
+///
+/// let seq = extract_seq_from_extra(&extra);
+/// assert_eq!(seq, Some(100));
+/// ```
+pub fn extract_seq_from_extra(extra: &HashMap<String, String>) -> Option<i64> {
+    extra
+        .get("seq")
+        .and_then(|seq_str| seq_str.parse::<i64>().ok())
+}
+
+/// 将 seq 嵌入到 extra 字段中
+///
+/// # 参数
+/// * `extra` - 消息的 extra 字段（可变引用）
+/// * `seq` - 序列号
+///
+/// # 示例
+/// ```
+/// use std::collections::HashMap;
+/// use flare_im_core::utils::embed_seq_in_extra;
+///
+/// let mut extra = HashMap::new();
+/// embed_seq_in_extra(&mut extra, 100);
+///
+/// assert_eq!(extra.get("seq"), Some(&"100".to_string()));
+/// ```
+pub fn embed_seq_in_extra(extra: &mut HashMap<String, String>, seq: i64) {
+    extra.insert("seq".to_string(), seq.to_string());
+}
+
+/// 未读数计算工具函数
+///
+/// 计算未读数：`unread_count = last_message_seq - last_read_msg_seq`
+///
+/// # 参数
+/// * `last_message_seq` - 最后一条消息的 seq（可选）
+/// * `last_read_msg_seq` - 最后已读消息的 seq
+///
+/// # 返回
+/// * `i32` - 未读数（>= 0）
+///
+/// # 示例
+/// ```
+/// use flare_im_core::utils::calculate_unread_count;
+///
+/// let unread_count = calculate_unread_count(Some(100), 80);
+/// assert_eq!(unread_count, 20);
+///
+/// let unread_count = calculate_unread_count(None, 80);
+/// assert_eq!(unread_count, 0);
+///
+/// let unread_count = calculate_unread_count(Some(50), 80);
+/// assert_eq!(unread_count, 0); // 不会返回负数
+/// ```
+pub fn calculate_unread_count(last_message_seq: Option<i64>, last_read_msg_seq: i64) -> i32 {
+    if let Some(last_seq) = last_message_seq {
+        (last_seq - last_read_msg_seq).max(0) as i32
+    } else {
+        0
+    }
 }
 

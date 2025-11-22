@@ -19,13 +19,16 @@ use crate::domain::repository::{
 use crate::domain::service::MessagePersistenceDomainService;
 use crate::infrastructure::external::media::MediaAttachmentClient;
 use crate::infrastructure::messaging::ack_publisher::KafkaAckPublisher;
+use crate::domain::repository::{SeqGenerator, SessionUpdateRepository};
 use crate::infrastructure::persistence::mongo_store::MongoMessageStore;
 use crate::infrastructure::persistence::postgres_store::PostgresMessageStore;
 use crate::infrastructure::persistence::redis_cache::RedisHotCacheRepository;
 use crate::infrastructure::persistence::redis_idempotency::RedisIdempotencyRepository;
 use crate::infrastructure::persistence::redis_wal_cleanup::RedisWalCleanupRepository;
+use crate::infrastructure::persistence::session_repo::PostgresSessionRepository;
 use crate::infrastructure::persistence::session_state::RedisSessionStateRepository;
 use crate::infrastructure::persistence::user_cursor::RedisUserCursorRepository;
+use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerator};
 use crate::interface::messaging::consumer::StorageWriterConsumer;
 use flare_im_core::metrics::StorageWriterMetrics;
 
@@ -126,10 +129,52 @@ pub async fn initialize(
             Arc::new(RedisUserCursorRepository::new(client.clone())) as Arc<_>
         });
     
-    // 13. 初始化指标收集（应用层关注点）
+    // 13. 创建 Seq 生成器（可选）
+    let seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>> = match (&redis_client, &archive_repo) {
+        (Some(redis), Some(archive)) => {
+            // 尝试从 PostgresMessageStore 获取 pool
+            if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
+                Some(Arc::new(RedisSeqGenerator::new(
+                    redis.clone(),
+                    Some(Arc::new(pg_store.pool().clone())),
+                )) as Arc<dyn SeqGenerator + Send + Sync>)
+            } else {
+                // 只有 Redis，没有 PostgreSQL
+                Some(Arc::new(RedisSeqGenerator::new(
+                    redis.clone(),
+                    None,
+                )) as Arc<dyn SeqGenerator + Send + Sync>)
+            }
+        }
+        (None, Some(archive)) => {
+            // 只有 PostgreSQL，使用 DatabaseSeqGenerator
+            if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
+                Some(Arc::new(DatabaseSeqGenerator::new(
+                    Arc::new(pg_store.pool().clone()),
+                )) as Arc<dyn SeqGenerator + Send + Sync>)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    
+    // 14. 创建 Session 更新仓储（可选，需要 PostgreSQL）
+    let session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>> =
+        archive_repo.as_ref().and_then(|archive| {
+            if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
+                Some(Arc::new(PostgresSessionRepository::new(
+                    Arc::new(pg_store.pool().clone()),
+                )) as Arc<dyn SessionUpdateRepository + Send + Sync>)
+            } else {
+                None
+            }
+        });
+    
+    // 15. 初始化指标收集（应用层关注点）
     let metrics = Arc::new(StorageWriterMetrics::new());
     
-    // 14. 创建领域服务（不包含指标，符合 DDD 原则）
+    // 16. 创建领域服务（不包含指标，符合 DDD 原则）
     let domain_service = Arc::new(MessagePersistenceDomainService::new(
         idempotency_repo,
         hot_cache_repo,
@@ -140,6 +185,8 @@ pub async fn initialize(
         media_verifier,
         session_state_repo,
         user_cursor_repo,
+        seq_generator,
+        session_update_repo,
     ));
     
     // 15. 创建命令处理器（应用层负责指标记录）

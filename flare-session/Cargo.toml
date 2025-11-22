@@ -31,6 +31,7 @@ flare-core = { workspace = true }
 reqwest = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }
+ulid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

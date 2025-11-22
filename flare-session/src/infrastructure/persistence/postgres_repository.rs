@@ -17,6 +17,7 @@ use crate::domain::model::{
     SessionSort, SessionSummary,
 };
 use crate::domain::repository::SessionRepository;
+use flare_im_core::utils::calculate_unread_count;
 
 /// 会话查询行结构（用于SQL查询结果映射）
 #[derive(sqlx::FromRow)]
@@ -174,7 +175,7 @@ impl SessionRepository for PostgresSessionRepository {
             server_cursor.entry(session_id.clone()).or_insert(*ts);
         }
 
-        // 2. 从sessions和session_participants表查询用户参与的会话
+        // 2. 从sessions和session_participants表查询用户参与的会话（包含未读数信息）
         let session_rows = sqlx::query(
             r#"
             SELECT DISTINCT
@@ -185,7 +186,10 @@ impl SessionRepository for PostgresSessionRepository {
                 s.attributes,
                 s.visibility,
                 s.lifecycle_state,
-                s.updated_at
+                s.updated_at,
+                s.last_message_seq,
+                COALESCE(sp.last_read_msg_seq, 0) as last_read_msg_seq,
+                COALESCE(sp.unread_count, 0) as unread_count
             FROM sessions s
             INNER JOIN session_participants sp ON s.session_id = sp.session_id
             WHERE sp.user_id = $1
@@ -207,6 +211,11 @@ impl SessionRepository for PostgresSessionRepository {
             let display_name: Option<String> = row.get("display_name");
             let attributes: serde_json::Value = row.get("attributes");
             let updated_at: DateTime<Utc> = row.get("updated_at");
+            
+            // 从数据库读取未读数相关字段
+            let last_message_seq: Option<i64> = row.get("last_message_seq");
+            let last_read_msg_seq: i64 = row.get("last_read_msg_seq");
+            let unread_count: i32 = row.get("unread_count");
 
             let attributes: HashMap<String, String> = serde_json::from_value(attributes)
                 .unwrap_or_default();
@@ -218,17 +227,13 @@ impl SessionRepository for PostgresSessionRepository {
                 .copied()
                 .or_else(|| Some(updated_at.timestamp_millis()));
 
-            // 计算未读数：基于server_cursor_ts和用户游标的差值
-            // 简化实现：如果有server_cursor_ts且大于用户游标，则认为可能有未读消息
-            // 实际未读数将在ApplicationService层通过MessageProvider精确计算
-            let user_cursor_ts = server_cursor.get(&session_id).copied().unwrap_or(0);
-            let server_ts = server_cursor_ts.unwrap_or(0);
-            let estimated_unread = if server_ts > user_cursor_ts {
-                // 基于时间差估算，但实际值需要从消息存储服务查询
-                // 这里先设为0，将在ApplicationService层补充
-                0
+            // 计算未读数：基于 last_message_seq - last_read_msg_seq
+            // 如果数据库中的 unread_count 已更新，直接使用；否则计算
+            let calculated_unread = if last_message_seq.is_some() {
+                // 使用工具函数计算未读数
+                calculate_unread_count(last_message_seq, last_read_msg_seq)
             } else {
-                0
+                unread_count // 使用数据库中的值
             };
 
             let summary = SessionSummary {
@@ -240,7 +245,7 @@ impl SessionRepository for PostgresSessionRepository {
                 last_sender_id: None, // 将在ApplicationService层补充
                 last_message_type: None, // 将在ApplicationService层补充
                 last_content_type: None, // 将在ApplicationService层补充
-                unread_count: estimated_unread, // 将在ApplicationService层精确计算
+                unread_count: calculated_unread, // 基于 seq 计算的未读数
                 metadata: attributes,
                 server_cursor_ts,
                 display_name,
@@ -810,6 +815,70 @@ impl SessionRepository for PostgresSessionRepository {
             .unwrap_or(0) as usize;
 
         Ok((summaries, total))
+    }
+
+    async fn mark_as_read(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        seq: i64,
+    ) -> Result<()> {
+        // 更新 session_participants 的 last_read_msg_seq 和 unread_count
+        sqlx::query(
+            r#"
+            UPDATE session_participants sp
+            SET
+                last_read_msg_seq = $1,
+                unread_count = GREATEST(0, COALESCE((
+                    SELECT last_message_seq FROM sessions WHERE session_id = $2
+                ), 0) - $1),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE sp.session_id = $2 AND sp.user_id = $3
+            "#,
+        )
+        .bind(seq)
+        .bind(session_id)
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await
+        .context("Failed to mark as read")?;
+
+        info!(
+            user_id = %user_id,
+            session_id = %session_id,
+            seq,
+            "Marked messages as read"
+        );
+
+        Ok(())
+    }
+
+    async fn get_unread_count(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<i32> {
+        // 从 session_participants 表读取未读数
+        let row = sqlx::query(
+            r#"
+            SELECT COALESCE(sp.unread_count, 0) as unread_count
+            FROM session_participants sp
+            WHERE sp.session_id = $1 AND sp.user_id = $2
+            "#,
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_optional(&*self.pool)
+        .await
+        .context("Failed to get unread count")?;
+
+        let unread_count = if let Some(row) = row {
+            row.get("unread_count")
+        } else {
+            0
+        };
+
+        Ok(unread_count)
     }
 }
 

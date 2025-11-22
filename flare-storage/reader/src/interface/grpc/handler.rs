@@ -11,7 +11,7 @@ use crate::application::commands::{
     ExportMessagesCommand, MarkReadCommand, RecallMessageCommand, SetMessageAttributesCommand,
 };
 use crate::application::queries::{
-    GetMessageQuery, ListMessageTagsQuery, QueryMessagesQuery, SearchMessagesQuery,
+    GetMessageQuery, ListMessageTagsQuery, QueryMessagesQuery, QueryMessagesBySeqQuery, SearchMessagesQuery,
 };
 use crate::application::handlers::{
     MessageStorageCommandHandler, MessageStorageQueryHandler,
@@ -81,6 +81,56 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             }
             Err(err) => {
                 error!(error = ?err, "Failed to query messages");
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    async fn query_messages_by_seq(
+        &self,
+        request: Request<flare_proto::storage::QueryMessagesBySeqRequest>,
+    ) -> Result<Response<flare_proto::storage::QueryMessagesBySeqResponse>, Status> {
+        let req = request.into_inner();
+        let query = QueryMessagesBySeqQuery {
+            session_id: req.session_id,
+            after_seq: req.after_seq,
+            before_seq: if req.before_seq == 0 {
+                None
+            } else {
+                Some(req.before_seq)
+            },
+            limit: req.limit,
+            user_id: if req.user_id.is_empty() {
+                None
+            } else {
+                Some(req.user_id)
+            },
+        };
+
+        match self.query_handler.handle_query_messages_by_seq(query).await {
+            Ok((messages, last_seq)) => {
+                let message_count = messages.len() as i32;
+                // 构建基于 seq 的游标
+                let next_cursor = messages
+                    .last()
+                    .and_then(|msg| {
+                        msg.extra
+                            .get("seq")
+                            .map(|seq_str| format!("seq:{}:{}", seq_str, msg.id))
+                    })
+                    .unwrap_or_default();
+                let has_more = message_count >= req.limit;
+
+                Ok(Response::new(flare_proto::storage::QueryMessagesBySeqResponse {
+                    messages,
+                    next_cursor: next_cursor.clone(),
+                    has_more,
+                    last_seq: last_seq.unwrap_or(0),
+                    status: Some(flare_server_core::error::ok_status()),
+                }))
+            }
+            Err(err) => {
+                error!(error = ?err, "Failed to query messages by seq");
                 Err(Status::internal(err.to_string()))
             }
         }

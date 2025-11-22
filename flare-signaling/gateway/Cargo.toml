@@ -28,11 +28,11 @@ redis = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rdkafka = { workspace = true }
-tokio-stream = "0.1"
+tokio-stream = { workspace = true }
 
 [lints.rust]
 # 允许 tracing feature（用于条件编译）

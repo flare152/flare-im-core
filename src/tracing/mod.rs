@@ -5,8 +5,10 @@
 //! 注意：OpenTelemetry 相关功能需要启用 `tracing` feature 才能使用。
 //! 基础的日志初始化功能不需要 feature gate。
 
-use tracing::{info, warn, Span};
 use tracing_subscriber::{EnvFilter, fmt};
+
+#[cfg(feature = "tracing")]
+use tracing::{info, warn, Span};
 
 /// 从配置初始化日志系统
 /// 

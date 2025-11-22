@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use flare_im_core::utils::{TimelineMetadata, extract_timeline_from_extra, timestamp_to_datetime};
+use flare_im_core::utils::{TimelineMetadata, extract_timeline_from_extra, timestamp_to_datetime, extract_seq_from_message};
 use flare_proto::common::{Message, VisibilityStatus};
 use prost_types::Timestamp;
 use tracing::instrument;
@@ -78,7 +78,7 @@ impl MessageStorageDomainService {
         }
     }
 
-    /// 查询消息列表
+    /// 查询消息列表（基于时间戳，向后兼容）
     #[instrument(skip(self), fields(session_id = %session_id))]
     pub async fn query_messages(
         &self,
@@ -153,6 +153,64 @@ impl MessageStorageDomainService {
         } else {
             String::new()
         };
+
+        Ok(QueryMessagesResult {
+            messages,
+            next_cursor: next_cursor.clone(),
+            has_more: !next_cursor.is_empty(),
+            total_size,
+        })
+    }
+
+    /// 基于 seq 查询消息（推荐，性能更好）
+    ///
+    /// # 参数
+    /// * `session_id` - 会话ID
+    /// * `user_id` - 用户ID（可选，用于过滤已删除消息）
+    /// * `after_seq` - 查询 seq > after_seq 的消息（用于增量同步）
+    /// * `before_seq` - 查询 seq < before_seq 的消息（可选，用于分页）
+    /// * `limit` - 返回消息数量限制
+    ///
+    /// # 返回
+    /// * `Ok(QueryMessagesResult)` - 消息列表（按 seq 升序排序）
+    #[instrument(skip(self), fields(session_id = %session_id, after_seq, before_seq = ?before_seq))]
+    pub async fn query_messages_by_seq(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        after_seq: i64,
+        before_seq: Option<i64>,
+        limit: i32,
+    ) -> Result<QueryMessagesResult> {
+        if session_id.is_empty() {
+            return Err(anyhow!("session_id is required"));
+        }
+
+        let limit = limit.clamp(1, self.config.max_page_size) as usize;
+
+        // 使用基于 seq 的查询
+        let messages = self
+            .storage
+            .query_messages_by_seq(session_id, user_id, after_seq, before_seq, limit as i32)
+            .await
+            .map_err(|e| anyhow!("Failed to query messages by seq: {}", e))?;
+
+        // 构建 next_cursor（基于最后一个消息的 seq）
+        let next_cursor = if messages.len() == limit {
+            messages
+                .last()
+                .and_then(|msg| {
+                    // 从 extra 字段提取 seq（使用工具函数）
+                    extract_seq_from_message(msg)
+                        .map(|seq| format!("seq:{}:{}", seq, msg.id))
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // 计算总记录数（简化实现：使用消息数量）
+        let total_size = messages.len() as i64;
 
         Ok(QueryMessagesResult {
             messages,

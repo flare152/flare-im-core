@@ -229,6 +229,9 @@ pub struct HookConfig {
     /// PushDelivery Hook配置列表
     #[serde(default)]
     pub push_delivery: Vec<HookConfigItem>,
+    /// GetSessionParticipants Hook配置列表
+    #[serde(default)]
+    pub get_session_participants: Vec<HookConfigItem>,
 }
 
 /// Hook执行计划

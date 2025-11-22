@@ -31,3 +31,13 @@ pub struct ListMessageTagsQuery {
     // 无参数
 }
 
+/// 基于 seq 查询消息列表
+#[derive(Debug, Clone)]
+pub struct QueryMessagesBySeqQuery {
+    pub session_id: String,
+    pub after_seq: i64,
+    pub before_seq: Option<i64>,
+    pub limit: i32,
+    pub user_id: Option<String>,
+}
+

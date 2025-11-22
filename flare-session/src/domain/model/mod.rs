@@ -72,6 +72,8 @@ pub struct MessageSyncResult {
     pub messages: Vec<Message>,
     pub next_cursor: Option<String>,
     pub server_cursor_ts: Option<i64>,
+    /// 基于 seq 的游标（可选，用于优化性能）
+    pub server_cursor_seq: Option<i64>,
 }
 
 pub fn millis_to_datetime(ms: i64) -> Option<DateTime<Utc>> {

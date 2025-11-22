@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use flare_im_core::gateway::GatewayRouterTrait;
-use flare_im_core::hooks::HookDispatcher;
+use flare_im_core::hooks::{HookContext, HookDispatcher};
 use flare_im_core::metrics::PushServerMetrics;
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_proto::common::Message;
@@ -87,66 +87,86 @@ impl PushDomainService {
                         "Chatroom message with empty user_ids, querying all online users for session"
                     );
                     
-                    match self.online_repo.get_all_online_users_for_session(&message.session_id).await {
-                        Ok(mut online_user_ids) => {
-                            if online_user_ids.is_empty() {
-                                warn!(
-                                    session_id = %message.session_id,
-                                    "No online users found for chatroom session"
-                                );
-                                return Ok(()); // 没有在线用户，直接返回成功（不推送）
-                            }
-                            
-                            // 过滤掉发送者，避免发送者收到自己发送的消息
-                            let sender_id = message.sender_id.clone();
-                            if !sender_id.is_empty() {
-                                let before_count = online_user_ids.len();
-                                online_user_ids.retain(|user_id| user_id != &sender_id);
-                                let after_count = online_user_ids.len();
-                                
-                                if before_count != after_count {
-                                    info!(
-                                        session_id = %message.session_id,
-                                        sender_id = %sender_id,
-                                        before_count,
-                                        after_count,
-                                        "Filtered sender from chatroom message recipients"
-                                    );
-                                }
-                            }
-                            
-                            if online_user_ids.is_empty() {
-                                info!(
-                                    session_id = %message.session_id,
-                                    sender_id = %sender_id,
-                                    "All recipients filtered out (only sender is online), no push needed"
-                                );
-                                return Ok(()); // 只有发送者在线，不需要推送
-                            }
-                            
-                            info!(
-                                session_id = %message.session_id,
-                                sender_id = ?sender_id,
-                                online_count = online_user_ids.len(),
-                                "Found online users for chatroom session (sender filtered)"
-                            );
-                            
-                            request.user_ids = online_user_ids;
-                        }
-                        Err(e) => {
-                            // 如果查询失败，记录警告但继续处理（避免阻塞）
-                            // 注意：如果业务系统未提供 user_ids，且查询失败，消息将无法推送
+                    // 1. 尝试通过 Hook 获取参与者（如果配置了Hook）
+                    // 注意：Hook调用是异步的，如果Hook未配置或失败，降级到数据库查询
+                    let participant_user_ids = self.get_session_participants_via_hook(&message.session_id).await
+                        .unwrap_or_else(|e| {
                             warn!(
                                 error = %e,
                                 session_id = %message.session_id,
-                                "Failed to query online users for chatroom session, message may not be delivered"
+                                "Failed to get participants via Hook, falling back to database query"
                             );
-                            return Err(flare_server_core::error::ErrorBuilder::new(
-                                flare_server_core::error::ErrorCode::ServiceUnavailable,
-                                "Failed to query online users for chatroom session. Business system should provide all participant user_ids"
-                            ).details(e.to_string()).build_error());
+                            None
+                        });
+                    
+                    // 2. 如果Hook未返回参与者，降级到数据库查询
+                    let participant_user_ids = if let Some(participants) = participant_user_ids {
+                        participants
+                    } else {
+                        // 降级到数据库查询（通过 Session 服务获取参与者）
+                        match self.online_repo.get_all_online_users_for_session(&message.session_id).await {
+                            Ok(participants) => participants,
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    session_id = %message.session_id,
+                                    "Failed to get participants from Session service, message will not be pushed"
+                                );
+                                return Ok(()); // 查询失败，无法推送
+                            }
+                        }
+                    };
+                    
+                    // 3. 查询这些参与者的在线状态
+                    let online_statuses = self.online_repo.batch_get_online_status(&participant_user_ids).await?;
+                    let mut online_user_ids: Vec<String> = online_statuses
+                        .into_iter()
+                        .filter_map(|(user_id, status)| if status.online { Some(user_id) } else { None })
+                        .collect();
+                    
+                    if online_user_ids.is_empty() {
+                        warn!(
+                            session_id = %message.session_id,
+                            "No online users found for chatroom session"
+                        );
+                        return Ok(()); // 没有在线用户，直接返回成功（不推送）
+                    }
+                    
+                    // 4. 过滤掉发送者，避免发送者收到自己发送的消息
+                    let sender_id = message.sender_id.clone();
+                    if !sender_id.is_empty() {
+                        let before_count = online_user_ids.len();
+                        online_user_ids.retain(|user_id| user_id != &sender_id);
+                        let after_count = online_user_ids.len();
+                        
+                        if before_count != after_count {
+                            info!(
+                                session_id = %message.session_id,
+                                sender_id = %sender_id,
+                                before_count,
+                                after_count,
+                                "Filtered sender from chatroom message recipients"
+                            );
                         }
                     }
+                    
+                    if online_user_ids.is_empty() {
+                        info!(
+                            session_id = %message.session_id,
+                            sender_id = %sender_id,
+                            "All recipients filtered out (only sender is online), no push needed"
+                        );
+                        return Ok(()); // 只有发送者在线，不需要推送
+                    }
+                    
+                    info!(
+                        session_id = %message.session_id,
+                        sender_id = ?sender_id,
+                        online_count = online_user_ids.len(),
+                        "Found online users for chatroom session (sender filtered)"
+                    );
+                    
+                    request.user_ids = online_user_ids;
                 } else {
                     // 非聊天室消息或缺少 session_id，要求业务系统提供 user_ids
                     return Err(flare_server_core::error::ErrorBuilder::new(
@@ -824,5 +844,29 @@ impl PushDomainService {
                 )
                 .build_error()
             })
+    }
+
+    /// 通过 Hook 获取会话参与者
+    ///
+    /// 如果 Hook 未配置或执行失败，返回 None（降级到数据库查询）
+    async fn get_session_participants_via_hook(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<Vec<String>>> {
+        // 创建 Hook 上下文（使用默认租户ID）
+        let ctx = HookContext::new("")
+            .with_session(session_id);
+
+        // 注意：目前 HookDispatcher 不支持 get_session_participants
+        // 这里先返回 None，表示降级到数据库查询
+        // 后续可以在 HookDispatcher 中添加 get_session_participants 方法
+        // 或者通过 Hook Engine 的 gRPC 接口调用
+        
+        // TODO: 实现 Hook 调用逻辑
+        // 1. 通过 HookDispatcher 或 Hook Engine gRPC 接口调用 GetSessionParticipantsHook
+        // 2. 如果 Hook 返回参与者，直接使用
+        // 3. 如果 Hook 未配置或失败，返回 None（降级到数据库查询）
+        
+        Ok(None) // 暂时返回 None，降级到数据库查询
     }
 }

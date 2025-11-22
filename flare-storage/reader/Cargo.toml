@@ -13,8 +13,8 @@ path = "cmd/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-flare-server-core = { path = "../../../flare-server-core" }
-flare-proto = { path = "../../../flare-proto" }
+flare-server-core = { workspace = true }
+flare-proto = { workspace = true }
 flare-im-core = { path = "../.." }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -28,4 +28,4 @@ chrono = { workspace = true }
 prost-types = { workspace = true }
 
 [dev-dependencies]
-tokio-stream = "0.1"
+tokio-stream = { workspace = true }

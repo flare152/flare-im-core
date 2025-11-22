@@ -59,6 +59,11 @@ impl MessagePersistenceCommandHandler {
         // 准备消息
         let mut prepared = self.domain_service.prepare_message(request)?;
 
+        // 保存必要信息用于后续操作（因为 prepared 会被移动到 persist_message）
+        let message_id = prepared.message_id.clone();
+        let session_id = prepared.session_id.clone();
+        let timeline = prepared.timeline.clone();
+
         // 验证并补全媒资附件
         self.domain_service.verify_and_enrich_media(&mut prepared.message).await?;
 
@@ -77,7 +82,7 @@ impl MessagePersistenceCommandHandler {
             let db_span = create_span("storage-writer", "db_write");
             
             let db_start = Instant::now();
-            self.domain_service.persist_message(&prepared).await?;
+            self.domain_service.persist_message(prepared).await?;
             let db_duration = db_start.elapsed();
             
             // 记录数据库写入耗时（应用层关注点）
@@ -95,9 +100,15 @@ impl MessagePersistenceCommandHandler {
         }
 
         // 清理 WAL
-        self.domain_service.cleanup_wal(&prepared.message_id).await?;
+        self.domain_service.cleanup_wal(&message_id).await?;
 
-        let result = PersistenceResult::new(&prepared, deduplicated);
+        // 构建结果（使用已保存的信息）
+        let result = PersistenceResult {
+            session_id,
+            message_id,
+            timeline,
+            deduplicated,
+        };
         
         // 发布 ACK 事件
         self.domain_service.publish_ack(&result).await?;

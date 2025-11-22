@@ -28,5 +28,5 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 prost-types = { workspace = true }
 anyhow = { workspace = true }
-tokio-stream = "0.1"
+tokio-stream = { workspace = true }
 

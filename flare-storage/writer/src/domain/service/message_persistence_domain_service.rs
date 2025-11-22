@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use anyhow::{Result, anyhow};
-use flare_im_core::utils::{current_millis, extract_timeline_from_extra};
+use flare_im_core::utils::{current_millis, extract_timeline_from_extra, embed_seq_in_message};
 use flare_proto::common::Message;
 use flare_proto::storage::StoreMessageRequest;
 use serde_json;
@@ -13,8 +13,8 @@ use crate::domain::events::{AckEvent, AckStatus};
 use crate::domain::model::{PersistenceResult, PreparedMessage};
 use crate::domain::repository::{
     AckPublisher, ArchiveStoreRepository, HotCacheRepository, MediaAttachmentVerifier,
-    MessageIdempotencyRepository, RealtimeStoreRepository, SessionStateRepository,
-    UserSyncCursorRepository, WalCleanupRepository,
+    MessageIdempotencyRepository, RealtimeStoreRepository, SeqGenerator, SessionStateRepository,
+    SessionUpdateRepository, UserSyncCursorRepository, WalCleanupRepository,
 };
 
 /// 消息持久化领域服务 - 包含所有业务逻辑
@@ -30,6 +30,8 @@ pub struct MessagePersistenceDomainService {
     media_verifier: Option<Arc<dyn MediaAttachmentVerifier + Send + Sync>>,
     session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>>,
     user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>>,
+    seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>>,
+    session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>>,
 }
 
 impl MessagePersistenceDomainService {
@@ -44,6 +46,8 @@ impl MessagePersistenceDomainService {
         media_verifier: Option<Arc<dyn MediaAttachmentVerifier + Send + Sync>>,
         session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>>,
         user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>>,
+        seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>>,
+        session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>>,
     ) -> Self {
         Self {
             idempotency_repo,
@@ -55,6 +59,8 @@ impl MessagePersistenceDomainService {
             media_verifier,
             session_state_repo,
             user_cursor_repo,
+            seq_generator,
+            session_update_repo,
         }
     }
 
@@ -147,7 +153,22 @@ impl MessagePersistenceDomainService {
 
     /// 持久化消息到存储
     #[instrument(skip(self), fields(message_id = %prepared.message_id))]
-    pub async fn persist_message(&self, prepared: &PreparedMessage) -> Result<()> {
+    pub async fn persist_message(&self, mut prepared: PreparedMessage) -> Result<()> {
+        // 1. 生成 seq
+        let seq = if let Some(generator) = &self.seq_generator {
+            let generated_seq = generator.generate_seq(&prepared.session_id).await?;
+            // 将 seq 嵌入到 message.extra 中
+            embed_seq_in_message(&mut prepared.message, generated_seq);
+            Some(generated_seq)
+        } else {
+            None
+        };
+
+        // 保存 session_id 和 message_id 用于后续更新
+        let session_id = prepared.session_id.clone();
+        let message_id = prepared.message_id.clone();
+        let sender_id = prepared.message.sender_id.clone();
+
         // 数据库写入
         if let Some(repo) = &self.hot_cache_repo {
             repo.store_hot(&prepared.message).await?;
@@ -167,7 +188,7 @@ impl MessagePersistenceDomainService {
             for receiver in &prepared.message.receiver_ids {
                 cursor_repo
                     .advance_cursor(
-                        &prepared.session_id,
+                        &session_id,
                         receiver,
                         prepared.timeline.ingestion_ts,
                     )
@@ -176,7 +197,7 @@ impl MessagePersistenceDomainService {
             if !prepared.message.receiver_id.is_empty() {
                 cursor_repo
                     .advance_cursor(
-                        &prepared.session_id,
+                        &session_id,
                         &prepared.message.receiver_id,
                         prepared.timeline.ingestion_ts,
                     )
@@ -184,11 +205,21 @@ impl MessagePersistenceDomainService {
             }
             cursor_repo
                 .advance_cursor(
-                    &prepared.session_id,
+                    &session_id,
                     &prepared.message.sender_id,
                     prepared.timeline.ingestion_ts,
                 )
                 .await?;
+        }
+
+        // 2. 更新会话的最后消息信息
+        if let (Some(repo), Some(s)) = (&self.session_update_repo, seq) {
+            repo.update_last_message(&session_id, &message_id, s).await?;
+        }
+
+        // 3. 批量更新参与者的未读数
+        if let (Some(repo), Some(s)) = (&self.session_update_repo, seq) {
+            repo.batch_update_unread_count(&session_id, s, Some(&sender_id)).await?;
         }
 
         Ok(())

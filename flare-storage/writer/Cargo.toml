@@ -13,8 +13,8 @@ path = "cmd/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-flare-server-core = { path = "../../../flare-server-core", features = ["kafka"] }
-flare-proto = { path = "../../../flare-proto" }
+flare-server-core = { workspace = true, features = ["kafka"] }
+flare-proto = { workspace = true }
 flare-im-core = { path = "../..", features = ["tracing"] }
 mongodb = { workspace = true }
 bson = { workspace = true }
@@ -35,7 +35,7 @@ uuid = { workspace = true }
 base64 = { workspace = true }
 
 [dev-dependencies]
-tokio-stream = "0.1"
+tokio-stream = { workspace = true }
 rdkafka = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

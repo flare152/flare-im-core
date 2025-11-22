@@ -25,6 +25,26 @@ pub trait MessageStorage: Send + Sync {
         limit: i32,
     ) -> Result<Vec<Message>>;
 
+    /// 基于 seq 查询消息（推荐，性能更好）
+    ///
+    /// # 参数
+    /// * `session_id` - 会话ID
+    /// * `user_id` - 用户ID（可选，用于过滤已删除消息）
+    /// * `after_seq` - 查询 seq > after_seq 的消息（用于增量同步）
+    /// * `before_seq` - 查询 seq < before_seq 的消息（可选，用于分页）
+    /// * `limit` - 返回消息数量限制
+    ///
+    /// # 返回
+    /// * `Ok(Vec<Message>)` - 消息列表（按 seq 升序排序）
+    async fn query_messages_by_seq(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        after_seq: i64,
+        before_seq: Option<i64>,
+        limit: i32,
+    ) -> Result<Vec<Message>>;
+
     async fn count_messages(
         &self,
         session_id: &str,

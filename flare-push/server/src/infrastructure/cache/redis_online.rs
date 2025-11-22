@@ -75,7 +75,11 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         // 添加超时保护，避免阻塞
         let timeout_duration = std::time::Duration::from_secs(5); // 5秒超时
         
-        // 1. 通过 Session 服务获取会话的所有参与者（带超时）
+        // 1. 尝试通过 Hook 获取参与者（如果配置了Hook）
+        // 注意：这里暂时不实现Hook调用，因为需要HookDispatcher
+        // 后续可以在PushDomainService中调用Hook
+        
+        // 2. 通过 Session 服务获取会话的所有参与者（带超时，降级方案）
         let participant_user_ids = if let Some(ref session_client) = self.session_client {
             match tokio::time::timeout(
                 timeout_duration,

@@ -189,4 +189,30 @@ impl SessionRepository for RedisSessionRepository {
             "RedisSessionRepository does not support search_sessions. Use PostgresSessionRepository instead."
         ))
     }
+
+    async fn mark_as_read(
+        &self,
+        _user_id: &str,
+        _session_id: &str,
+        _seq: i64,
+    ) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "RedisSessionRepository does not support mark_as_read. Use PostgresSessionRepository instead."
+        ))
+    }
+
+    async fn get_unread_count(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<i32> {
+        // Redis repository 支持读取未读数（从缓存）
+        let mut conn = self.connection().await?;
+        let unread_key = self.session_unread_key(session_id);
+        let unread_raw: Option<String> = conn.hget(&unread_key, user_id.to_string()).await?;
+        let unread: i32 = unread_raw
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or_default();
+        Ok(unread)
+    }
 }

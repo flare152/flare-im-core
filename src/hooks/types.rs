@@ -287,6 +287,29 @@ pub trait RecallHook: Send + Sync {
     async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome;
 }
 
+/// GetSessionParticipants Hook Trait
+///
+/// 业务系统可以通过实现此 Hook 来提供会话参与者列表
+/// 如果 Hook 未实现或返回错误，系统将降级到数据库查询
+#[async_trait]
+pub trait GetSessionParticipantsHook: Send + Sync {
+    /// 获取会话的所有参与者
+    ///
+    /// # 参数
+    /// * `ctx` - Hook上下文
+    /// * `session_id` - 会话ID
+    ///
+    /// # 返回
+    /// * `Ok(Some(participants))` - 成功获取参与者列表
+    /// * `Ok(None)` - Hook未处理，降级到数据库查询
+    /// * `Err(e)` - Hook执行失败，降级到数据库查询
+    async fn get_participants(
+        &self,
+        ctx: &HookContext,
+        session_id: &str,
+    ) -> anyhow::Result<Option<Vec<String>>>;
+}
+
 #[async_trait]
 impl<T> PreSendHook for Arc<T>
 where

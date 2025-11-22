@@ -25,7 +25,7 @@ rdkafka = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 chrono = { workspace = true }

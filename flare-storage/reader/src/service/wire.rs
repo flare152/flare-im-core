@@ -68,8 +68,11 @@ pub async fn initialize(
     // 6. 构建命令处理器
     let command_handler = Arc::new(MessageStorageCommandHandler::new(domain_service.clone()));
     
-    // 7. 构建查询处理器（查询侧直接使用基础设施层）
-    let query_handler = Arc::new(MessageStorageQueryHandler::new(storage));
+    // 7. 构建查询处理器（对于基于 seq 的查询，需要使用领域服务）
+    let query_handler = Arc::new(MessageStorageQueryHandler::with_domain_service(
+        storage,
+        domain_service.clone(),
+    ));
     
     // 8. 构建 gRPC 处理器
     let grpc_handler = StorageReaderGrpcHandler::new(

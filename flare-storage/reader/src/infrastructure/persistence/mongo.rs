@@ -321,6 +321,55 @@ impl MessageStorage for MongoMessageStorage {
 
         Ok(tag_set.into_iter().collect())
     }
+
+    async fn query_messages_by_seq(
+        &self,
+        session_id: &str,
+        _user_id: Option<&str>,
+        after_seq: i64,
+        before_seq: Option<i64>,
+        limit: i32,
+    ) -> Result<Vec<Message>> {
+        let session_index = self.session_index.read().await;
+        let messages = self.messages.read().await;
+
+        let ids = session_index.get(session_id).cloned().unwrap_or_default();
+
+        // 从消息的 extra 字段提取 seq（使用工具函数）
+        fn extract_seq(message: &Message) -> i64 {
+            flare_im_core::utils::extract_seq_from_message(message).unwrap_or(0)
+        }
+
+        let mut collected = Vec::new();
+        for message_id in &ids {
+            if let Some(record) = messages.get(message_id) {
+                if record.session_id != session_id {
+                    continue;
+                }
+                
+                let seq = extract_seq(&record.message);
+                
+                // 过滤 seq 范围
+                if seq <= after_seq {
+                    continue;
+                }
+                if let Some(before) = before_seq {
+                    if seq >= before {
+                        continue;
+                    }
+                }
+                
+                collected.push((seq, record.message.clone()));
+                if collected.len() as i32 >= limit {
+                    break;
+                }
+            }
+        }
+
+        // 按 seq 升序排序
+        collected.sort_by_key(|(seq, _)| *seq);
+        Ok(collected.into_iter().map(|(_, msg)| msg).collect())
+    }
 }
 
 // 注意：会话管理不属于 StorageService，已移除
