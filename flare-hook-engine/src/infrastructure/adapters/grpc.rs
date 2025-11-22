@@ -22,7 +22,7 @@ use flare_im_core::{
     DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
 
-use crate::domain::models::LoadBalanceStrategy;
+use crate::domain::model::LoadBalanceStrategy;
 use crate::infrastructure::adapters::conversion::{
     hook_context_to_proto, message_draft_to_proto,
     message_record_to_proto, delivery_event_to_proto, recall_event_to_proto,
@@ -35,10 +35,9 @@ pub struct GrpcHookAdapter {
     client: Option<Arc<Mutex<HookExtensionClient<Channel>>>>,
     
     // 模式2: 服务发现模式（动态选择实例）
-    service_registry: Option<Arc<dyn flare_server_core::registry::ServiceRegistryTrait>>,
+    service_client: Option<Arc<Mutex<flare_server_core::ServiceClient>>>,
     service_name: String,
     load_balance_strategy: LoadBalanceStrategy,
-    load_balancer: Option<Arc<Mutex<flare_server_core::registry::LoadBalancer>>>,
     
     // 通用配置
     metadata: HashMap<String, String>,
@@ -62,116 +61,55 @@ impl GrpcHookAdapter {
         
         Ok(Self {
             client: Some(Arc::new(Mutex::new(client))),
-            service_registry: None,
+            service_client: None,
             service_name: String::new(),
             load_balance_strategy: LoadBalanceStrategy::RoundRobin,
-            load_balancer: None,
             metadata,
             timeout: Duration::from_secs(5),
         })
     }
     
     /// 从服务发现创建gRPC Hook适配器（模式2: 服务发现模式）
-    pub async fn new_from_service_discovery(
-        registry: Arc<dyn flare_server_core::registry::ServiceRegistryTrait>,
+    pub async fn new_from_service_client(
+        service_client: Arc<Mutex<flare_server_core::ServiceClient>>,
         service_name: String,
         load_balance_strategy: LoadBalanceStrategy,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
-        // 从服务注册中心发现服务实例
-        let services = registry
-            .discover(&service_name)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to discover service: {}", e))?;
-        
-        if services.is_empty() {
-            return Err(anyhow::anyhow!(
-                "No service instances found for: {}", service_name
-            ));
-        }
-        
-        // 创建负载均衡器
-        let strategy = match load_balance_strategy {
-            LoadBalanceStrategy::RoundRobin => flare_server_core::registry::LoadBalanceStrategy::RoundRobin,
-            LoadBalanceStrategy::Random => flare_server_core::registry::LoadBalanceStrategy::Random,
-            LoadBalanceStrategy::ConsistentHash => flare_server_core::registry::LoadBalanceStrategy::ConsistentHash,
-            LoadBalanceStrategy::LeastConn => flare_server_core::registry::LoadBalanceStrategy::LeastConnections,
-        };
-        
-        let load_balancer = Arc::new(Mutex::new(flare_server_core::registry::LoadBalancer::new(strategy)));
-        
         tracing::info!(
             service_name = %service_name,
-            instances = services.len(),
             strategy = ?load_balance_strategy,
-            "Created gRPC adapter from service discovery"
+            "Created gRPC adapter from service client"
         );
         
         Ok(Self {
             client: None,
-            service_registry: Some(registry),
+            service_client: Some(service_client),
             service_name,
             load_balance_strategy,
-            load_balancer: Some(load_balancer),
             metadata,
             timeout: Duration::from_secs(5),
         })
     }
     
     /// 获取客户端（自动选择模式）
-    async fn get_client(&self, key: Option<&str>) -> Result<HookExtensionClient<Channel>> {
+    async fn get_client(&self, _key: Option<&str>) -> Result<HookExtensionClient<Channel>> {
         // 模式1: 直接地址模式
         if let Some(ref client) = self.client {
             return Ok(client.lock().await.clone());
         }
         
         // 模式2: 服务发现模式
-        if let (Some(registry), Some(lb)) = (&self.service_registry, &self.load_balancer) {
-            // 从服务注册中心发现服务实例
-            let services = registry
-                .discover(&self.service_name)
+        if let Some(service_client) = &self.service_client {
+            // 使用 ServiceClient 获取 Channel（已包含负载均衡）
+            let mut client_guard = service_client.lock().await;
+            let channel = client_guard
+                .get_channel()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to discover service instances: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to get channel from service client: {}", e))?;
             
-            if services.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "No service instances available for: {}", self.service_name
-                ));
-            }
-            
-            // 使用负载均衡器选择实例
-            let selected = {
-                let mut balancer = lb.lock().await;
-                match self.load_balance_strategy {
-                    LoadBalanceStrategy::RoundRobin => {
-                        balancer.select(&services, None).await
-                    }
-                    LoadBalanceStrategy::Random => {
-                        balancer.select(&services, None).await
-                    }
-                    LoadBalanceStrategy::ConsistentHash => {
-                        balancer.select(&services, key).await
-                    }
-                    LoadBalanceStrategy::LeastConn => {
-                        balancer.select(&services, None).await
-                    }
-                }
-            };
-            
-            if let Some(instance) = selected {
-                let endpoint = format!("http://{}:{}", instance.address, instance.port);
-                let channel = Endpoint::from_shared(endpoint.clone())?
-                    .timeout(self.timeout)
-                    .connect()
-                    .await
-                    .context(format!("Failed to connect to service instance: {}", endpoint))?;
-                
-                return Ok(HookExtensionClient::new(channel));
-            }
-            
-            return Err(anyhow::anyhow!(
-                "Failed to select service instance for: {}", self.service_name
-            ));
+            let client = HookExtensionClient::new(channel);
+            return Ok(client);
         }
         
         Err(anyhow::anyhow!("No client available: neither endpoint nor service discovery configured"))

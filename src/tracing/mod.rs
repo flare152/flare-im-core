@@ -2,10 +2,59 @@
 //!
 //! 为各个服务模块提供统一的 OpenTelemetry 分布式追踪能力。
 //!
-//! 注意：此模块需要启用 `tracing` feature 才能使用。
+//! 注意：OpenTelemetry 相关功能需要启用 `tracing` feature 才能使用。
+//! 基础的日志初始化功能不需要 feature gate。
 
-#[cfg(feature = "tracing")]
 use tracing::{info, warn, Span};
+use tracing_subscriber::{EnvFilter, fmt};
+
+/// 从配置初始化日志系统
+/// 
+/// # 参数
+/// * `logging_config` - 日志配置（可选），如果为 None 则使用默认配置（debug 级别）
+/// 
+/// # 示例
+/// ```rust
+/// use flare_im_core::config::LoggingConfig;
+/// 
+/// // 使用默认配置
+/// init_tracing_from_config(None);
+/// 
+/// // 使用自定义配置
+/// let config = LoggingConfig {
+///     level: "info".to_string(),
+///     with_target: false,
+///     with_thread_ids: true,
+///     with_file: true,
+///     with_line_number: true,
+/// };
+/// init_tracing_from_config(Some(&config));
+/// ```
+pub fn init_tracing_from_config(logging_config: Option<&crate::config::LoggingConfig>) {
+    // 优先使用环境变量 RUST_LOG，如果没有则使用配置文件的日志级别
+    let env_filter = match EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(_) => {
+            let level_str = logging_config
+                .map(|c| c.level.as_str())
+                .unwrap_or("debug");
+            EnvFilter::new(level_str)
+        }
+    };
+
+    // 获取日志配置（如果未提供则使用默认配置）
+    let default_config = crate::config::LoggingConfig::default();
+    let config = logging_config.unwrap_or(&default_config);
+    
+    let builder = fmt::Subscriber::builder()
+        .with_target(config.with_target)
+        .with_thread_ids(config.with_thread_ids)
+        .with_file(config.with_file)
+        .with_line_number(config.with_line_number)
+        .with_env_filter(env_filter);
+
+    builder.init();
+}
 
 /// 初始化 OpenTelemetry 追踪
 /// 
@@ -56,12 +105,8 @@ pub fn init_tracing(service_name: &str, endpoint: Option<&str>) -> Result<(), Bo
     }
 
     // 初始化基础的 tracing subscriber（使用 fmt layer）
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_file(true)
-        .with_line_number(true)
-        .init();
+    // 默认配置：debug 级别，显示线程ID、文件名和行号
+    init_tracing_from_config(None);
 
     if endpoint.is_some() {
         info!(
@@ -93,7 +138,7 @@ pub fn init_tracing(service_name: &str, endpoint: Option<&str>) -> Result<(), Bo
 /// - `中间件设计方案.md` - Tempo 配置说明
 /// - OpenTelemetry 0.31 官方文档
 #[cfg(all(feature = "tracing", feature = "opentelemetry"))]
-fn init_otlp_tracing(service_name: &str, endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn init_otlp_tracing(_service_name: &str, endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
     // 注意：OpenTelemetry 0.31 API 可能需要根据实际版本调整
     // 当前实现尝试使用常见的 API 模式，如果失败会降级到基础 tracing
     

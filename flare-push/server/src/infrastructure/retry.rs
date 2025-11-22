@@ -60,24 +60,63 @@ pub enum RetryResult<T> {
     PermanentError(String),
 }
 
+/// 错误类型（用于智能重试判断）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorType {
+    /// 网络错误（可重试）
+    Network,
+    /// 超时错误（可重试）
+    Timeout,
+    /// 临时不可用（可重试）
+    TemporaryUnavailable,
+    /// 用户离线（不可重试，需要重新查询在线状态）
+    UserOffline,
+    /// 认证失败（不可重试）
+    AuthenticationFailed,
+    /// 参数错误（不可重试）
+    InvalidParameter,
+    /// 其他错误（根据错误信息判断）
+    Other,
+}
+
 /// 判断错误是否可重试
 pub trait RetryableError {
     fn is_retryable(&self) -> bool;
+    fn error_type(&self) -> ErrorType;
 }
 
 impl RetryableError for anyhow::Error {
     fn is_retryable(&self) -> bool {
-        // 网络错误、超时、临时不可用等可以重试
+        matches!(self.error_type(), ErrorType::Network | ErrorType::Timeout | ErrorType::TemporaryUnavailable)
+    }
+
+    fn error_type(&self) -> ErrorType {
         let error_str = self.to_string().to_lowercase();
-        error_str.contains("timeout")
-            || error_str.contains("network")
-            || error_str.contains("connection")
-            || error_str.contains("temporary")
-            || error_str.contains("unavailable")
+        
+        if error_str.contains("user offline") || error_str.contains("users offline") {
+            ErrorType::UserOffline
+        } else if error_str.contains("timeout") {
+            ErrorType::Timeout
+        } else if error_str.contains("network") || error_str.contains("connection") {
+            ErrorType::Network
+        } else if error_str.contains("temporary") || error_str.contains("unavailable") {
+            ErrorType::TemporaryUnavailable
+        } else if error_str.contains("auth") || error_str.contains("unauthorized") {
+            ErrorType::AuthenticationFailed
+        } else if error_str.contains("invalid") || error_str.contains("bad request") {
+            ErrorType::InvalidParameter
+        } else {
+            ErrorType::Other
+        }
     }
 }
 
-/// 带重试的执行函数
+/// 带智能重试的执行函数
+/// 
+/// 智能重试策略：
+/// - 网络错误、超时、临时不可用：指数退避重试
+/// - 用户离线：立即返回，不重试（需要重新查询在线状态）
+/// - 认证失败、参数错误：立即返回，不重试
 pub async fn execute_with_retry<F, Fut, T>(
     policy: &RetryPolicy,
     mut f: F,
@@ -92,15 +131,50 @@ where
         match f().await {
             Ok(result) => return Ok(result),
             Err(e) => {
-                if e.is_retryable() && attempt < policy.max_attempts - 1 {
-                    // 可重试的错误，等待后重试
-                    let delay = policy.calculate_delay(attempt);
-                    tokio::time::sleep(delay).await;
-                    last_error = Some(e.to_string());
-                    continue;
-                } else {
-                    // 永久失败或达到最大重试次数
-                    return Err(e.to_string());
+                let error_type = e.error_type();
+                
+                // 根据错误类型决定是否重试
+                match error_type {
+                    ErrorType::UserOffline | ErrorType::AuthenticationFailed | ErrorType::InvalidParameter => {
+                        // 永久失败，不重试
+                        return Err(e.to_string());
+                    }
+                    ErrorType::Network | ErrorType::Timeout | ErrorType::TemporaryUnavailable => {
+                        // 可重试的错误
+                        if attempt < policy.max_attempts - 1 {
+                            let delay = policy.calculate_delay(attempt);
+                            tracing::debug!(
+                                attempt = attempt + 1,
+                                max_attempts = policy.max_attempts,
+                                delay_ms = delay.as_millis(),
+                                error_type = ?error_type,
+                                "Retrying after error"
+                            );
+                            tokio::time::sleep(delay).await;
+                            last_error = Some(e.to_string());
+                            continue;
+                        } else {
+                            // 达到最大重试次数
+                            return Err(format!("Max retries exceeded: {}", e));
+                        }
+                    }
+                    ErrorType::Other => {
+                        // 其他错误，根据 is_retryable 判断
+                        if e.is_retryable() && attempt < policy.max_attempts - 1 {
+                            let delay = policy.calculate_delay(attempt);
+                            tracing::debug!(
+                                attempt = attempt + 1,
+                                max_attempts = policy.max_attempts,
+                                delay_ms = delay.as_millis(),
+                                "Retrying after retryable error"
+                            );
+                            tokio::time::sleep(delay).await;
+                            last_error = Some(e.to_string());
+                            continue;
+                        } else {
+                            return Err(e.to_string());
+                        }
+                    }
                 }
             }
         }

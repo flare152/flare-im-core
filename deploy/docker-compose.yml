@@ -28,6 +28,29 @@ services:
       --initial-cluster-token=etcd-cluster-1
       --initial-cluster-state=new
 
+  # ===== Consul - 服务注册 / 配置中心 =====
+  consul:
+    image: hashicorp/consul:1.17
+    container_name: flare-consul
+    networks:
+      - flare-network
+    ports:
+      - "28500:8500"   # Consul Web UI / API
+      - "28600:8600/udp"  # DNS 解析
+    environment:
+      CONSUL_BIND_INTERFACE: eth0
+    volumes:
+      - ./data/consul:/consul/data
+    command: >
+      consul agent
+      -server
+      -ui
+      -bootstrap-expect=1
+      -client=0.0.0.0
+      -bind=0.0.0.0
+      -data-dir=/consul/data
+      -log-level=INFO
+
   # ===== Redis - 缓存 / 路由 =====
   redis:
     image: redis:7-alpine

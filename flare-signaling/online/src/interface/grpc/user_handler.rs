@@ -6,23 +6,25 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::application::UserService as UserServiceApp;
-use crate::domain::repositories::PresenceWatcher;
+use crate::domain::repository::PresenceWatcher;
+use crate::domain::service::UserDomainService;
+use flare_proto::signaling::user_service_server::UserService;
 use flare_proto::signaling::*;
 use prost_types::Timestamp;
 
+#[derive(Clone)]
 pub struct UserHandler {
-    service: Arc<UserServiceApp>,
+    domain_service: Arc<UserDomainService>,
     presence_watcher: Arc<dyn PresenceWatcher>,
 }
 
 impl UserHandler {
     pub fn new(
-        service: Arc<UserServiceApp>,
+        domain_service: Arc<UserDomainService>,
         presence_watcher: Arc<dyn PresenceWatcher>,
     ) -> Self {
         Self {
-            service,
+            domain_service,
             presence_watcher,
         }
     }
@@ -31,11 +33,11 @@ impl UserHandler {
         &self,
         request: Request<GetUserPresenceRequest>,
     ) -> std::result::Result<Response<GetUserPresenceResponse>, Status> {
-        match self.service.get_user_presence(request.into_inner()).await {
+        match self.domain_service.get_user_presence(request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "get_user_presence failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -44,11 +46,11 @@ impl UserHandler {
         &self,
         request: Request<BatchGetUserPresenceRequest>,
     ) -> std::result::Result<Response<BatchGetUserPresenceResponse>, Status> {
-        match self.service.batch_get_user_presence(request.into_inner()).await {
+        match self.domain_service.batch_get_user_presence(request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "batch_get_user_presence failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -107,11 +109,11 @@ impl UserHandler {
         &self,
         request: Request<ListUserDevicesRequest>,
     ) -> std::result::Result<Response<ListUserDevicesResponse>, Status> {
-        match self.service.list_user_devices(request.into_inner()).await {
+        match self.domain_service.list_user_devices(request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "list_user_devices failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -120,11 +122,11 @@ impl UserHandler {
         &self,
         request: Request<KickDeviceRequest>,
     ) -> std::result::Result<Response<KickDeviceResponse>, Status> {
-        match self.service.kick_device(request.into_inner()).await {
+        match self.domain_service.kick_device(request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "kick_device failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -133,13 +135,60 @@ impl UserHandler {
         &self,
         request: Request<GetDeviceRequest>,
     ) -> std::result::Result<Response<GetDeviceResponse>, Status> {
-        match self.service.get_device(request.into_inner()).await {
+        match self.domain_service.get_device(request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "get_device failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
+    }
+}
+
+#[tonic::async_trait]
+impl UserService for UserHandler {
+    async fn get_user_presence(
+        &self,
+        request: Request<GetUserPresenceRequest>,
+    ) -> std::result::Result<Response<GetUserPresenceResponse>, Status> {
+        self.handle_get_user_presence(request).await
+    }
+
+    async fn batch_get_user_presence(
+        &self,
+        request: Request<BatchGetUserPresenceRequest>,
+    ) -> std::result::Result<Response<BatchGetUserPresenceResponse>, Status> {
+        self.handle_batch_get_user_presence(request).await
+    }
+
+    type SubscribeUserPresenceStream = ReceiverStream<std::result::Result<UserPresenceEvent, Status>>;
+
+    async fn subscribe_user_presence(
+        &self,
+        request: Request<SubscribeUserPresenceRequest>,
+    ) -> std::result::Result<Response<Self::SubscribeUserPresenceStream>, Status> {
+        self.handle_subscribe_user_presence(request).await
+    }
+
+    async fn list_user_devices(
+        &self,
+        request: Request<ListUserDevicesRequest>,
+    ) -> std::result::Result<Response<ListUserDevicesResponse>, Status> {
+        self.handle_list_user_devices(request).await
+    }
+
+    async fn kick_device(
+        &self,
+        request: Request<KickDeviceRequest>,
+    ) -> std::result::Result<Response<KickDeviceResponse>, Status> {
+        self.handle_kick_device(request).await
+    }
+
+    async fn get_device(
+        &self,
+        request: Request<GetDeviceRequest>,
+    ) -> std::result::Result<Response<GetDeviceResponse>, Status> {
+        self.handle_get_device(request).await
     }
 }
 

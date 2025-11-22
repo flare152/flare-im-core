@@ -1,9 +1,33 @@
-pub mod query_messages;
-pub mod get_message;
-pub mod search_messages;
-pub mod list_message_tags;
+//! 查询结构体定义（Query DTO）
 
-pub use query_messages::QueryMessagesService;
-pub use get_message::GetMessageService;
-pub use search_messages::SearchMessagesService;
-pub use list_message_tags::ListMessageTagsService;
+/// 查询消息列表
+#[derive(Debug, Clone)]
+pub struct QueryMessagesQuery {
+    pub session_id: String,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub limit: i32,
+    pub cursor: Option<String>,
+}
+
+/// 获取单条消息
+#[derive(Debug, Clone)]
+pub struct GetMessageQuery {
+    pub message_id: String,
+}
+
+/// 搜索消息
+#[derive(Debug, Clone)]
+pub struct SearchMessagesQuery {
+    pub filters: Vec<flare_proto::common::FilterExpression>,
+    pub start_time: i64,  // 改为 i64，与 QueryMessagesQuery 保持一致
+    pub end_time: i64,
+    pub limit: i32,
+}
+
+/// 列出所有标签
+#[derive(Debug, Clone)]
+pub struct ListMessageTagsQuery {
+    // 无参数
+}
+

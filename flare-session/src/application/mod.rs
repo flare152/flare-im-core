@@ -1,1 +1,5 @@
-pub mod service;
+pub mod commands;
+pub mod handlers;
+pub mod queries;
+
+pub use handlers::{SessionCommandHandler, SessionQueryHandler};

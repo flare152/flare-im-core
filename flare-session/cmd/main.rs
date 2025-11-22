@@ -1,16 +1,11 @@
-use flare_session::service::SessionServiceApp;
-use tracing::info;
+use anyhow::Result;
+use flare_im_core::tracing::init_tracing_from_config;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+async fn main() -> Result<()> {
+    // 从配置初始化日志系统（默认 debug 级别）
+    init_tracing_from_config(None);
 
-    let app = SessionServiceApp::new().await?;
-
-    info!(
-        address = %app.address(),
-        "Starting flare-session service"
-    );
-
-    app.run().await
+    // 创建应用并启动
+    flare_session::ApplicationBootstrap::run().await
 }

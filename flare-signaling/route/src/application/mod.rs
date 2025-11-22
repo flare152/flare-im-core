@@ -1,3 +1,7 @@
-pub mod services;
+pub mod commands;
+pub mod queries;
+pub mod handlers;
 
-pub use services::RouteDirectoryService;
+pub use commands::*;
+pub use queries::*;
+pub use handlers::*;

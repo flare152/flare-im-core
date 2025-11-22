@@ -12,11 +12,11 @@ use sqlx::{PgPool, Row};
 use tracing::info;
 
 use crate::config::SessionConfig;
-use crate::domain::models::{
+use crate::domain::model::{
     Session, SessionBootstrapResult, SessionFilter, SessionParticipant,
     SessionSort, SessionSummary,
 };
-use crate::domain::repositories::SessionRepository;
+use crate::domain::repository::SessionRepository;
 
 /// 会话查询行结构（用于SQL查询结果映射）
 #[derive(sqlx::FromRow)]
@@ -42,6 +42,101 @@ impl PostgresSessionRepository {
     /// 创建PostgreSQL Session Repository
     pub fn new(pool: Arc<PgPool>, config: Arc<SessionConfig>) -> Self {
         Self { pool, config }
+    }
+
+    /// 初始化数据库表结构（如果不存在）
+    pub async fn init_schema(&self) -> Result<()> {
+        // 创建 sessions 表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id VARCHAR(255) PRIMARY KEY,
+                session_type VARCHAR(64) NOT NULL DEFAULT 'single',
+                business_type VARCHAR(64) NOT NULL DEFAULT '',
+                display_name VARCHAR(255),
+                attributes JSONB DEFAULT '{}'::jsonb,
+                visibility VARCHAR(32) NOT NULL DEFAULT 'private',
+                lifecycle_state VARCHAR(32) NOT NULL DEFAULT 'active',
+                metadata JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create sessions table")?;
+
+        // 创建 session_participants 表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_participants (
+                session_id VARCHAR(255) NOT NULL,
+                user_id VARCHAR(255) NOT NULL,
+                roles TEXT[] DEFAULT '{}',
+                muted BOOLEAN DEFAULT FALSE,
+                pinned BOOLEAN DEFAULT FALSE,
+                attributes JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (session_id, user_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create session_participants table")?;
+
+        // 创建 user_sync_cursor 表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS user_sync_cursor (
+                user_id VARCHAR(255) NOT NULL,
+                session_id VARCHAR(255) NOT NULL,
+                last_synced_ts BIGINT NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id, session_id)
+            )
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create user_sync_cursor table")?;
+
+        // 创建索引
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_sessions_business_type 
+            ON sessions (business_type, updated_at DESC)
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create sessions index")?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_session_participants_user_id 
+            ON session_participants (user_id, session_id)
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create session_participants index")?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_id 
+            ON user_sync_cursor (user_id, last_synced_ts DESC)
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .context("Failed to create user_sync_cursor index")?;
+
+        info!("PostgreSQL session tables initialized successfully");
+        Ok(())
     }
 }
 
@@ -272,18 +367,18 @@ impl SessionRepository for PostgresSessionRepository {
             .unwrap_or_default();
 
         let visibility = match visibility.as_str() {
-            "private" => crate::domain::models::SessionVisibility::Private,
-            "tenant" => crate::domain::models::SessionVisibility::Tenant,
-            "public" => crate::domain::models::SessionVisibility::Public,
-            _ => crate::domain::models::SessionVisibility::Unspecified,
+            "private" => crate::domain::model::SessionVisibility::Private,
+            "tenant" => crate::domain::model::SessionVisibility::Tenant,
+            "public" => crate::domain::model::SessionVisibility::Public,
+            _ => crate::domain::model::SessionVisibility::Unspecified,
         };
 
         let lifecycle_state = match lifecycle_state.as_str() {
-            "active" => crate::domain::models::SessionLifecycleState::Active,
-            "suspended" => crate::domain::models::SessionLifecycleState::Suspended,
-            "archived" => crate::domain::models::SessionLifecycleState::Archived,
-            "deleted" => crate::domain::models::SessionLifecycleState::Deleted,
-            _ => crate::domain::models::SessionLifecycleState::Unspecified,
+            "active" => crate::domain::model::SessionLifecycleState::Active,
+            "suspended" => crate::domain::model::SessionLifecycleState::Suspended,
+            "archived" => crate::domain::model::SessionLifecycleState::Archived,
+            "deleted" => crate::domain::model::SessionLifecycleState::Deleted,
+            _ => crate::domain::model::SessionLifecycleState::Unspecified,
         };
 
         // 查询参与者

@@ -75,33 +75,44 @@ pub fn proto_to_message_draft(proto: &HookMessageDraft) -> MessageDraft {
 /// 将 MessageRecord 转换为 HookMessageRecord
 pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
     // 将 MessageRecord 转换为 protobuf Message
-    let proto_message = flare_proto::storage::Message {
+    let proto_message = flare_proto::common::Message {
         id: record.message_id.clone(),
         session_id: record.conversation_id.clone(),
+        client_msg_id: String::new(),
         sender_id: record.sender_id.clone(),
-        sender_type: String::new(),
+        source: 1, // MessageSource::User
+        sender_nickname: String::new(),
+        sender_avatar_url: String::new(),
+        sender_platform_id: String::new(),
+        receiver_ids: vec![],
+        receiver_id: String::new(),
+        group_id: String::new(),
+        content: None,
+        content_type: 1, // ContentType::PlainText
+        timestamp: Some(system_time_to_timestamp(record.persisted_at)),
+        created_at: None,
+        seq: 0,
+        message_type: 0, // MessageType::Unspecified = 0
         business_type: String::new(),
         session_type: record.session_type.clone().unwrap_or_default(),
-        content: None,
-        status: String::new(),
-        message_type: 0,
-        receiver_id: String::new(),
-        receiver_ids: vec![],
+        status: 1, // MessageStatus::Created = 1
         extra: std::collections::HashMap::new(),
-        timestamp: Some(system_time_to_timestamp(record.persisted_at)),
-        tenant: None,
-        attachments: vec![],
-        audit: None,
-        tags: vec![],
-        timeline: None,
         attributes: std::collections::HashMap::new(),
-        read_by: vec![],
-        visibility: std::collections::HashMap::new(),
-        operations: vec![],
         is_recalled: false,
         recalled_at: None,
+        recall_reason: String::new(),
         is_burn_after_read: false,
         burn_after_seconds: 0,
+        tenant: None,
+        audit: None,
+        attachments: vec![],
+        tags: vec![],
+        visibility: std::collections::HashMap::new(),
+        read_by: vec![],
+        operations: vec![],
+        timeline: None,
+        forward_info: None,
+        offline_push_info: None,
     };
 
     HookMessageRecord {

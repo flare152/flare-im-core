@@ -2,14 +2,14 @@
 //!
 //! 负责依赖注入和服务启动
 
-use anyhow::Result;
-use std::sync::Arc;
+use std::net::SocketAddr;
 
-use crate::application::commands::HookCommandService;
-use crate::application::queries::HookQueryService;
-use crate::domain::service::HookOrchestrationService;
-use crate::infrastructure::adapters::HookAdapterFactory;
-use crate::infrastructure::monitoring::{ExecutionRecorder, MetricsCollector};
+use anyhow::{Context, Result};
+use tracing::{info, error};
+
+use flare_server_core::runtime::ServiceRuntime;
+
+use super::wire;
 
 /// Hook引擎配置
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct HookEngineConfig {
     /// 租户ID（可选，用于多租户场景）
     pub tenant_id: Option<String>,
     /// 执行模式（串行/并发）
-    pub execution_mode: crate::domain::models::ExecutionMode,
+    pub execution_mode: crate::domain::model::ExecutionMode,
     /// 配置刷新间隔（秒）
     pub refresh_interval_secs: u64,
 }
@@ -35,118 +35,9 @@ impl Default for HookEngineConfig {
             database_url: None,
             config_center_endpoint: None,
             tenant_id: None,
-            execution_mode: crate::domain::models::ExecutionMode::Sequential,
+            execution_mode: crate::domain::model::ExecutionMode::Sequential,
             refresh_interval_secs: 60,
         }
-    }
-}
-
-/// Hook引擎主接口
-pub struct HookEngine {
-    /// Hook命令服务
-    pub command_service: Arc<HookCommandService>,
-    /// Hook查询服务
-    pub query_service: Arc<HookQueryService>,
-    /// 配置监听器
-    pub config_watcher: Arc<crate::infrastructure::config::ConfigWatcher>,
-    /// 指标收集器
-    pub metrics_collector: Arc<MetricsCollector>,
-    /// 执行记录器
-    pub execution_recorder: Arc<ExecutionRecorder>,
-    /// Hook注册表
-    pub registry: Arc<crate::service::registry::CoreHookRegistry>,
-    /// 应用服务
-    pub application_service: Arc<crate::application::service::HookApplicationService>,
-    /// Hook配置仓储（用于HookService）
-    pub config_repository: Option<Arc<crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository>>,
-}
-
-impl HookEngine {
-    /// 创建Hook引擎
-    pub async fn new(config: HookEngineConfig) -> Result<Self> {
-        // 创建配置加载器（按优先级从低到高）
-        let mut loaders: Vec<Arc<dyn crate::infrastructure::config::ConfigLoader>> = Vec::new();
-        
-        // 1. 配置文件（最低优先级）
-        if let Some(ref path) = config.config_file {
-            loaders.push(Arc::new(crate::infrastructure::config::FileConfigLoader::new(path.clone())));
-        }
-        
-        // 2. 配置中心（中等优先级）
-        if let Some(ref endpoint) = config.config_center_endpoint {
-            loaders.push(Arc::new(crate::infrastructure::config::ConfigCenterLoader::new(
-                endpoint.clone(),
-                config.tenant_id.clone(),
-            )));
-        }
-        
-        // 3. 数据库配置（最高优先级）
-        let config_repository = if let Some(ref database_url) = config.database_url {
-            let repository = Arc::new(
-                crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository::new(database_url)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to create database config repository: {}", e))?,
-            );
-            
-            // 初始化数据库表
-            repository.init_schema().await
-                .map_err(|e| anyhow::anyhow!("Failed to initialize database schema: {}", e))?;
-            
-            let repository_clone = repository.clone();
-            loaders.push(Arc::new(crate::infrastructure::config::DatabaseConfigLoader::new(
-                repository_clone,
-                config.tenant_id.clone(),
-            )));
-            
-            Some(repository)
-        } else {
-            None
-        };
-        
-        // 创建配置监听器
-        let config_watcher = Arc::new(crate::infrastructure::config::ConfigWatcher::new(
-            loaders,
-            std::time::Duration::from_secs(config.refresh_interval_secs),
-        ));
-        
-        // 启动配置监听
-        config_watcher.start().await?;
-        
-        // 创建监控组件
-        let metrics_collector = Arc::new(MetricsCollector::new());
-        let execution_recorder = Arc::new(ExecutionRecorder::new());
-        
-        // 创建适配器工厂
-        let adapter_factory = Arc::new(HookAdapterFactory::new());
-        
-        // 创建编排服务
-        let orchestration_service = Arc::new(HookOrchestrationService);
-        
-        // 创建应用服务
-        let application_service = Arc::new(crate::application::service::HookApplicationService::new(
-            orchestration_service,
-            adapter_factory,
-        ));
-        
-        // 创建命令和查询服务
-        let command_service = Arc::new(HookCommandService::new(application_service.clone()));
-        let query_service = Arc::new(HookQueryService::new(metrics_collector.clone()));
-        
-        // 创建Hook注册表
-        let registry = Arc::new(crate::service::registry::CoreHookRegistry::new(
-            config_watcher.clone(),
-        ));
-        
-        Ok(Self {
-            command_service,
-            query_service,
-            config_watcher,
-            metrics_collector,
-            execution_recorder,
-            registry,
-            application_service,
-            config_repository,
-        })
     }
 }
 
@@ -156,76 +47,115 @@ pub struct ApplicationBootstrap;
 impl ApplicationBootstrap {
     /// 运行应用的主入口点
     pub async fn run(config: HookEngineConfig) -> Result<()> {
-        let engine = HookEngine::new(config).await?;
+        use flare_im_core::{load_config, ServiceHelper};
         
-        // 启动gRPC服务器
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 50110));
+        // 加载应用配置
+        let app_config = load_config(Some("config"));
         
-        // HookExtension服务（Hook执行服务）
-        let adapter_factory = Arc::new(HookAdapterFactory::new());
-        let hook_extension_service = crate::interface::grpc::HookExtensionServer::new(
-            engine.application_service.clone(),
-            engine.registry.clone(),
-            adapter_factory,
+        // 解析服务器地址（使用默认端口 50110）
+        let default_port = 50110;
+        let address: SocketAddr = format!(
+            "{}:{}",
+            app_config.base().server.address,
+            app_config.base().server.port
+        )
+        .parse()
+        .context("invalid hook-engine server address")?;
+        info!(address = %address, "Server address parsed successfully");
+        
+        // 使用 Wire 风格的依赖注入构建应用上下文
+        let context = wire::initialize(config).await?;
+        
+        info!("ApplicationBootstrap created successfully");
+        
+        // 运行服务
+        Self::run_with_context(context, address).await
+    }
+
+    /// 运行服务（带应用上下文）
+    async fn run_with_context(
+        context: wire::ApplicationContext,
+        address: SocketAddr,
+    ) -> Result<()> {
+        use tonic::transport::Server;
+
+        info!(
+            address = %address,
+            port = %address.port(),
+            "Starting Hook Engine gRPC service..."
         );
+
+        // 使用 ServiceRuntime 管理服务生命周期
+        let address_clone = address;
+        let hook_extension_service = context.hook_extension_service;
+        let hook_service = context.hook_service;
         
-        // HookService服务（Hook配置管理服务）
-        let hook_management_service = if let Some(ref repository) = engine.config_repository {
-            Some(crate::interface::grpc::HookServiceServer::new(
-                repository.clone(),
-                engine.registry.clone(),
-            )
-            .with_monitoring(
-                engine.metrics_collector.clone(),
-                engine.execution_recorder.clone(),
-            ))
-        } else {
-            tracing::warn!("Database repository not available, HookService will not be available");
-            None
-        };
-        
-        tracing::info!("Starting Hook Engine gRPC server on {}", addr);
-        
-        // 创建shutdown信号
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let shutdown = async move {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install CTRL+C signal handler");
-            tracing::info!("Shutting down Hook Engine gRPC server");
-            let _ = tx.send(());
-        };
-        
-        tokio::spawn(shutdown);
-        
-        // 构建服务器（使用链式调用）
-        let mut server_builder = tonic::transport::Server::builder()
-            .add_service(
-                flare_proto::hooks::hook_extension_server::HookExtensionServer::new(hook_extension_service),
-            );
-        
-        // 注册HookService服务（如果可用）
-        if let Some(hook_service) = hook_management_service {
-            server_builder = server_builder.add_service(
-                flare_proto::hooks::hook_service_server::HookServiceServer::new(hook_service),
-            );
-            tracing::info!("HookService registered");
-        }
-        
-        // 启动服务器
-        tokio::select! {
-            result = server_builder.serve(addr) => {
-                if let Err(e) = result {
-                    tracing::error!("gRPC server error: {}", e);
-                    return Err(anyhow::anyhow!("gRPC server failed: {}", e));
+        let runtime = ServiceRuntime::new("hook-engine", address)
+            .add_spawn_with_shutdown("hook-engine-grpc", move |shutdown_rx| async move {
+                // 构建服务器（使用链式调用）
+                let mut server_builder = Server::builder()
+                    .add_service(
+                        flare_proto::hooks::hook_extension_server::HookExtensionServer::new(
+                            hook_extension_service
+                        ),
+                    );
+                
+                // 注册HookService服务（如果可用）
+                if let Some(hook_service) = hook_service {
+                    server_builder = server_builder.add_service(
+                        flare_proto::hooks::hook_service_server::HookServiceServer::new(
+                            hook_service
+                        ),
+                    );
+                    info!("HookService registered");
                 }
-            }
-            _ = rx => {
-                tracing::info!("Received shutdown signal");
-            }
-        }
-        
-        Ok(())
+                
+                server_builder
+                    .serve_with_shutdown(address_clone, async move {
+                        info!(
+                            address = %address_clone,
+                            port = %address_clone.port(),
+                            "✅ Hook Engine gRPC service is listening"
+                        );
+                        
+                        // 同时监听 Ctrl+C 和关闭通道
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("shutdown signal received (Ctrl+C)");
+                            }
+                            _ = shutdown_rx => {
+                                tracing::info!("shutdown signal received (service registration failed)");
+                            }
+                        }
+                    })
+                    .await
+                    .map_err(|e| format!("gRPC server error: {}", e).into())
+            });
+
+        // 运行服务（带服务注册）
+        runtime.run_with_registration(|addr| {
+            Box::pin(async move {
+                // 注册服务（使用常量）
+                use flare_im_core::service_names::HOOK_ENGINE;
+                match flare_im_core::discovery::register_service_only(HOOK_ENGINE, addr, None).await {
+                    Ok(Some(registry)) => {
+                        info!("✅ Service registered: {}", HOOK_ENGINE);
+                        Ok(Some(registry))
+                    }
+                    Ok(None) => {
+                        info!("Service discovery not configured, skipping registration");
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "❌ Service registration failed"
+                        );
+                        Err(format!("Service registration failed: {}", e).into())
+                    }
+                }
+            })
+        }).await
     }
 }
 

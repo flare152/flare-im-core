@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
 
-use crate::domain::models::HookConfig;
+use crate::domain::model::HookConfig;
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
 
 /// Hook配置加载器接口
@@ -56,7 +56,7 @@ impl ConfigMerger {
         merged
     }
 
-    fn merge_hook_list(target: &mut Vec<crate::domain::models::HookConfigItem>, source: Vec<crate::domain::models::HookConfigItem>) {
+    fn merge_hook_list(target: &mut Vec<crate::domain::model::HookConfigItem>, source: Vec<crate::domain::model::HookConfigItem>) {
         for hook in source {
             if let Some(existing) = target.iter_mut().find(|h| h.name == hook.name) {
                 // 高优先级覆盖
@@ -97,7 +97,7 @@ impl ConfigValidator {
         Ok(())
     }
     
-    fn validate_hook(hook: &crate::domain::models::HookConfigItem) -> Result<()> {
+    fn validate_hook(hook: &crate::domain::model::HookConfigItem) -> Result<()> {
         if hook.name.is_empty() {
             anyhow::bail!("Hook name cannot be empty");
         }

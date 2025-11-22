@@ -20,3 +20,10 @@ tests/
 *.log
 *.tmp
 /tmp
+
+# 日志目录
+logs/
+*.pid
+
+.idea/
+.vscode/

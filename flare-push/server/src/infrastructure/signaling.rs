@@ -3,26 +3,37 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Context;
-use async_trait::async_trait;
 use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
 use flare_proto::signaling::{GetOnlineStatusRequest, GetOnlineStatusResponse};
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
-use crate::domain::repositories::{OnlineStatus, OnlineStatusRepository};
+use crate::domain::repository::OnlineStatus;
 
 /// Signaling Online客户端
 pub struct SignalingOnlineClient {
-    endpoint: String,
+    service_name: String,
+    service_client: Mutex<Option<ServiceClient>>,
     client: Mutex<Option<SignalingServiceClient<Channel>>>,
 }
 
 impl SignalingOnlineClient {
-    pub fn new(endpoint: String) -> Arc<Self> {
+    /// 创建新的客户端（使用服务名称，内部创建服务发现）
+    pub fn new(service_name: String) -> Arc<Self> {
         Arc::new(Self {
-            endpoint,
+            service_name,
+            service_client: Mutex::new(None),
+            client: Mutex::new(None),
+        })
+    }
+
+    /// 使用 ServiceClient 创建新的客户端（推荐，通过 wire 注入）
+    pub fn with_service_client(service_client: ServiceClient) -> Arc<Self> {
+        Arc::new(Self {
+            service_name: String::new(), // 不需要 service_name
+            service_client: Mutex::new(Some(service_client)),
             client: Mutex::new(None),
         })
     }
@@ -33,14 +44,47 @@ impl SignalingOnlineClient {
             return Ok(client.clone());
         }
 
-        let client = SignalingServiceClient::connect(self.endpoint.clone())
-            .await
-            .context("failed to connect signaling service")
-            .map_err(|err| {
+        // 使用服务发现获取 Channel
+        let mut service_client_guard = self.service_client.lock().await;
+        if service_client_guard.is_none() {
+            // 如果没有注入 ServiceClient，则创建服务发现器
+            let discover = flare_im_core::discovery::create_discover(&self.service_name)
+                .await
+                .map_err(|e| {
+                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
+                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
+                        .build_error()
+                })?;
+            
+            if let Some(discover) = discover {
+                *service_client_guard = Some(ServiceClient::new(discover));
+            } else {
+                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
+                    .details("Service discovery not configured")
+                    .build_error());
+            }
+        }
+        
+        let service_client = service_client_guard.as_mut().unwrap();
+        // 添加超时保护，避免服务发现阻塞过长时间
+        let channel = tokio::time::timeout(
+            std::time::Duration::from_secs(3), // 3秒超时
+            service_client.get_channel()
+        ).await
+            .map_err(|_| {
                 ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
-                    .details(err.to_string())
+                    .details("Timeout waiting for service discovery to get channel (3s)")
+                    .build_error()
+            })?
+            .map_err(|e| {
+                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
+                    .details(format!("Failed to get channel: {}", e))
                     .build_error()
             })?;
+        
+        tracing::debug!("Got channel for signaling service from service discovery");
+
+        let client = SignalingServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }
@@ -79,10 +123,9 @@ impl SignalingOnlineClient {
         // 转换为OnlineStatus映射
         let mut result = HashMap::new();
         for (user_id, status) in response.statuses {
-            let gateway_id = if !status.server_id.is_empty() {
-                Some(status.server_id.clone())
-            } else if !status.cluster_id.is_empty() {
-                Some(status.cluster_id.clone())
+            // 直接使用 gateway_id（必需字段，不再兼容旧版本）
+            let gateway_id = if !status.gateway_id.is_empty() {
+                Some(status.gateway_id.clone())
             } else {
                 None
             };

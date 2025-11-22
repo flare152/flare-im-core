@@ -6,8 +6,8 @@ use chrono::{TimeZone, Utc};
 use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::config::SessionConfig;
-use crate::domain::models::{DevicePresence, DeviceState};
-use crate::domain::repositories::{PresenceRepository, PresenceUpdate};
+use crate::domain::model::{DevicePresence, DeviceState};
+use crate::domain::repository::{PresenceRepository, PresenceUpdate};
 
 pub struct RedisPresenceRepository {
     client: Arc<redis::Client>,

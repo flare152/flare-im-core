@@ -11,17 +11,20 @@ impl RouteConfig {
     /// 从应用配置加载（新方式，推荐）
     pub fn from_app_config(_app: &FlareAppConfig) -> Result<Self> {
         // 路由服务的默认服务端点通过环境变量配置（支持动态发现）
+        // 使用新的 SVID 格式（svid.im, svid.customer, svid.ai.bot）
         let default: Vec<(String, String)> = vec![
             (
-                "IM".to_string(),
-                env::var("BUSINESS_SERVICE_IM_ENDPOINT").unwrap_or_default(),
+                "svid.im".to_string(),
+                env::var("BUSINESS_SERVICE_IM_ENDPOINT")
+                    .or_else(|_| env::var("MESSAGE_ORCHESTRATOR_SERVICE"))
+                    .unwrap_or("message-orchestrator".to_string()),
             ),
             (
-                "CUSTOMER_SERVICE".to_string(),
+                "svid.customer".to_string(),
                 env::var("BUSINESS_SERVICE_CS_ENDPOINT").unwrap_or_default(),
             ),
             (
-                "AI_BOT".to_string(),
+                "svid.ai.bot".to_string(),
                 env::var("BUSINESS_SERVICE_AI_ENDPOINT").unwrap_or_default(),
             ),
         ]
@@ -31,13 +34,10 @@ impl RouteConfig {
 
         Ok(Self {
             default_services: if default.is_empty() {
+                // 默认配置：至少配置 SVID_IM → message-orchestrator
                 vec![
-                    ("IM".to_string(), "http://localhost:50091".to_string()),
-                    (
-                        "CUSTOMER_SERVICE".to_string(),
-                        "http://localhost:50092".to_string(),
-                    ),
-                    ("AI_BOT".to_string(), "http://localhost:50093".to_string()),
+                    ("svid.im".to_string(), "message-orchestrator".to_string()),
+                    // 其他业务系统可以通过服务发现或注册接口动态添加
                 ]
             } else {
                 default

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::mpsc;
 
 use crate::config::OnlineConfig;
-use crate::domain::entities::OnlineStatusRecord;
-use crate::domain::repositories::{PresenceChangeEvent, PresenceWatcher};
+use crate::domain::model::OnlineStatusRecord;
+use crate::domain::repository::{PresenceChangeEvent, PresenceWatcher};
 
 const PRESENCE_CHANNEL_PREFIX: &str = "presence";
 
@@ -34,14 +34,8 @@ impl RedisPresenceWatcher {
     fn parse_presence_event(user_id: &str, payload: &str) -> Result<PresenceChangeEvent> {
         use serde_json::Value;
         
-        let json: Value = serde_json::from_str(payload).map_err(|err| {
-            ErrorBuilder::new(
-                ErrorCode::DeserializationError,
-                "failed to parse presence event",
-            )
-            .details(err.to_string())
-            .build_error()
-        })?;
+        let json: Value = serde_json::from_str(payload)
+            .context("failed to parse presence event")?;
 
         let status = OnlineStatusRecord {
             online: json.get("online").and_then(|v| v.as_bool()).unwrap_or(false),

@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 
-use crate::domain::repositories::WalCleanupRepository;
+use crate::domain::repository::WalCleanupRepository;
 
 pub struct RedisWalCleanupRepository {
     client: Arc<redis::Client>,

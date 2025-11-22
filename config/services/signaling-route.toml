@@ -5,7 +5,6 @@
 # - 路由表存储位置通过环境变量配置（可选）
 
 [services.signaling_route]
-service_name = "flare-signaling-route"
 
 # 默认业务服务端点（可选，可通过环境变量覆盖）
 # 格式: SERVICE_ID=ENDPOINT

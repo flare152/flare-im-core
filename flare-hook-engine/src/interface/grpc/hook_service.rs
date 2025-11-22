@@ -23,7 +23,7 @@ use flare_proto::hooks::{
 use flare_proto::common::{RpcStatus, ErrorContext, ErrorCode};
 
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
-use crate::domain::models::{HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy};
+use crate::domain::model::{HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy};
 use crate::service::registry::CoreHookRegistry;
 use chrono::Utc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -420,7 +420,7 @@ impl HookService for HookServiceServer {
         let mut configs = Vec::new();
         
         for row in rows {
-            let hook_item: crate::domain::models::HookConfigItem = row.clone().try_into()
+            let hook_item: crate::domain::model::HookConfigItem = row.clone().try_into()
                 .map_err(|e| Status::internal(format!("Failed to convert hook config: {}", e)))?;
             
             // 应用enabled_only过滤（如果查询时没有过滤）
@@ -1032,7 +1032,7 @@ fn hook_config_item_to_protobuf(
 /// 将domain model的HookStatistics转换为protobuf类型
 fn domain_to_protobuf_statistics(
     hook_id: String,
-    stats: &crate::domain::models::HookStatistics,
+    stats: &crate::domain::model::HookStatistics,
 ) -> HookStatistics {
     HookStatistics {
         hook_id,
@@ -1057,7 +1057,7 @@ fn domain_to_protobuf_execution(
     execution_id: String,
     hook_id: String,
     message_id: String,
-    result: crate::domain::models::HookExecutionResult,
+    result: crate::domain::model::HookExecutionResult,
 ) -> HookExecution {
     // 将SystemTime转换为Timestamp
     let executed_at = result.executed_at

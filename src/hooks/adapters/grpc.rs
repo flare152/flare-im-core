@@ -8,7 +8,7 @@ use tonic::IntoRequest;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::error::{ErrorBuilder, ErrorCode, Result, from_rpc_status};
-use flare_proto::Message as ProtoStorageMessage;
+use flare_proto::common::Message as ProtoStorageMessage;
 use flare_proto::common::{
     ActorContext as ProtoActorContext, ActorType as ProtoActorType,
     DeviceContext as ProtoDeviceContext, TraceContext as ProtoTraceContext,
@@ -548,18 +548,19 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
         .message_type
         .as_deref()
         .map(|kind| match kind.to_ascii_lowercase().as_str() {
-            "text" | "message_type_text" => flare_proto::storage::MessageType::Text as i32,
-            "binary"
-            | "image"
-            | "video"
-            | "audio"
-            | "file"
-            | "attachment"
-            | "message_type_binary" => flare_proto::storage::MessageType::Binary as i32,
-            "custom" | "message_type_custom" => flare_proto::storage::MessageType::Custom as i32,
-            _ => flare_proto::storage::MessageType::Unspecified as i32,
+            "text" | "message_type_text" => flare_proto::common::MessageType::Text as i32,
+            "image" => flare_proto::common::MessageType::Image as i32,
+            "video" => flare_proto::common::MessageType::Video as i32,
+            "audio" => flare_proto::common::MessageType::Audio as i32,
+            "file" => flare_proto::common::MessageType::File as i32,
+            "location" => flare_proto::common::MessageType::Location as i32,
+            "card" => flare_proto::common::MessageType::Card as i32,
+            "notification" => flare_proto::common::MessageType::Notification as i32,
+            "binary" | "attachment" | "message_type_binary" => flare_proto::common::MessageType::Custom as i32, // 二进制消息映射到 Custom
+            "custom" | "message_type_custom" => flare_proto::common::MessageType::Custom as i32,
+            _ => flare_proto::common::MessageType::Unspecified as i32,
         })
-        .unwrap_or(flare_proto::storage::MessageType::Unspecified as i32);
+        .unwrap_or(flare_proto::common::MessageType::Unspecified as i32);
     if let Some(message_type) = &record.message_type {
         message
             .extra

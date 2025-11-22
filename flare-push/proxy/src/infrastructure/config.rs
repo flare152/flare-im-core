@@ -1,4 +1,5 @@
 use flare_im_core::config::FlareAppConfig;
+use flare_server_core::kafka::KafkaProducerConfig;
 
 #[derive(Debug, Clone)]
 pub struct PushProxyConfig {
@@ -31,5 +32,25 @@ impl PushProxyConfig {
                 .or_else(|| kafka_profile.and_then(|cfg| cfg.timeout_ms))
                 .unwrap_or(5_000),
         }
+    }
+}
+
+// 实现 KafkaProducerConfig trait，使 PushProxyConfig 可以使用通用的 Kafka 生产者构建器
+impl KafkaProducerConfig for PushProxyConfig {
+    fn kafka_bootstrap(&self) -> &str {
+        &self.kafka_bootstrap
+    }
+    
+    fn message_timeout_ms(&self) -> u64 {
+        self.kafka_timeout_ms
+    }
+    
+    // 使用默认值，或根据需要覆盖
+    fn enable_idempotence(&self) -> bool {
+        true // 推送代理需要保证消息不丢失
+    }
+    
+    fn compression_type(&self) -> &str {
+        "snappy" // 使用 snappy 压缩
     }
 }

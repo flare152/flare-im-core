@@ -6,8 +6,8 @@ use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
 use tokio::sync::Mutex;
 
-use crate::domain::models::{UploadSession, UploadSessionStatus};
-use crate::domain::repositories::UploadSessionStore;
+use crate::domain::model::{UploadSession, UploadSessionStatus};
+use crate::domain::repository::UploadSessionStore;
 
 #[derive(Clone)]
 pub struct RedisUploadSessionStore {

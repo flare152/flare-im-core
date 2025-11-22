@@ -9,8 +9,8 @@ use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::{Datelike, Utc};
 
-use crate::domain::models::UploadContext;
-use crate::domain::repositories::MediaObjectRepository;
+use crate::domain::model::UploadContext;
+use crate::domain::repository::MediaObjectRepository;
 use flare_im_core::config::ObjectStoreConfig;
 
 #[derive(Clone)]

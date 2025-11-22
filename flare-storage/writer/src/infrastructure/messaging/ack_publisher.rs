@@ -8,7 +8,7 @@ use serde_json::to_vec;
 
 use crate::config::StorageWriterConfig;
 use crate::domain::events::AckEvent;
-use crate::domain::repositories::AckPublisher;
+use crate::domain::repository::AckPublisher;
 
 pub struct KafkaAckPublisher {
     producer: Arc<FutureProducer>,

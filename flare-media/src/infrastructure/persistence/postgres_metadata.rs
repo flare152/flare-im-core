@@ -8,11 +8,11 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Row};
 
-use crate::domain::models::{
+use crate::domain::model::{
     FileAccessType, MediaAssetStatus, MediaFileMetadata, MediaReference,
     STORAGE_BUCKET_METADATA_KEY, STORAGE_PATH_METADATA_KEY,
 };
-use crate::domain::repositories::{MediaMetadataStore, MediaReferenceStore};
+use crate::domain::repository::{MediaMetadataStore, MediaReferenceStore};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 

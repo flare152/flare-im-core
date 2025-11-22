@@ -109,9 +109,9 @@ impl MessageStateTracker {
         }
 
         // 持久化到Redis
-        if let Some(redis) = &self.redis_client {
-            if let Ok(state_json) = serde_json::to_string(state) {
-                let state_key = format!("msg:state:{}:{}", message_id, user_id);
+        if let Some(_redis) = &self.redis_client {
+            if let Ok(_state_json) = serde_json::to_string(state) {
+                let _state_key = format!("msg:state:{}:{}", message_id, user_id);
                 // 注意：这里需要异步Redis操作，简化实现
                 // 实际应该使用异步Redis客户端
                 debug!(

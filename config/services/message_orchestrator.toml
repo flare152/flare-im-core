@@ -1,7 +1,6 @@
 # Message Orchestrator 服务配置
 
 [services.message_orchestrator]
-service_name = "flare-message-orchestrator"
 kafka = "message"
 kafka_topic = "storage-messages"
 wal_store = "message_wal"

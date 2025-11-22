@@ -1,0 +1,3 @@
+pub mod message_persistence_domain_service;
+pub use message_persistence_domain_service::MessagePersistenceDomainService;
+

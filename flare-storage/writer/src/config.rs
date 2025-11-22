@@ -1,5 +1,6 @@
 use anyhow::Result;
 use flare_im_core::config::FlareAppConfig;
+use flare_server_core::kafka::{KafkaConsumerConfig, KafkaProducerConfig};
 use std::env;
 
 #[derive(Clone, Debug)]
@@ -241,5 +242,61 @@ impl StorageWriterConfig {
             mongo_collection,
             media_service_endpoint,
         }
+    }
+}
+
+// 实现 KafkaConsumerConfig trait，使 StorageWriterConfig 可以使用通用的 Kafka 消费者构建器
+impl KafkaConsumerConfig for StorageWriterConfig {
+    fn kafka_bootstrap(&self) -> &str {
+        &self.kafka_bootstrap
+    }
+    
+    fn consumer_group(&self) -> &str {
+        &self.kafka_group
+    }
+    
+    fn kafka_topic(&self) -> &str {
+        &self.kafka_topic
+    }
+    
+    fn fetch_min_bytes(&self) -> usize {
+        self.fetch_min_bytes
+    }
+    
+    fn fetch_max_wait_ms(&self) -> u64 {
+        self.fetch_max_wait_ms
+    }
+    
+    // 使用默认值，或根据需要覆盖
+    fn session_timeout_ms(&self) -> u64 {
+        6000 // storage-writer 使用较短的超时
+    }
+    
+    fn enable_auto_commit(&self) -> bool {
+        false
+    }
+    
+    fn auto_offset_reset(&self) -> &str {
+        "earliest"
+    }
+}
+
+// 实现 KafkaProducerConfig trait，使 StorageWriterConfig 可以使用通用的 Kafka 生产者构建器
+impl KafkaProducerConfig for StorageWriterConfig {
+    fn kafka_bootstrap(&self) -> &str {
+        &self.kafka_bootstrap
+    }
+    
+    fn message_timeout_ms(&self) -> u64 {
+        self.kafka_timeout_ms
+    }
+    
+    // 使用默认值，或根据需要覆盖
+    fn enable_idempotence(&self) -> bool {
+        true // ACK 消息需要保证不丢失
+    }
+    
+    fn compression_type(&self) -> &str {
+        "snappy" // ACK 消息使用 snappy 压缩
     }
 }

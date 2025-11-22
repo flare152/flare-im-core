@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
-use flare_proto::storage::{Message, VisibilityStatus};
+use flare_proto::common::{Message, VisibilityStatus};
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::domain::{
-    MessageStorage, MessageUpdate, VisibilityStorage,
-};
+use crate::domain::model::MessageUpdate;
+use crate::domain::repository::{MessageStorage, VisibilityStorage};
 
 #[derive(Default, Clone)]
 struct StoredMessage {
@@ -39,7 +39,7 @@ pub struct MongoMessageStorage {
 }
 
 impl MongoMessageStorage {
-    pub async fn new(_uri: &str, _database: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(_uri: &str, _database: &str) -> Result<Self> {
         Ok(Self::default())
     }
 
@@ -58,7 +58,7 @@ impl MessageStorage for MongoMessageStorage {
         &self,
         message: &Message,
         session_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let mut stored = message.clone();
         if stored.session_id.is_empty() {
             stored.session_id = session_id.to_string();
@@ -92,7 +92,7 @@ impl MessageStorage for MongoMessageStorage {
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
         limit: i32,
-    ) -> Result<Vec<Message>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Message>> {
         let session_index = self.session_index.read().await;
         let messages = self.messages.read().await;
 
@@ -125,7 +125,7 @@ impl MessageStorage for MongoMessageStorage {
     async fn get_message(
         &self,
         message_id: &str,
-    ) -> Result<Option<Message>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<Message>> {
         let messages = self.messages.read().await;
         Ok(messages
             .get(message_id)
@@ -136,7 +136,7 @@ impl MessageStorage for MongoMessageStorage {
         &self,
         message_id: &str,
         updates: MessageUpdate,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let mut messages = self.messages.write().await;
         if let Some(record) = messages.get_mut(message_id) {
             let message = &mut record.message;
@@ -181,7 +181,7 @@ impl MessageStorage for MongoMessageStorage {
         message_ids: &[String],
         user_id: &str,
         visibility: VisibilityStatus,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<usize> {
         let mut updated = 0usize;
         let mut vis_map = self.visibility.write().await;
         for message_id in message_ids {
@@ -197,7 +197,7 @@ impl MessageStorage for MongoMessageStorage {
         _user_id: Option<&str>,
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
-    ) -> Result<i64, Box<dyn std::error::Error>> {
+    ) -> Result<i64> {
         let session_index = self.session_index.read().await;
         let messages = self.messages.read().await;
 
@@ -229,7 +229,7 @@ impl MessageStorage for MongoMessageStorage {
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
         limit: i32,
-    ) -> Result<Vec<Message>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<Message>> {
         let messages = self.messages.read().await;
 
         let start_ms = start_time
@@ -296,7 +296,7 @@ impl MessageStorage for MongoMessageStorage {
         message_id: &str,
         attributes: std::collections::HashMap<String, String>,
         tags: Vec<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let mut messages = self.messages.write().await;
         if let Some(record) = messages.get_mut(message_id) {
             let message = &mut record.message;
@@ -309,7 +309,7 @@ impl MessageStorage for MongoMessageStorage {
 
     async fn list_all_tags(
         &self,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<String>> {
         let messages = self.messages.read().await;
         let mut tag_set = std::collections::HashSet::new();
 
@@ -334,7 +334,7 @@ impl VisibilityStorage for MongoMessageStorage {
         user_id: &str,
         _session_id: &str,
         visibility: VisibilityStatus,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.visibility
             .write()
             .await
@@ -346,7 +346,7 @@ impl VisibilityStorage for MongoMessageStorage {
         &self,
         message_id: &str,
         user_id: &str,
-    ) -> Result<Option<VisibilityStatus>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<VisibilityStatus>> {
         let vis_map = self.visibility.read().await;
         Ok(vis_map
             .get(&(message_id.to_string(), user_id.to_string()))
@@ -359,7 +359,7 @@ impl VisibilityStorage for MongoMessageStorage {
         user_id: &str,
         _session_id: &str,
         visibility: VisibilityStatus,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<usize> {
         self.batch_update_visibility(message_ids, user_id, visibility)
             .await
     }
@@ -369,7 +369,7 @@ impl VisibilityStorage for MongoMessageStorage {
         user_id: &str,
         session_id: &str,
         visibility_status: VisibilityStatus,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<String>> {
         let messages = self.messages.read().await;
         let mut result = Vec::new();
         for (message_id, record) in messages.iter() {

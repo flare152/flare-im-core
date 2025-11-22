@@ -26,4 +26,6 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio-stream = "0.1"
 uuid = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 

@@ -6,4 +6,5 @@ pub mod interface;
 pub mod service;
 pub mod util;
 
+pub use config::OnlineConfig;
 pub use service::ApplicationBootstrap;

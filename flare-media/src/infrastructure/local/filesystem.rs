@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::fs;
 
-use crate::domain::models::UploadContext;
-use crate::domain::repositories::MediaLocalStore;
+use crate::domain::model::UploadContext;
+use crate::domain::repository::MediaLocalStore;
 
 #[derive(Clone)]
 pub struct FilesystemMediaStore {

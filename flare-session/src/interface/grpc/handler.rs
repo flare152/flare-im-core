@@ -19,8 +19,17 @@ use flare_server_core::error;
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
-use crate::application::service::SessionApplicationService;
-use crate::domain::models::{
+use crate::application::handlers::{SessionCommandHandler, SessionQueryHandler};
+use crate::application::commands::{
+    BatchAcknowledgeCommand, CreateSessionCommand, DeleteSessionCommand,
+    ForceSessionSyncCommand, ManageParticipantsCommand, UpdateCursorCommand,
+    UpdatePresenceCommand, UpdateSessionCommand,
+};
+use crate::application::queries::{
+    ListSessionsQuery, SearchSessionsQuery, SessionBootstrapQuery,
+    SyncMessagesQuery,
+};
+use crate::domain::model::{
     ConflictResolutionPolicy, DevicePresence, DeviceState, Session, SessionFilter,
     SessionLifecycleState, SessionParticipant, SessionPolicy, SessionSort, SessionSummary,
     SessionVisibility,
@@ -28,12 +37,19 @@ use crate::domain::models::{
 
 #[derive(Clone)]
 pub struct SessionGrpcHandler {
-    service: Arc<SessionApplicationService>,
+    command_handler: Arc<SessionCommandHandler>,
+    query_handler: Arc<SessionQueryHandler>,
 }
 
 impl SessionGrpcHandler {
-    pub fn new(service: Arc<SessionApplicationService>) -> Self {
-        Self { service }
+    pub fn new(
+        command_handler: Arc<SessionCommandHandler>,
+        query_handler: Arc<SessionQueryHandler>,
+    ) -> Self {
+        Self {
+            command_handler,
+            query_handler,
+        }
     }
 }
 
@@ -54,13 +70,13 @@ impl SessionService for SessionGrpcHandler {
         };
 
         let bootstrap = self
-            .service
-            .session_bootstrap(
-                &req.user_id,
-                cursor_map.clone(),
+            .query_handler
+            .handle_session_bootstrap(SessionBootstrapQuery {
+                user_id: req.user_id.clone(),
+                client_cursor: cursor_map.clone(),
                 include_recent,
                 recent_limit,
-            )
+            })
             .await
             .map_err(internal_error)?;
 
@@ -82,16 +98,16 @@ impl SessionService for SessionGrpcHandler {
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let req = request.into_inner();
         let (summaries, next_cursor, has_more) = self
-            .service
-            .list_sessions(
-                &req.user_id,
-                if req.cursor.is_empty() {
+            .query_handler
+            .handle_list_sessions(ListSessionsQuery {
+                user_id: req.user_id.clone(),
+                cursor: if req.cursor.is_empty() {
                     None
                 } else {
-                    Some(req.cursor.as_str())
+                    Some(req.cursor)
                 },
-                if req.limit > 0 { req.limit } else { 20 },
-            )
+                limit: if req.limit > 0 { req.limit } else { 20 },
+            })
             .await
             .map_err(internal_error)?;
 
@@ -112,17 +128,17 @@ impl SessionService for SessionGrpcHandler {
         let req = request.into_inner();
 
         let result = self
-            .service
-            .sync_messages(
-                &req.session_id,
-                req.since_ts,
-                if req.cursor.is_empty() {
+            .query_handler
+            .handle_sync_messages(SyncMessagesQuery {
+                session_id: req.session_id.clone(),
+                since_ts: req.since_ts,
+                cursor: if req.cursor.is_empty() {
                     None
                 } else {
-                    Some(req.cursor.as_str())
+                    Some(req.cursor)
                 },
-                if req.limit > 0 { req.limit } else { 50 },
-            )
+                limit: if req.limit > 0 { req.limit } else { 50 },
+            })
             .await
             .map_err(|err| {
                 if err.to_string().contains("message provider not configured") {
@@ -147,8 +163,12 @@ impl SessionService for SessionGrpcHandler {
         request: Request<UpdateCursorRequest>,
     ) -> Result<Response<UpdateCursorResponse>, Status> {
         let req = request.into_inner();
-        self.service
-            .update_cursor(&req.user_id, &req.session_id, req.message_ts)
+        self.command_handler
+            .handle_update_cursor(UpdateCursorCommand {
+                user_id: req.user_id.clone(),
+                session_id: req.session_id.clone(),
+                message_ts: req.message_ts,
+            })
             .await
             .map_err(internal_error)?;
 
@@ -176,24 +196,24 @@ impl SessionService for SessionGrpcHandler {
             Some(resolution)
         };
 
-        self.service
-            .update_presence(
-                &req.user_id,
-                &req.device_id,
-                if req.device_platform.is_empty() {
+        self.command_handler
+            .handle_update_presence(UpdatePresenceCommand {
+                user_id: req.user_id.clone(),
+                device_id: req.device_id.clone(),
+                device_platform: if req.device_platform.is_empty() {
                     None
                 } else {
                     Some(req.device_platform)
                 },
                 state,
-                resolution,
-                req.notify_conflict,
-                if req.conflict_reason.is_empty() {
+                conflict_resolution: resolution,
+                notify_conflict: req.notify_conflict,
+                conflict_reason: if req.conflict_reason.is_empty() {
                     None
                 } else {
                     Some(req.conflict_reason)
                 },
-            )
+            })
             .await
             .map_err(internal_error)?;
 
@@ -208,16 +228,16 @@ impl SessionService for SessionGrpcHandler {
     ) -> Result<Response<ForceSessionSyncResponse>, Status> {
         let req = request.into_inner();
         let missing = self
-            .service
-            .force_session_sync(
-                &req.user_id,
-                &req.session_ids,
-                if req.reason.is_empty() {
+            .command_handler
+            .handle_force_session_sync(ForceSessionSyncCommand {
+                user_id: req.user_id.clone(),
+                session_ids: req.session_ids.clone(),
+                reason: if req.reason.is_empty() {
                     None
                 } else {
-                    Some(req.reason.as_str())
+                    Some(req.reason)
                 },
-            )
+            })
             .await
             .map_err(internal_error)?;
 
@@ -254,14 +274,14 @@ impl SessionService for SessionGrpcHandler {
         let visibility = SessionVisibility::from_proto(req.visibility);
 
         let session = self
-            .service
-            .create_session(
-                req.session_type,
-                req.business_type,
+            .command_handler
+            .handle_create_session(CreateSessionCommand {
+                session_type: req.session_type,
+                business_type: req.business_type,
                 participants,
-                req.attributes,
+                attributes: req.attributes,
                 visibility,
-            )
+            })
             .await
             .map_err(internal_error)?;
 
@@ -296,18 +316,18 @@ impl SessionService for SessionGrpcHandler {
         };
 
         let session = self
-            .service
-            .update_session(
-                &req.session_id,
+            .command_handler
+            .handle_update_session(UpdateSessionCommand {
+                session_id: req.session_id.clone(),
                 display_name,
-                if req.attributes.is_empty() {
+                attributes: if req.attributes.is_empty() {
                     None
                 } else {
                     Some(req.attributes)
                 },
                 visibility,
                 lifecycle_state,
-            )
+            })
             .await
             .map_err(internal_error)?;
 
@@ -323,8 +343,11 @@ impl SessionService for SessionGrpcHandler {
     ) -> Result<Response<DeleteSessionResponse>, Status> {
         let req = request.into_inner();
 
-        self.service
-            .delete_session(&req.session_id, req.hard_delete)
+        self.command_handler
+            .handle_delete_session(DeleteSessionCommand {
+                session_id: req.session_id.clone(),
+                hard_delete: req.hard_delete,
+            })
             .await
             .map_err(internal_error)?;
 
@@ -358,8 +381,13 @@ impl SessionService for SessionGrpcHandler {
             .collect();
 
         let participants = self
-            .service
-            .manage_participants(&req.session_id, to_add, req.to_remove, role_updates)
+            .command_handler
+            .handle_manage_participants(ManageParticipantsCommand {
+                session_id: req.session_id.clone(),
+                to_add,
+                to_remove: req.to_remove,
+                role_updates,
+            })
             .await
             .map_err(internal_error)?;
 
@@ -390,8 +418,11 @@ impl SessionService for SessionGrpcHandler {
             .map(|c| (c.session_id, c.message_ts))
             .collect();
 
-        self.service
-            .batch_acknowledge(&req.user_id, cursors)
+        self.command_handler
+            .handle_batch_acknowledge(BatchAcknowledgeCommand {
+                user_id: req.user_id.clone(),
+                cursors,
+            })
             .await
             .map_err(internal_error)?;
 
@@ -516,8 +547,14 @@ impl SessionService for SessionGrpcHandler {
         let offset = 0; // 分页使用cursor，offset暂时为0
 
         let (summaries, total) = self
-            .service
-            .search_sessions(None, filters, sort, limit, offset)
+            .query_handler
+            .handle_search_sessions(SearchSessionsQuery {
+                user_id: None,
+                filters,
+                sort,
+                limit,
+                offset,
+            })
             .await
             .map_err(internal_error)?;
 

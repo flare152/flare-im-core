@@ -8,7 +8,7 @@ use redis::{AsyncCommands, aio::ConnectionManager};
 use std::convert::TryInto;
 
 use crate::config::StorageWriterConfig;
-use crate::domain::repositories::HotCacheRepository;
+use crate::domain::repository::HotCacheRepository;
 
 pub struct RedisHotCacheRepository {
     client: Arc<redis::Client>,
@@ -26,7 +26,7 @@ impl RedisHotCacheRepository {
 
 #[async_trait]
 impl HotCacheRepository for RedisHotCacheRepository {
-    async fn store_hot(&self, message: &flare_proto::storage::Message) -> Result<()> {
+    async fn store_hot(&self, message: &flare_proto::common::Message) -> Result<()> {
         let mut conn = ConnectionManager::new(self.client.as_ref().clone()).await?;
 
         let message_key = format!("cache:msg:{}:{}", message.session_id, message.id);

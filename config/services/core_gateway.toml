@@ -1,0 +1,23 @@
+# Core Gateway 服务配置（业务系统统一入口）
+
+[services.core_gateway]
+
+# Route 服务配置（可选，用于通过 Route 服务路由业务请求）
+# 默认不使用 Route 服务，保持向后兼容
+# use_route_service = false
+# route_service = "signaling-route"
+# default_svid = "svid.im"
+
+# JWT Token 配置
+token_secret = "insecure-secret"
+token_issuer = "flare-im-core"
+token_ttl_seconds = 3600
+
+# 跨地区网关路由配置
+# 支持多网关部署：通过服务发现自动发现所有 Access Gateway 实例
+# Gateway Router 会根据 gateway_id 标签自动路由
+
+[services.core_gateway.server]
+address = "0.0.0.0"
+port = 50050
+

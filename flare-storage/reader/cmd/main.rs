@@ -1,24 +1,11 @@
 use anyhow::Result;
-use flare_im_core::load_config;
-use flare_storage_reader::ApplicationBootstrap;
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
-
-/// 初始化日志系统
-fn init_tracing() {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
-}
+use flare_im_core::tracing::init_tracing_from_config;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    // 从配置初始化日志系统（默认 debug 级别）
+    init_tracing_from_config(None);
 
-    // 加载配置
-    let app_config = load_config(Some("config"));
-
-    // 创建应用上下文并启动服务器
-    ApplicationBootstrap::run(app_config).await
+    // 创建应用并启动
+    flare_storage_reader::ApplicationBootstrap::run().await
 }

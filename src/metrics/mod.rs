@@ -2,10 +2,9 @@
 //!
 //! 为各个服务模块提供统一的 Prometheus 指标收集能力。
 
-use std::sync::Arc;
 use once_cell::sync::Lazy;
 use prometheus::{
-    Counter, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
+    Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
     Opts, Registry,
 };
 

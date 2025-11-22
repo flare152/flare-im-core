@@ -3,7 +3,7 @@ use flare_im_core::config::FlareAppConfig;
 use std::collections::HashMap;
 use std::env;
 
-use crate::domain::models::{ConflictResolutionPolicy, SessionPolicy};
+use crate::domain::model::{ConflictResolutionPolicy, SessionPolicy};
 
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
@@ -13,7 +13,7 @@ pub struct SessionConfig {
     pub session_unread_prefix: String,
     pub user_cursor_prefix: String,
     pub presence_prefix: String,
-    pub storage_reader_endpoint: Option<String>,
+    pub storage_reader_service: Option<String>,
     pub recent_message_limit: i32,
     pub default_policy: SessionPolicy,
 }
@@ -68,10 +68,10 @@ impl SessionConfig {
             .or_else(|| service_config.presence_prefix.clone())
             .unwrap_or_else(|| "presence:user".to_string());
 
-        let storage_reader_endpoint = env::var("SESSION_STORAGE_READER_ENDPOINT")
+        let storage_reader_service = env::var("SESSION_STORAGE_READER_SERVICE")
             .ok()
             .filter(|s| !s.is_empty())
-            .or_else(|| service_config.storage_reader_endpoint.clone());
+            .or_else(|| service_config.storage_reader_service.clone());
 
         let recent_message_limit = env::var("SESSION_RECENT_MESSAGE_LIMIT")
             .ok()
@@ -136,85 +136,10 @@ impl SessionConfig {
             session_unread_prefix,
             user_cursor_prefix,
             presence_prefix,
-            storage_reader_endpoint,
+            storage_reader_service,
             recent_message_limit,
             default_policy,
         })
     }
 
-    /// 从环境变量加载（保留用于向后兼容，但不推荐使用）
-    #[deprecated(note = "Use from_app_config instead")]
-    pub fn from_env() -> Self {
-        let redis_url = env::var("SESSION_REDIS_URL")
-            .or_else(|_| env::var("STORAGE_REDIS_URL"))
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-
-        let session_state_prefix = env::var("SESSION_STATE_PREFIX")
-            .unwrap_or_else(|_| "storage:session:state".to_string());
-        let session_unread_prefix = env::var("SESSION_UNREAD_PREFIX")
-            .unwrap_or_else(|_| "storage:session:unread".to_string());
-        let user_cursor_prefix = env::var("SESSION_USER_CURSOR_PREFIX")
-            .unwrap_or_else(|_| "storage:user:cursor".to_string());
-        let presence_prefix =
-            env::var("SESSION_PRESENCE_PREFIX").unwrap_or_else(|_| "presence:user".to_string());
-
-        let storage_reader_endpoint = env::var("SESSION_STORAGE_READER_ENDPOINT")
-            .ok()
-            .filter(|s| !s.is_empty());
-
-        let recent_message_limit = env::var("SESSION_RECENT_MESSAGE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(20);
-
-        let conflict_resolution = env::var("SESSION_CONFLICT_RESOLUTION")
-            .ok()
-            .and_then(|s| ConflictResolutionPolicy::from_str(s.trim()))
-            .unwrap_or(ConflictResolutionPolicy::Coexist);
-
-        let max_devices = env::var("SESSION_POLICY_MAX_DEVICES")
-            .ok()
-            .and_then(|v| v.parse::<i32>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(5);
-
-        let allow_anonymous = env::var("SESSION_POLICY_ALLOW_ANONYMOUS")
-            .ok()
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
-
-        let allow_history_sync = env::var("SESSION_POLICY_ALLOW_HISTORY_SYNC")
-            .ok()
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(true);
-
-        let mut policy_metadata = HashMap::new();
-        if let Ok(raw) = env::var("SESSION_POLICY_METADATA") {
-            for kv in raw.split(',') {
-                if let Some((k, v)) = kv.split_once('=') {
-                    policy_metadata.insert(k.trim().to_string(), v.trim().to_string());
-                }
-            }
-        }
-
-        let default_policy = SessionPolicy {
-            conflict_resolution,
-            max_devices,
-            allow_anonymous,
-            allow_history_sync,
-            metadata: policy_metadata,
-        };
-
-        Self {
-            redis_url,
-            postgres_url: None, // from_env 不支持 PostgreSQL
-            session_state_prefix,
-            session_unread_prefix,
-            user_cursor_prefix,
-            presence_prefix,
-            storage_reader_endpoint,
-            recent_message_limit,
-            default_policy,
-        }
-    }
 }

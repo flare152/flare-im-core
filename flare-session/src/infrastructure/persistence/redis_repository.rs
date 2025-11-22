@@ -7,11 +7,11 @@ use chrono::{TimeZone, Utc};
 use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::config::SessionConfig;
-use crate::domain::models::{
+use crate::domain::model::{
     Session, SessionBootstrapResult, SessionFilter, SessionParticipant, SessionSort,
     SessionSummary,
 };
-use crate::domain::repositories::SessionRepository;
+use crate::domain::repository::SessionRepository;
 
 pub struct RedisSessionRepository {
     client: Arc<redis::Client>,

@@ -1,2 +1,5 @@
 pub mod commands;
-pub mod hooks;
+pub mod handlers;
+pub mod queries;
+
+pub use handlers::{MessageCommandHandler, MessageQueryHandler};

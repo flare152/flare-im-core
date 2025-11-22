@@ -1,7 +1,9 @@
 pub mod ack_tracker;
 pub mod cache;
-pub mod gateway_router;
+pub mod hook;
 pub mod message_state;
-pub mod messaging;
+pub mod mq;
+pub mod persistence;
 pub mod retry;
+pub mod session_client;
 pub mod signaling;

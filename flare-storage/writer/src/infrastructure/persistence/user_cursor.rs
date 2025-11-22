@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 
-use crate::domain::repositories::UserSyncCursorRepository;
+use crate::domain::repository::UserSyncCursorRepository;
 
 pub struct RedisUserCursorRepository {
     client: Arc<redis::Client>,

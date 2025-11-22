@@ -5,8 +5,8 @@ use flare_proto::{GetFileInfoRequest, RequestContext, TenantContext};
 use tonic::transport::Channel;
 use tracing::warn;
 
-use crate::domain::message_persistence::MediaAttachmentMetadata;
-use crate::domain::repositories::MediaAttachmentVerifier;
+use crate::domain::model::MediaAttachmentMetadata;
+use crate::domain::repository::MediaAttachmentVerifier;
 
 pub struct MediaAttachmentClient {
     endpoint: String,

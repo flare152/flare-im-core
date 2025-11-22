@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::s3::S3ObjectStore;
-use crate::domain::repositories::ObjectRepositoryRef;
+use crate::domain::repository::ObjectRepositoryRef;
 use flare_im_core::config::ObjectStoreConfig;
 
 pub async fn build_object_store(

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use anyhow::Result;
-use crate::domain::models::HookConfigItem;
+use crate::domain::model::HookConfigItem;
 use crate::infrastructure::config::ConfigWatcher;
 
 /// Hook服务注册表

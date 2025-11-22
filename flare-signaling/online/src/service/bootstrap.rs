@@ -1,188 +1,117 @@
 //! 应用启动器 - 负责依赖注入和服务启动
-use crate::application::{OnlineStatusService, SubscriptionService, UserService};
-use crate::config::OnlineConfig;
-use crate::domain::repositories::{PresenceWatcher, SessionRepository, SignalPublisher, SubscriptionRepository};
-use crate::infrastructure::persistence::redis::{
-    RedisPresenceWatcher, RedisSessionRepository, RedisSignalPublisher,
-    RedisSubscriptionRepository,
-};
-use crate::interface::grpc::{server::SignalingOnlineServer, user_server::UserServiceServer, user_handler::UserHandler};
-use crate::service::registry::ServiceRegistrar;
-use anyhow::{Context, Result};
-use flare_im_core::FlareAppConfig;
-use flare_server_core::ServiceRegistryTrait;
-use redis::Client;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tonic::transport::Server;
-use tracing::info;
 
-/// 应用上下文 - 包含所有已初始化的服务
-pub struct ApplicationContext {
-    pub signaling_server: Arc<SignalingOnlineServer>,
-    pub user_server: Arc<UserServiceServer>,
-    pub service_registry:
-        Option<Arc<RwLock<Box<dyn ServiceRegistryTrait>>>>,
-    pub service_info: Option<flare_server_core::ServiceInfo>,
-}
+use std::net::SocketAddr;
+
+use anyhow::{Context, Result};
+use tracing::{info, error};
+
+use crate::service::wire::{self, ApplicationContext};
+use flare_server_core::runtime::ServiceRuntime;
 
 /// 应用启动器
 pub struct ApplicationBootstrap;
 
 impl ApplicationBootstrap {
     /// 运行应用的主入口点
-    pub async fn run(config: &'static FlareAppConfig) -> Result<()> {
-        // 创建应用上下文
-        let context = Self::create_context(config).await?;
-
-        // 获取运行时配置
-        let runtime_config = config.base().clone();
-
-        // 启动服务器
-        Self::start_server(
-            context,
-            &runtime_config.server.address,
-            runtime_config.server.port,
+    pub async fn run() -> Result<()> {
+        use flare_im_core::{load_config, ServiceHelper};
+        
+        // 加载应用配置
+        let app_config = load_config(Some("config"));
+        let service_config = app_config.signaling_online_service();
+        
+        info!("Parsing server address...");
+        let address: SocketAddr = ServiceHelper::parse_server_addr(
+            app_config,
+            &service_config.runtime,
+            "flare-signaling-online",
         )
-        .await
+        .context("invalid signaling online server address")?;
+        info!(address = %address, "Server address parsed successfully");
+        
+        // 使用 Wire 风格的依赖注入构建应用上下文
+        let context = wire::initialize(app_config).await?;
+        
+        info!("ApplicationBootstrap created successfully");
+        
+        // 运行服务
+        Self::run_with_context(context, address).await
     }
 
-    /// 创建应用上下文
-    pub async fn create_context(config: &FlareAppConfig) -> Result<ApplicationContext> {
-        let runtime_config = config.base().clone();
-        let service_type = "signaling-online".to_string();
-
-        // 注册服务
-        let (service_registry, service_info) =
-            ServiceRegistrar::register_service(&runtime_config, &service_type).await?;
-
-        // 构建核心服务
-        let online_config = Arc::new(
-            OnlineConfig::from_app_config(config)
-                .context("Failed to load online service configuration")?,
-        );
-        let redis_client = Arc::new(
-            Client::open(online_config.redis_url.as_str())
-                .map_err(|e| anyhow::anyhow!("Failed to create redis client: {}", e))?,
-        );
-
-        // 构建仓库
-        let session_repository: Arc<dyn SessionRepository> =
-            Arc::new(RedisSessionRepository::new(
-                Arc::clone(&redis_client),
-                online_config.clone(),
-            ));
-
-        let subscription_repository: Arc<dyn SubscriptionRepository> =
-            Arc::new(RedisSubscriptionRepository::new(
-                Arc::clone(&redis_client),
-                online_config.clone(),
-            ));
-
-        let signal_publisher: Arc<dyn SignalPublisher> = Arc::new(RedisSignalPublisher::new(
-            Arc::clone(&redis_client),
-            online_config.clone(),
-        ));
-
-        let presence_watcher: Arc<dyn PresenceWatcher> = Arc::new(RedisPresenceWatcher::new(
-            Arc::clone(&redis_client),
-            online_config.clone(),
-        ));
-
-        // 构建应用服务
-        let online_service = Arc::new(OnlineStatusService::new(
-            online_config.clone(),
-            session_repository.clone(),
-        ));
-
-        let subscription_service = Arc::new(SubscriptionService::new(
-            subscription_repository,
-            signal_publisher.clone(),
-        ));
-
-        // 构建 SignalingService 服务器
-        use crate::interface::grpc::{handler::OnlineHandler, server::SignalingOnlineServer};
-        let signaling_handler = Arc::new(OnlineHandler::new(
-            online_service,
-            subscription_service,
-            presence_watcher.clone(),
-        ));
-        let signaling_server = Arc::new(SignalingOnlineServer::from_handler(signaling_handler));
-
-        // 构建 UserService 服务器
-        let user_service = Arc::new(UserService::new(session_repository.clone()));
-        let user_handler = Arc::new(UserHandler::new(user_service, presence_watcher));
-        let user_server = Arc::new(UserServiceServer::new(user_handler));
-
-        Ok(ApplicationContext {
-            signaling_server,
-            user_server,
-            service_registry,
-            service_info,
-        })
-    }
-
-    /// 启动gRPC服务器
-    pub async fn start_server(
+    /// 运行服务（带应用上下文）
+    async fn run_with_context(
         context: ApplicationContext,
-        address: &str,
-        port: u16,
+        address: SocketAddr,
     ) -> Result<()> {
-        let addr = format!("{}:{}", address, port).parse()?;
-        info!(%addr, "starting signaling online service");
-
-        let server_future = Server::builder()
-            // 注册 SignalingService
-            .add_service(
-                flare_proto::signaling::signaling_service_server::SignalingServiceServer::new(
-                    context.signaling_server.as_ref().clone(),
-                ),
-            )
-            // 注册 UserService
-            .add_service(
-                flare_proto::signaling::user_service_server::UserServiceServer::new(
-                    context.user_server.as_ref().clone(),
-                ),
-            )
-            .serve(addr);
-
-        // 等待服务器启动或接收到停止信号
-        let result = tokio::select! {
-            res = server_future => {
-                if let Err(err) = res {
-                    tracing::error!(error = %err, "signaling online service failed");
-                }
-                Ok(())
-            }
-            _ = tokio::signal::ctrl_c() => {
-                info!("shutdown signal received");
-                Ok(())
-            }
+        use flare_proto::signaling::{
+            signaling_service_server::SignalingServiceServer,
+            user_service_server::UserServiceServer,
         };
+        use tonic::transport::Server;
 
-        // 执行优雅停机
-        Self::graceful_shutdown(context).await;
+        let signaling_handler = context.signaling_handler.clone();
+        let user_handler = context.user_handler.clone();
 
-        info!("signaling online service stopped");
-        result
-    }
+        info!(
+            address = %address,
+            port = %address.port(),
+            "Starting Signaling Online gRPC service..."
+        );
 
-    /// 优雅停机处理
-    async fn graceful_shutdown(context: ApplicationContext) {
-        // 如果有服务注册器，执行服务注销
-        if let (Some(registry), Some(service_info)) =
-            (&context.service_registry, &context.service_info)
-        {
-            info!("unregistering service...");
-            let mut registry = registry.write().await;
-            if let Err(e) = registry.unregister(&service_info.instance_id).await {
-                tracing::warn!(error = %e, "failed to unregister service");
-            } else {
-                info!("service unregistered successfully");
-            }
-        }
+        // 使用 ServiceRuntime 管理服务生命周期
+        let address_clone = address;
+        let runtime = ServiceRuntime::new("signaling-online", address)
+            .add_spawn_with_shutdown("signaling-online-grpc", move |shutdown_rx| async move {
+                Server::builder()
+                    // 注册 SignalingService
+                    .add_service(SignalingServiceServer::new(signaling_handler))
+                    // 注册 UserService
+                    .add_service(UserServiceServer::new(user_handler))
+                    .serve_with_shutdown(address_clone, async move {
+                        info!(
+                            address = %address_clone,
+                            port = %address_clone.port(),
+                            "✅ Signaling Online gRPC service is listening"
+                        );
+                        
+                        // 同时监听 Ctrl+C 和关闭通道
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("shutdown signal received (Ctrl+C)");
+                            }
+                            _ = shutdown_rx => {
+                                tracing::info!("shutdown signal received (service registration failed)");
+                            }
+                        }
+                    })
+                    .await
+                    .map_err(|e| format!("gRPC server error: {}", e).into())
+            });
 
-        // 在这里可以添加其他需要优雅停机的资源清理操作
+        // 运行服务（带服务注册）
+        runtime.run_with_registration(|addr| {
+            Box::pin(async move {
+                // 注册服务（使用常量）
+                use flare_im_core::service_names::SIGNALING_ONLINE;
+                match flare_im_core::discovery::register_service_only(SIGNALING_ONLINE, addr, None).await {
+                    Ok(Some(registry)) => {
+                        info!("✅ Service registered: {}", SIGNALING_ONLINE);
+                        Ok(Some(registry))
+                    }
+                    Ok(None) => {
+                        info!("Service discovery not configured, skipping registration");
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "❌ Service registration failed"
+                        );
+                        Err(format!("Service registration failed: {}", e).into())
+                    }
+                }
+            })
+        }).await
     }
 }
 

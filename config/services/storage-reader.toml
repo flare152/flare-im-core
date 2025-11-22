@@ -6,7 +6,6 @@
 # - 所有基础设施配置都在 base.toml 中定义
 
 [services.storage_reader]
-service_name = "flare-storage-reader"
 
 # MongoDB 配置：引用 base.toml 中的 mongodb.primary
 mongo = "primary"

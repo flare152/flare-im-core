@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use async_trait::async_trait;
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
 
 use crate::config::OnlineConfig;
-use crate::domain::repositories::SignalPublisher;
+use crate::domain::repository::SignalPublisher;
 
 const SIGNAL_CHANNEL_PREFIX: &str = "signal";
 
@@ -31,14 +31,7 @@ impl RedisSignalPublisher {
     async fn connection(&self) -> Result<ConnectionManager> {
         ConnectionManager::new(self.client.as_ref().clone())
             .await
-            .map_err(|err| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "failed to open redis connection",
-                )
-                .details(err.to_string())
-                .build_error()
-            })
+            .context("failed to open redis connection")
     }
 }
 
@@ -67,14 +60,9 @@ impl SignalPublisher for RedisSignalPublisher {
         });
 
         // 发布到 Redis Pub/Sub
-        let _: i64 = conn
-            .publish(&channel, message.to_string())
+        let _: i64 = conn.publish(&channel, message.to_string())
             .await
-            .map_err(|err| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "failed to publish signal")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            .context("failed to publish signal")?;
 
         Ok(())
     }

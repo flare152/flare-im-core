@@ -1,0 +1,752 @@
+//! 连接处理器模块
+//!
+//! 处理客户端长连接的消息接收和推送
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use flare_core::common::error::{FlareError as CoreFlareError, Result as CoreResult};
+use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
+use flare_core::common::protocol::{
+    Frame, MessageCommand, Reliability, frame_with_message_command, generate_message_id,
+};
+use flare_core::server::handle::ServerHandle;
+use flare_core::server::{ConnectionHandler, ConnectionManagerTrait};
+use flare_server_core::error::Result;
+use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
+
+use crate::domain::repository::{SessionStore, SignalingGateway};
+use crate::infrastructure::online_cache::OnlineStatusCache;
+use crate::infrastructure::messaging::message_router::MessageRouter;
+use crate::infrastructure::AckPublisher;
+#[cfg(feature = "tracing")]
+use flare_im_core::tracing::{set_user_id, set_message_id, set_tenant_id};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::instrument;
+
+/// 长连接处理器
+///
+/// 处理客户端长连接的消息接收和推送
+pub struct LongConnectionHandler {
+    session_store: Arc<dyn SessionStore>,
+    signaling_gateway: Arc<dyn SignalingGateway>,
+    online_cache: Arc<OnlineStatusCache>,
+    gateway_id: String,
+    server_handle: Arc<Mutex<Option<Arc<dyn ServerHandle>>>>,
+    manager_trait: Arc<Mutex<Option<Arc<dyn ConnectionManagerTrait>>>>,
+    ack_publisher: Option<Arc<dyn AckPublisher>>,
+    message_router: Option<Arc<MessageRouter>>,
+    metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
+}
+
+impl LongConnectionHandler {
+    pub fn new(
+        session_store: Arc<dyn SessionStore>,
+        signaling_gateway: Arc<dyn SignalingGateway>,
+        online_cache: Arc<OnlineStatusCache>,
+        gateway_id: String,
+        ack_publisher: Option<Arc<dyn AckPublisher>>,
+        message_router: Option<Arc<MessageRouter>>,
+        metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
+    ) -> Self {
+        Self {
+            session_store,
+            signaling_gateway,
+            online_cache,
+            gateway_id,
+            server_handle: Arc::new(Mutex::new(None)),
+            manager_trait: Arc::new(Mutex::new(None)),
+            ack_publisher,
+            message_router,
+            metrics,
+        }
+    }
+
+    /// 设置 ServerHandle
+    pub async fn set_server_handle(&self, handle: Arc<dyn ServerHandle>) {
+        *self.server_handle.lock().await = Some(handle);
+    }
+
+    /// 设置 ConnectionManagerTrait
+    pub async fn set_connection_manager(&self, manager: Arc<dyn ConnectionManagerTrait>) {
+        *self.manager_trait.lock().await = Some(manager);
+    }
+
+    /// 获取用户ID（从连接信息中提取）
+    pub async fn user_id_for_connection(&self, connection_id: &str) -> Option<String> {
+        if let Some(ref manager) = *self.manager_trait.lock().await {
+            if let Some((_, conn_info)) = manager.get_connection(connection_id).await {
+                return conn_info.user_id.clone();
+            }
+        }
+        None
+    }
+
+    /// 获取连接信息（包括设备ID等）
+    async fn get_connection_info(&self, connection_id: &str) -> Option<(String, String)> {
+        if let Some(ref manager) = *self.manager_trait.lock().await {
+            if let Some((_, conn_info)) = manager.get_connection(connection_id).await {
+                let user_id = conn_info.user_id?;
+                let device_id = conn_info
+                    .device_info
+                    .as_ref()
+                    .map(|d| d.device_id.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                return Some((user_id, device_id));
+            }
+        }
+        None
+    }
+
+    /// 获取连接对应的会话ID
+    async fn get_session_id_for_connection(&self, connection_id: &str) -> Option<String> {
+        if let Some(user_id) = self.user_id_for_connection(connection_id).await {
+            // 从会话存储中查找会话
+            if let Ok(sessions) = self.session_store.find_by_user(&user_id).await {
+                for session in sessions {
+                    if session.connection_id.as_deref() == Some(connection_id) {
+                        return Some(session.session_id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// 获取连接对应的租户ID
+    async fn get_tenant_id_for_connection(&self, _connection_id: &str) -> Option<String> {
+        // 从连接信息中提取租户ID（如果连接信息中有）
+        // 目前先返回 None，使用默认租户
+        None
+    }
+
+    /// 注册在线状态到Signaling Online
+    async fn register_online_status(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        connection_id: Option<&str>,
+    ) -> CoreResult<()> {
+        use flare_proto::signaling::LoginRequest;
+        use uuid::Uuid;
+
+        let _session_id = Uuid::new_v4().to_string();
+        // 使用 gateway_id 作为 server_id，这样 Signaling Online 可以直接返回 gateway_id
+        let server_id = self.gateway_id.clone();
+
+        // 构建 metadata，包含 gateway_id（用于跨地区路由）
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("gateway_id".to_string(), self.gateway_id.clone());
+        
+        let login_request = LoginRequest {
+            user_id: user_id.to_string(),
+            token: String::new(), // Token 认证暂时为空，后续可以从连接信息中获取
+            device_id: device_id.to_string(),
+            server_id: server_id.clone(),
+            metadata,
+            context: None, // RequestContext 暂时为空
+            tenant: None, // TenantContext 暂时为空
+            device_platform: "unknown".to_string(),
+            app_version: "unknown".to_string(),
+            desired_conflict_strategy: 0, // 使用默认策略
+        };
+
+        // 为 signaling_gateway.login 添加超时（5秒），防止阻塞
+        let login_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.signaling_gateway.login(login_request)
+        ).await;
+
+        match login_result {
+            Ok(Ok(response)) => {
+                if response.success {
+                    // 创建并存储会话信息到 Redis
+                    use crate::domain::model::Session;
+                    let session = Session::new(
+                        response.session_id.clone(),
+                        user_id.to_string(),
+                        device_id.to_string(),
+                        Some(response.route_server.clone()),
+                        self.gateway_id.clone(),
+                    );
+                    
+                    // 存储会话到 Redis（这样 Push Server 才能查询到在线用户）
+                    if let Err(err) = self.session_store.insert(session.clone()).await {
+                        warn!(
+                            ?err,
+                            user_id = %user_id,
+                            session_id = %response.session_id,
+                            "Failed to store session in Redis"
+                        );
+                    } else {
+                        info!(
+                            user_id = %user_id,
+                            session_id = %response.session_id,
+                            "Session stored in Redis"
+                        );
+                    }
+                    
+                    // 更新会话的连接信息（如果连接已建立）
+                    if let Some(conn_id) = connection_id {
+                        if let Err(err) = self.session_store.update_connection(&response.session_id, Some(conn_id.to_string())).await {
+                            warn!(
+                                ?err,
+                                user_id = %user_id,
+                                session_id = %response.session_id,
+                                connection_id = %conn_id,
+                                "Failed to update session connection"
+                            );
+                        }
+                    }
+                    
+                    // 更新本地缓存
+                    self.online_cache
+                        .set(
+                            user_id.to_string(),
+                            self.gateway_id.clone(),
+                            true,
+                        )
+                        .await;
+
+                    info!(
+                        user_id = %user_id,
+                        gateway_id = %self.gateway_id,
+                        session_id = %response.session_id,
+                        "Online status registered"
+                    );
+                } else {
+                    warn!(
+                        user_id = %user_id,
+                        error = %response.error_message,
+                        "Failed to register online status"
+                    );
+                }
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    ?e,
+                    user_id = %user_id,
+                    "Failed to call signaling login"
+                );
+                // 即使Signaling失败，也更新本地缓存（降级策略）
+                self.online_cache
+                    .set(
+                        user_id.to_string(),
+                        self.gateway_id.clone(),
+                        true,
+                    )
+                    .await;
+            }
+            Err(_) => {
+                warn!(
+                    user_id = %user_id,
+                    "Timeout while calling signaling login (5s)"
+                );
+                // 即使Signaling超时，也更新本地缓存（降级策略）
+                self.online_cache
+                    .set(
+                        user_id.to_string(),
+                        self.gateway_id.clone(),
+                        true,
+                    )
+                    .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 注销在线状态
+    async fn unregister_online_status(&self, user_id: &str) -> CoreResult<()> {
+        use flare_proto::signaling::LogoutRequest;
+
+        // 先更新本地缓存
+        self.online_cache.remove(user_id).await;
+
+        // 查询session_id
+        let sessions = self
+            .session_store
+            .find_by_user(user_id)
+            .await
+            .map_err(|err| CoreFlareError::system(err.to_string()))?;
+
+        for session in sessions {
+            let logout_request = LogoutRequest {
+                user_id: user_id.to_string(),
+                session_id: session.session_id.clone(),
+                context: None, // RequestContext 暂时为空
+                tenant: None, // TenantContext 暂时为空
+            };
+
+            if let Err(e) = self.signaling_gateway.logout(logout_request).await {
+                warn!(
+                    ?e,
+                    user_id = %user_id,
+                    session_id = %session.session_id,
+                    "Failed to call signaling logout"
+                );
+            } else {
+                info!(
+                    user_id = %user_id,
+                    session_id = %session.session_id,
+                    "Online status unregistered"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 主动断开指定连接
+    pub async fn disconnect_connection(&self, connection_id: &str) {
+        if let Some(handle) = self.server_handle.lock().await.clone() {
+            if let Err(err) = handle.disconnect(connection_id).await {
+                warn!(?err, %connection_id, "failed to disconnect connection");
+            }
+        } else {
+            warn!(%connection_id, "disconnect requested but server handle not ready");
+        }
+    }
+
+    /// 刷新连接对应会话的心跳
+    pub async fn refresh_session(&self, connection_id: &str) -> Result<()> {
+        if let Some(user_id) = self.user_id_for_connection(connection_id).await {
+            let sessions = self.session_store.find_by_user(&user_id).await?;
+            for session in sessions {
+                if session.connection_id.as_deref() == Some(connection_id) {
+                    let _ = self.session_store.touch(&session.session_id).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 推送消息到客户端
+    pub async fn push_message_to_user(
+        &self,
+        user_id: &str,
+        message: Vec<u8>,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if let Some(ref handle) = *self.server_handle.lock().await {
+            let cmd = MessageCommand {
+                r#type: 0,
+                message_id: generate_message_id(),
+                payload: message,
+                metadata: Default::default(),
+                seq: 0,
+            };
+
+            let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
+
+            handle
+                .send_to_user(user_id, &frame)
+                .await
+                .map_err(|e| format!("Failed to send message: {}", e))?;
+
+            info!("Pushed message to user {}", user_id);
+        } else {
+            return Err("ServerHandle not initialized".into());
+        }
+
+        Ok(())
+    }
+
+    /// 推送消息到指定连接
+    pub async fn push_message_to_connection(
+        &self,
+        connection_id: &str,
+        message: Vec<u8>,
+    ) -> std::result::Result<(), String> {
+        if let Some(ref handle) = *self.server_handle.lock().await {
+            let cmd = MessageCommand {
+                r#type: 0,
+                message_id: generate_message_id(),
+                payload: message,
+                metadata: Default::default(),
+                seq: 0,
+            };
+
+            let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
+
+            handle
+                .send_to(connection_id, &frame)
+                .await
+                .map_err(|e| format!("Failed to send message: {}", e))?;
+
+            debug!("Pushed message to connection {}", connection_id);
+        } else {
+            return Err("ServerHandle not initialized".to_string());
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ConnectionHandler for LongConnectionHandler {
+    async fn handle_frame(&self, frame: &Frame, connection_id: &str) -> CoreResult<Option<Frame>> {
+        debug!(
+            "Received frame from connection {}: {:?}",
+            connection_id, frame
+        );
+
+        if let Some(cmd) = &frame.command {
+            if let Some(CommandType::Message(msg_cmd)) = &cmd.r#type {
+                let message_type = msg_cmd.r#type;
+
+                // 处理客户端ACK消息（Type::Ack = 1）
+                if message_type == 1 {
+                    // 这是客户端ACK消息
+                    let user_id = self
+                        .user_id_for_connection(connection_id)
+                        .await
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    let message_id = msg_cmd.message_id.clone();
+
+                    info!(
+                        "✅ 收到客户端ACK: user_id={}, connection_id={}, message_id={}",
+                        user_id,
+                        connection_id,
+                        message_id
+                    );
+
+                    // 设置追踪属性
+                    #[cfg(feature = "tracing")]
+                    {
+                        let span = Span::current();
+                        set_user_id(&span, &user_id);
+                        set_message_id(&span, &message_id);
+                        span.record("ack_type", "client_ack");
+                    }
+
+                    // 记录客户端ACK指标
+                    // 注意：这里无法获取 tenant_id，使用 "unknown"
+                    self.metrics.client_ack_received_total
+                        .with_label_values(&["unknown"])
+                        .inc();
+
+                    // 上报推送ACK到Kafka
+                    if let Some(ref ack_publisher) = self.ack_publisher {
+                        let ack_event = crate::infrastructure::PushAckEvent {
+                            message_id: message_id.clone(),
+                            user_id: user_id.clone(),
+                            connection_id: connection_id.to_string(),
+                            gateway_id: self.gateway_id.clone(),
+                            ack_type: "client_ack".to_string(),
+                            status: "success".to_string(),
+                            timestamp: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs() as i64,
+                        };
+
+                        if let Err(e) = ack_publisher.publish_ack(&ack_event).await {
+                            warn!(
+                                ?e,
+                                message_id = %message_id,
+                                user_id = %user_id,
+                                "Failed to publish client ACK"
+                            );
+                        }
+                    }
+
+                    // 刷新会话心跳
+                    if let Err(err) = self.refresh_session(connection_id).await {
+                        warn!(?err, %connection_id, "failed to refresh session heartbeat");
+                    }
+
+                    return Ok(None);
+                }
+
+                // 处理普通消息（Type::Send = 0）
+                if message_type == 0 {
+                    let user_id = self
+                        .user_id_for_connection(connection_id)
+                        .await
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    info!(
+                        "📨 收到消息: user_id={}, connection_id={}, message_len={}",
+                        user_id,
+                        connection_id,
+                        msg_cmd.payload.len()
+                    );
+
+                    // 路由消息到 Message Orchestrator
+                    if let Some(ref router) = self.message_router {
+                        // 优先从消息 metadata 中提取 session_id（客户端指定的）
+                        // 注意：客户端在 MessageCommand.metadata 中设置了 session_id: "chatroom"
+                        let session_id = {
+                            // 首先尝试从 MessageCommand.metadata 中提取
+                            let metadata_session_id = msg_cmd.metadata.get("session_id")
+                                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+                                .filter(|s| !s.is_empty());
+                            
+                            if let Some(sid) = metadata_session_id {
+                                info!(
+                                    session_id = %sid,
+                                    metadata_keys = ?msg_cmd.metadata.keys().collect::<Vec<_>>(),
+                                    metadata_count = msg_cmd.metadata.len(),
+                                    "✅ Using session_id from MessageCommand.metadata"
+                                );
+                                sid
+                            } else {
+                                // 如果 MessageCommand.metadata 中没有，尝试从 Frame.metadata 中提取
+                                // 注意：frame 参数在 handle_frame 方法的参数中，这里需要通过 frame 变量访问
+                                // 但为了代码清晰，我们先检查 MessageCommand.metadata
+                                
+                                // 如果 metadata 中没有，尝试从连接信息中获取（可能是 Signaling 返回的 UUID）
+                                warn!(
+                                    msg_metadata_keys = ?msg_cmd.metadata.keys().collect::<Vec<_>>(),
+                                    msg_metadata_count = msg_cmd.metadata.len(),
+                                    connection_id = %connection_id,
+                                    "MessageCommand.metadata 中没有有效的 session_id，尝试从连接信息获取"
+                                );
+                                
+                                // 也检查 Frame.metadata（如果可用，虽然客户端通常只设置 MessageCommand.metadata）
+                                let frame_session_id = frame.metadata.get("session_id")
+                                    .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+                                    .filter(|s| !s.is_empty());
+                                
+                                if let Some(sid) = frame_session_id {
+                                    info!(
+                                        session_id = %sid,
+                                        "✅ Using session_id from Frame.metadata"
+                                    );
+                                    sid
+                                } else {
+                                    // 如果 Frame.metadata 中也没有，尝试从连接信息中获取（可能是 Signaling 返回的 UUID）
+                                    let fallback_session_id = self.get_session_id_for_connection(connection_id)
+                                        .await
+                                        .unwrap_or_else(|| format!("chatroom:{}", self.gateway_id));
+                                    
+                                    warn!(
+                                        session_id = %fallback_session_id,
+                                        "使用回退 session_id（可能不是客户端指定的聊天室ID，建议检查客户端是否设置了 metadata.session_id='chatroom'）"
+                                    );
+                                    
+                                    fallback_session_id
+                                }
+                            }
+                        };
+                        
+                        info!(
+                            user_id = %user_id,
+                            session_id = %session_id,
+                            "📨 路由消息到 Message Orchestrator"
+                        );
+
+                        // 获取租户ID（从连接信息中提取，或使用默认）
+                        let tenant_id = self
+                            .get_tenant_id_for_connection(connection_id)
+                            .await;
+
+                        // 路由消息
+                        let original_message_id = msg_cmd.message_id.clone();
+                        match router
+                            .route_message(
+                                &user_id,
+                                &session_id,
+                                msg_cmd.payload.clone(),
+                                tenant_id.as_deref(),
+                            )
+                            .await
+                        {
+                            Ok(response) => {
+                                info!(
+                                    user_id = %user_id,
+                                    session_id = %session_id,
+                                    message_id = %response.message_id,
+                                    "Message routed successfully"
+                                );
+                            }
+                            Err(err) => {
+                                let error_msg = format!("消息发送失败: {}", err);
+                                tracing::error!(
+                                    ?err,
+                                    user_id = %user_id,
+                                    session_id = %session_id,
+                                    "Failed to route message to Message Orchestrator"
+                                );
+                                
+                                // 向客户端发送错误通知
+                                if let Some(ref handle) = *self.server_handle.lock().await {
+                                    use flare_core::common::protocol::{
+                                        frame_with_notification_command, notification, 
+                                        flare::core::commands::notification_command::Type as NotificationType,
+                                        Reliability,
+                                    };
+                                    
+                                    let error_notification = notification(
+                                        NotificationType::Alert,
+                                        "消息发送失败".to_string(),
+                                        error_msg.clone().into_bytes(),
+                                        {
+                                            let mut metadata = std::collections::HashMap::new();
+                                            metadata.insert("original_message_id".to_string(), original_message_id.as_bytes().to_vec());
+                                            metadata.insert("error_code".to_string(), "ROUTING_FAILED".as_bytes().to_vec());
+                                            Some(metadata)
+                                        },
+                                    );
+                                    
+                                    let error_frame = frame_with_notification_command(
+                                        error_notification,
+                                        Reliability::AtLeastOnce,
+                                    );
+                                    
+                                    if let Err(send_err) = handle.send_to(connection_id, &error_frame).await {
+                                        warn!(
+                                            ?send_err,
+                                            connection_id = %connection_id,
+                                            "Failed to send error notification to client"
+                                        );
+                                    } else {
+                                        info!(
+                                            connection_id = %connection_id,
+                                            "Error notification sent to client"
+                                        );
+                                    }
+                                } else {
+                                    warn!("ServerHandle not initialized, cannot send error notification");
+                                }
+                            }
+                        }
+                    } else {
+                        warn!("Message Router not configured, message will not be routed");
+                    }
+
+                    if let Err(err) = self.refresh_session(connection_id).await {
+                        warn!(?err, %connection_id, "failed to refresh session heartbeat");
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    #[instrument(skip(self), fields(connection_id))]
+    async fn on_connect(&self, connection_id: &str) -> CoreResult<()> {
+        let span = tracing::Span::current();
+        span.record("connection_id", connection_id);
+
+        // 更新活跃连接数并获取当前连接数
+        let active_count = if let Some(ref handle) = *self.server_handle.lock().await {
+            let count = handle.connection_count();
+            self.metrics.connections_active.set(count as i64);
+            count
+        } else {
+            0
+        };
+
+        // 获取连接信息并记录连接建立日志
+        let connection_info = self.get_connection_info(connection_id).await;
+        
+        if let Some((user_id, device_id)) = connection_info {
+            // 连接建立成功：记录关键信息（INFO 级别）
+            info!(
+                "✅ 新连接建立: connection_id={}, user_id={}, device_id={}, active_connections={}",
+                connection_id, user_id, device_id, active_count
+            );
+            
+            // 注册在线状态到Signaling Online（这会创建会话并存储到Redis，并更新连接信息）
+            info!(
+                user_id = %user_id,
+                device_id = %device_id,
+                connection_id = %connection_id,
+                "开始注册在线状态..."
+            );
+            if let Err(err) = self.register_online_status(&user_id, &device_id, Some(connection_id)).await {
+                warn!(
+                    ?err,
+                    user_id = %user_id,
+                    connection_id = %connection_id,
+                    "Failed to register online status"
+                );
+            } else {
+                info!(
+                    user_id = %user_id,
+                    connection_id = %connection_id,
+                    "✅ 在线状态注册完成"
+                );
+            }
+            // 注意：连接建立日志已在上面的 info! 中记录，这里不再重复
+        } else {
+            // 连接信息未找到（可能是连接建立过程中出现问题）
+            warn!(
+                "⚠️ 连接建立但无法获取连接信息: connection_id={}",
+                connection_id
+            );
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(connection_id))]
+    async fn on_disconnect(&self, connection_id: &str) -> CoreResult<()> {
+        info!("❌ 连接断开: {}", connection_id);
+        let span = tracing::Span::current();
+        span.record("connection_id", connection_id);
+
+        // 记录连接断开指标
+        self.metrics.connection_disconnected_total.inc();
+
+        // 更新活跃连接数
+        if let Some(ref handle) = *self.server_handle.lock().await {
+            let count = handle.connection_count();
+            self.metrics.connections_active.set(count as i64);
+        }
+
+        if let Some(user_id) = self.user_id_for_connection(connection_id).await {
+            // 1. 更新session连接信息
+            let sessions = self
+                .session_store
+                .find_by_user(&user_id)
+                .await
+                .map_err(|err| CoreFlareError::system(err.to_string()))?;
+            
+            // 检查是否还有其他连接
+            let mut has_other_connections = false;
+            for session in &sessions {
+                if let Some(ref conn_id) = session.connection_id {
+                    if conn_id != connection_id {
+                        has_other_connections = true;
+                        break;
+                    }
+                }
+            }
+
+            // 如果没有其他连接，注销在线状态
+            if !has_other_connections {
+                if let Err(err) = self.unregister_online_status(&user_id).await {
+                    warn!(
+                        ?err,
+                        user_id = %user_id,
+                        connection_id = %connection_id,
+                        "Failed to unregister online status"
+                    );
+                }
+            }
+
+            // 更新session连接信息
+            for session in sessions {
+                // 如果这个session的连接ID匹配，清除连接ID
+                if session.connection_id.as_deref() == Some(connection_id) {
+                    self.session_store
+                        .update_connection(&session.session_id, None)
+                        .await
+                        .map_err(|err| CoreFlareError::system(err.to_string()))?;
+                }
+            }
+
+            info!(
+                "📝 用户已断开: user_id={}, connection_id={}",
+                user_id, connection_id
+            );
+        }
+
+        Ok(())
+    }
+}

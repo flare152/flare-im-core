@@ -8,7 +8,6 @@
 # - 所有基础设施配置都在 base.toml 中定义
 
 [services.storage_writer]
-service_name = "flare-storage-writer"
 
 # Kafka 配置：引用 base.toml 中的 kafka.message
 kafka = "message"
@@ -19,7 +18,7 @@ kafka_topic = "storage-messages"
 mongo = "primary"
 
 # PostgreSQL 配置（可选，用于归档）
-# postgres = "media"
+postgres = "media"
 
 # Redis 配置（WAL 存储）：引用 base.toml 中的 redis.message_wal
 wal_store = "message_wal"

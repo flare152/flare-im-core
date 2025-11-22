@@ -5,7 +5,11 @@ edition.workspace = true
 
 [[bin]]
 name = "flare-core-gateway"
-path = "src/main.rs"
+path = "cmd/main.rs"
+
+[lib]
+name = "flare_core_gateway"
+path = "src/lib.rs"
 
 [dependencies]
 flare-server-core = { workspace = true }

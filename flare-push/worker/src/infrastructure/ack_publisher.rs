@@ -1,28 +1,14 @@
-//! ACK上报发布器
+//! ACK上报发布器（基础设施层实现）
 
 use async_trait::async_trait;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use flare_server_core::kafka::build_kafka_producer;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::ClientConfig;
 use serde_json;
 use std::sync::Arc;
 use tracing::{error, info};
 
-/// ACK事件
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PushAckEvent {
-    pub message_id: String,
-    pub user_id: String,
-    pub success: bool,
-    pub error: Option<String>,
-    pub timestamp: i64,
-}
-
-/// ACK发布器trait
-#[async_trait]
-pub trait AckPublisher: Send + Sync {
-    async fn publish_ack(&self, event: &PushAckEvent) -> Result<()>;
-}
+use crate::domain::repository::PushAckEvent;
 
 /// Kafka ACK发布器
 pub struct KafkaAckPublisher {
@@ -32,10 +18,27 @@ pub struct KafkaAckPublisher {
 
 impl KafkaAckPublisher {
     pub fn new(bootstrap_servers: &str, topic: String) -> Result<Arc<Self>> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", bootstrap_servers)
-            .set("message.timeout.ms", "5000")
-            .create()
+        // 创建简单的配置包装器
+        struct SimpleProducerConfig {
+            bootstrap: String,
+        }
+        
+        impl flare_server_core::kafka::KafkaProducerConfig for SimpleProducerConfig {
+            fn kafka_bootstrap(&self) -> &str {
+                &self.bootstrap
+            }
+            
+            fn message_timeout_ms(&self) -> u64 {
+                5000 // 默认 5 秒
+            }
+        }
+        
+        let config = SimpleProducerConfig {
+            bootstrap: bootstrap_servers.to_string(),
+        };
+        
+        // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
+        let producer = build_kafka_producer(&config as &dyn flare_server_core::kafka::KafkaProducerConfig)
             .map_err(|e| {
                 ErrorBuilder::new(
                     ErrorCode::ServiceUnavailable,
@@ -50,7 +53,7 @@ impl KafkaAckPublisher {
 }
 
 #[async_trait]
-impl AckPublisher for KafkaAckPublisher {
+impl crate::domain::repository::AckPublisher for KafkaAckPublisher {
     async fn publish_ack(&self, event: &PushAckEvent) -> Result<()> {
         let payload = serde_json::to_vec(event).map_err(|e| {
             ErrorBuilder::new(
@@ -96,7 +99,7 @@ impl AckPublisher for KafkaAckPublisher {
 pub struct NoopAckPublisher;
 
 #[async_trait]
-impl AckPublisher for NoopAckPublisher {
+impl crate::domain::repository::AckPublisher for NoopAckPublisher {
     async fn publish_ack(&self, _event: &PushAckEvent) -> Result<()> {
         // 不做任何操作
         Ok(())

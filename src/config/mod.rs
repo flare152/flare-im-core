@@ -162,15 +162,34 @@ pub struct AccessGatewayServiceConfig {
     /// 运行时配置
     #[serde(flatten)]
     pub runtime: ServiceRuntimeConfig,
-    /// 信令端点
+    /// 信令服务名（通过服务发现获取地址）
     #[serde(default)]
-    pub signaling_endpoint: Option<String>,
-    /// 消息端点
-    #[serde(default, alias = "storage_endpoint")]
-    pub message_endpoint: Option<String>,
-    /// 推送端点
+    pub signaling_service: Option<String>,
+    /// 消息编排服务名（通过服务发现获取地址）
     #[serde(default)]
-    pub push_endpoint: Option<String>,
+    pub message_service: Option<String>,
+    /// 推送服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub push_service: Option<String>,
+    /// Route 服务名（通过服务发现获取地址，用于 SVID 路由）
+    #[serde(default)]
+    pub route_service: Option<String>,
+    /// 默认 SVID（Service ID），默认 "svid.im"
+    #[serde(default)]
+    pub default_svid: Option<String>,
+    /// 是否使用 Route 服务进行消息路由（默认 true）
+    #[serde(default = "default_true")]
+    pub use_route_service: bool,
+    // 保留旧字段名用于向后兼容（已废弃）
+    #[serde(default, alias = "signaling_endpoint")]
+    #[deprecated(note = "Use signaling_service instead")]
+    pub _signaling_endpoint: Option<String>,
+    #[serde(default, alias = "message_endpoint", alias = "storage_endpoint")]
+    #[deprecated(note = "Use message_service instead")]
+    pub _message_endpoint: Option<String>,
+    #[serde(default, alias = "push_endpoint")]
+    #[deprecated(note = "Use push_service instead")]
+    pub _push_endpoint: Option<String>,
     /// 令牌密钥
     #[serde(default)]
     pub token_secret: Option<String>,
@@ -195,6 +214,69 @@ pub struct AccessGatewayServiceConfig {
     /// 网关所在地区（用于跨地区路由）
     #[serde(default)]
     pub region: Option<String>,
+}
+
+/// 核心网关服务配置（业务系统统一入口）
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CoreGatewayServiceConfig {
+    /// 运行时配置
+    #[serde(flatten)]
+    pub runtime: ServiceRuntimeConfig,
+    /// 信令服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub signaling_service: Option<String>,
+    /// 消息编排服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub message_service: Option<String>,
+    /// 推送服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub push_service: Option<String>,
+    /// 存储读取服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub storage_service: Option<String>,
+    /// 媒体服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub media_service: Option<String>,
+    /// Hook引擎服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub hook_engine_service: Option<String>,
+    // 保留旧字段名用于向后兼容（已废弃）
+    #[serde(default, alias = "signaling_endpoint")]
+    #[deprecated(note = "Use signaling_service instead")]
+    pub _signaling_endpoint: Option<String>,
+    #[serde(default, alias = "message_endpoint")]
+    #[deprecated(note = "Use message_service instead")]
+    pub _message_endpoint: Option<String>,
+    #[serde(default, alias = "push_endpoint")]
+    #[deprecated(note = "Use push_service instead")]
+    pub _push_endpoint: Option<String>,
+    #[serde(default, alias = "storage_endpoint")]
+    #[deprecated(note = "Use storage_service instead")]
+    pub _storage_endpoint: Option<String>,
+    #[serde(default, alias = "media_endpoint")]
+    #[deprecated(note = "Use media_service instead")]
+    pub _media_endpoint: Option<String>,
+    #[serde(default, alias = "hook_engine_endpoint")]
+    #[deprecated(note = "Use hook_engine_service instead")]
+    pub _hook_engine_endpoint: Option<String>,
+    /// 信令路由服务名（通过服务发现获取地址）
+    #[serde(default)]
+    pub route_service: Option<String>,
+    /// 是否使用信令路由服务（默认不使用，向后兼容）
+    #[serde(default)]
+    pub use_route_service: Option<bool>,
+    /// 默认 SVID (Service ID)，用于通过 Route 服务转发消息
+    #[serde(default)]
+    pub default_svid: Option<String>,
+    /// JWT Token 密钥
+    #[serde(default)]
+    pub token_secret: Option<String>,
+    /// JWT Token 发行方
+    #[serde(default)]
+    pub token_issuer: Option<String>,
+    /// JWT Token 过期时间（秒）
+    #[serde(default)]
+    pub token_ttl_seconds: Option<u64>,
 }
 
 /// 媒体服务配置
@@ -355,6 +437,9 @@ pub struct MessageOrchestratorServiceConfig {
     /// Hook 配置目录
     #[serde(default)]
     pub hook_config_dir: Option<String>,
+    /// Session 服务类型（用于自动创建 session，如果配置了 registry，会自动发现）
+    #[serde(default)]
+    pub session_service_type: Option<String>,
 }
 
 /// 信令在线服务配置
@@ -484,9 +569,13 @@ pub struct SessionServiceConfig {
     /// 在线状态前缀
     #[serde(default)]
     pub presence_prefix: Option<String>,
-    /// 消息存储服务端点（可选）
+    /// 存储读取服务名（通过服务发现获取地址，可选）
     #[serde(default)]
-    pub storage_reader_endpoint: Option<String>,
+    pub storage_reader_service: Option<String>,
+    // 保留旧字段名用于向后兼容（已废弃）
+    #[serde(default, alias = "storage_reader_endpoint")]
+    #[deprecated(note = "Use storage_reader_service instead")]
+    pub _storage_reader_endpoint: Option<String>,
     /// 最近消息限制
     #[serde(default)]
     pub recent_message_limit: Option<i32>,
@@ -495,12 +584,49 @@ pub struct SessionServiceConfig {
     pub default_policy: Option<SessionPolicyConfig>,
 }
 
+/// 日志配置
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LoggingConfig {
+    /// 日志级别：trace, debug, info, warn, error
+    /// 默认：debug（开发环境推荐，生产环境建议使用 info）
+    /// 可以通过环境变量 RUST_LOG 覆盖，例如：RUST_LOG=info cargo run
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    /// 是否显示目标模块名称
+    #[serde(default = "default_false")]
+    pub with_target: bool,
+    /// 是否显示线程ID
+    #[serde(default = "default_true")]
+    pub with_thread_ids: bool,
+    /// 是否显示文件名
+    #[serde(default = "default_true")]
+    pub with_file: bool,
+    /// 是否显示行号
+    #[serde(default = "default_true")]
+    pub with_line_number: bool,
+}
+
+fn default_log_level() -> String {
+    "debug".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
 /// Flare 应用配置主结构体
 #[derive(Debug, Clone, Deserialize)]
 pub struct FlareAppConfig {
     /// 核心配置
     #[serde(flatten)]
     pub core: Config,
+    /// 日志配置
+    #[serde(default)]
+    pub logging: LoggingConfig,
     /// Redis 配置映射
     #[serde(default)]
     pub redis: HashMap<String, RedisPoolConfig>,
@@ -525,6 +651,11 @@ impl FlareAppConfig {
     /// 获取核心配置
     pub fn base(&self) -> &Config {
         &self.core
+    }
+
+    /// 获取日志配置
+    pub fn logging(&self) -> &LoggingConfig {
+        &self.logging
     }
 
     /// 获取 Redis 配置
@@ -555,6 +686,11 @@ impl FlareAppConfig {
     /// 获取接入网关服务配置
     pub fn access_gateway_service(&self) -> AccessGatewayServiceConfig {
         self.services.access_gateway.clone().unwrap_or_default()
+    }
+
+    /// 获取核心网关服务配置
+    pub fn core_gateway_service(&self) -> CoreGatewayServiceConfig {
+        self.services.core_gateway.clone().unwrap_or_default()
     }
 
     /// 获取媒体服务配置
@@ -1006,10 +1142,12 @@ fn default_config() -> FlareAppConfig {
                 endpoints: vec!["http://localhost:2379".to_string()],
                 namespace: "flare".to_string(),
                 ttl: 30,
+                load_balance_strategy: "consistent_hash".to_string(),
             }),
             mesh: None,
             storage: None,
         },
+        logging: LoggingConfig::default(),
         redis: HashMap::new(),
         kafka: HashMap::new(),
         postgres: HashMap::new(),
@@ -1025,6 +1163,9 @@ pub struct ServicesConfig {
     /// 接入网关服务配置
     #[serde(default, rename = "access_gateway")]
     pub access_gateway: Option<AccessGatewayServiceConfig>,
+    /// 核心网关服务配置（业务系统统一入口）
+    #[serde(default, rename = "core_gateway")]
+    pub core_gateway: Option<CoreGatewayServiceConfig>,
     /// 媒体服务配置
     #[serde(default, rename = "media")]
     pub media: Option<MediaServiceConfig>,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::domain::models::{HookExecutionResult, HookStatistics};
+use crate::domain::model::{HookExecutionResult, HookStatistics};
 
 /// 指标收集器
 pub struct MetricsCollector {

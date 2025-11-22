@@ -4,8 +4,8 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
+use flare_server_core::kafka::build_kafka_producer;
 use prost::Message;
-use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 
 use crate::domain::repositories::PushEventPublisher;
@@ -18,10 +18,8 @@ pub struct KafkaPushEventPublisher {
 
 impl KafkaPushEventPublisher {
     pub fn new(config: Arc<PushProxyConfig>) -> Result<Self> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", &config.kafka_bootstrap)
-            .set("message.timeout.ms", config.kafka_timeout_ms.to_string())
-            .create()
+        // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
+        let producer = build_kafka_producer(config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig)
             .map_err(|err| anyhow!("failed to create Kafka producer: {err}"))?;
 
         Ok(Self {

@@ -8,11 +8,11 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "flare-push-proxy"
-path = "src/main.rs"
+path = "cmd/main.rs"
 
 [dependencies]
 uuid = { workspace = true }
-flare-server-core = { workspace = true }
+flare-server-core = { workspace = true, features = ["kafka"] }
 flare-proto = { workspace = true }
 flare-im-core = { path = "../.." }
 tokio = { workspace = true }
@@ -27,4 +27,3 @@ rdkafka = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 prost = { workspace = true }
-

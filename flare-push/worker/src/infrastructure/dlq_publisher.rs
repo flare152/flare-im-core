@@ -1,20 +1,14 @@
-//! 死信队列发布器
+//! 死信队列发布器（基础设施层实现）
 
 use async_trait::async_trait;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use flare_server_core::kafka::build_kafka_producer;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::ClientConfig;
 use serde_json;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::domain::models::PushDispatchTask;
-
-/// 死信队列发布器trait
-#[async_trait]
-pub trait DlqPublisher: Send + Sync {
-    async fn publish_to_dlq(&self, task: &PushDispatchTask, error: &str) -> Result<()>;
-}
+use crate::domain::model::PushDispatchTask;
 
 /// Kafka死信队列发布器
 pub struct KafkaDlqPublisher {
@@ -24,10 +18,27 @@ pub struct KafkaDlqPublisher {
 
 impl KafkaDlqPublisher {
     pub fn new(bootstrap_servers: &str, topic: String) -> Result<Arc<Self>> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", bootstrap_servers)
-            .set("message.timeout.ms", "5000")
-            .create()
+        // 创建简单的配置包装器
+        struct SimpleProducerConfig {
+            bootstrap: String,
+        }
+        
+        impl flare_server_core::kafka::KafkaProducerConfig for SimpleProducerConfig {
+            fn kafka_bootstrap(&self) -> &str {
+                &self.bootstrap
+            }
+            
+            fn message_timeout_ms(&self) -> u64 {
+                5000 // 默认 5 秒
+            }
+        }
+        
+        let config = SimpleProducerConfig {
+            bootstrap: bootstrap_servers.to_string(),
+        };
+        
+        // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
+        let producer = build_kafka_producer(&config as &dyn flare_server_core::kafka::KafkaProducerConfig)
             .map_err(|e| {
                 ErrorBuilder::new(
                     ErrorCode::ServiceUnavailable,
@@ -42,7 +53,7 @@ impl KafkaDlqPublisher {
 }
 
 #[async_trait]
-impl DlqPublisher for KafkaDlqPublisher {
+impl crate::domain::repository::DlqPublisher for KafkaDlqPublisher {
     async fn publish_to_dlq(&self, task: &PushDispatchTask, error: &str) -> Result<()> {
         // 构建死信消息（包含原始任务和错误信息）
         let dlq_message = serde_json::json!({

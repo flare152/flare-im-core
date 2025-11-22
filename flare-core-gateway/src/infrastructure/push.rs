@@ -7,6 +7,7 @@ use flare_proto::push::{
     PushMessageRequest, PushMessageResponse, PushNotificationRequest, PushNotificationResponse,
 };
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
@@ -20,14 +21,26 @@ pub trait PushClient: Send + Sync {
 }
 
 pub struct GrpcPushClient {
-    endpoint: String,
+    service_name: String,
+    service_client: Mutex<Option<ServiceClient>>,
     client: Mutex<Option<PushServiceClient<Channel>>>,
 }
 
 impl GrpcPushClient {
-    pub fn new(endpoint: String) -> Arc<Self> {
+    /// 创建新的客户端（使用服务名称，内部创建服务发现）
+    pub fn new(service_name: String) -> Arc<Self> {
         Arc::new(Self {
-            endpoint,
+            service_name,
+            service_client: Mutex::new(None),
+            client: Mutex::new(None),
+        })
+    }
+
+    /// 使用 ServiceClient 创建新的客户端（推荐，通过 wire 注入）
+    pub fn with_service_client(service_client: ServiceClient) -> Arc<Self> {
+        Arc::new(Self {
+            service_name: String::new(), // 不需要 service_name
+            service_client: Mutex::new(Some(service_client)),
             client: Mutex::new(None),
         })
     }
@@ -38,14 +51,38 @@ impl GrpcPushClient {
             return Ok(client.clone());
         }
 
-        let client = PushServiceClient::connect(self.endpoint.clone())
-            .await
-            .context("failed to connect push service")
-            .map_err(|err| {
+        // 使用服务发现获取 Channel
+        let mut service_client_guard = self.service_client.lock().await;
+        if service_client_guard.is_none() {
+            // 如果没有注入 ServiceClient，则创建服务发现器
+            let discover = flare_im_core::discovery::create_discover(&self.service_name)
+                .await
+                .map_err(|e| {
+                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
+                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
+                        .build_error()
+                })?;
+            
+            if let Some(discover) = discover {
+                *service_client_guard = Some(ServiceClient::new(discover));
+            } else {
+                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
+                    .details("Service discovery not configured")
+                    .build_error());
+            }
+        }
+        
+        let service_client = service_client_guard.as_mut().unwrap();
+        let channel = service_client.get_channel().await
+            .map_err(|e| {
                 ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
-                    .details(err.to_string())
+                    .details(format!("Failed to get channel: {}", e))
                     .build_error()
             })?;
+        
+        tracing::debug!("Got channel for push service from service discovery");
+
+        let client = PushServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }

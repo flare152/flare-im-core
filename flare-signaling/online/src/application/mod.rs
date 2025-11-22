@@ -1,3 +1,7 @@
-pub mod services;
+//! 应用服务层（Command / Query）
 
-pub use services::{OnlineStatusService, SubscriptionService, UserService};
+pub mod commands;
+pub mod handlers;
+pub mod queries;
+
+pub use handlers::{OnlineCommandHandler, OnlineQueryHandler};

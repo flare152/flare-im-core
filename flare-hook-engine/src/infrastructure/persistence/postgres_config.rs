@@ -12,7 +12,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool, Row};
 
-use crate::domain::models::{HookConfig, HookConfigItem, HookSelectorConfig, HookTransportConfig};
+use crate::domain::model::{HookConfig, HookConfigItem, HookSelectorConfig, HookTransportConfig};
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 

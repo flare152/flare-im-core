@@ -1,103 +1,111 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, error};
 
-use crate::application::service::SessionApplicationService;
-use crate::config::SessionConfig;
-use crate::domain::repositories::MessageProvider;
-use crate::infrastructure::persistence::redis_presence::RedisPresenceRepository;
-use crate::infrastructure::persistence::redis_repository::RedisSessionRepository;
-use crate::infrastructure::persistence::PostgresSessionRepository;
-use crate::infrastructure::transport::storage_reader::StorageReaderMessageProvider;
-use crate::interface::grpc::handler::SessionGrpcHandler;
-use crate::interface::grpc::server::GrpcServer;
+use flare_server_core::runtime::ServiceRuntime;
 
-pub struct SessionServiceApp {
-    grpc_server: GrpcServer,
-}
+mod wire;
 
-impl SessionServiceApp {
-    pub async fn new() -> Result<Self> {
+pub use wire::ApplicationContext;
+
+/// 应用启动器
+pub struct ApplicationBootstrap;
+
+impl ApplicationBootstrap {
+    /// 运行应用的主入口点
+    pub async fn run() -> Result<()> {
         use flare_im_core::{load_config, ServiceHelper};
         
         // 加载应用配置
         let app_config = load_config(Some("config"));
         let service_config = app_config.session_service();
         
-        // 组合运行时配置（保留以备将来使用）
-        let _runtime_config = app_config.compose_service_config(
-            &service_config.runtime,
-            "flare-session",
-        );
-        
+        info!("Parsing server address...");
         let address: SocketAddr = ServiceHelper::parse_server_addr(
             app_config,
             &service_config.runtime,
             "flare-session",
         )
         .context("invalid session server address")?;
+        info!(address = %address, "Server address parsed successfully");
+        
+        // 使用 Wire 风格的依赖注入构建应用上下文
+        let context = self::wire::initialize(app_config).await?;
+        
+        info!("ApplicationBootstrap created successfully");
+        
+        // 运行服务
+        Self::run_with_context(context, address).await
+    }
 
-        let session_config = Arc::new(
-            SessionConfig::from_app_config(app_config)
-                .context("Failed to load session service configuration")?,
+    /// 运行服务（带应用上下文）
+    async fn run_with_context(
+        context: ApplicationContext,
+        address: SocketAddr,
+    ) -> Result<()> {
+        use flare_proto::session::session_service_server::SessionServiceServer;
+        use tonic::transport::Server;
+
+        let handler = context.handler.clone();
+
+        info!(
+            address = %address,
+            port = %address.port(),
+            "Starting Session gRPC service..."
         );
 
-        let redis_client = Arc::new(redis::Client::open(session_config.redis_url.clone())?);
-
-        // 根据配置选择使用 PostgreSQL 或 Redis 仓库
-        // PostgreSQL 用于会话元数据（创建、更新、删除、查询）
-        // Redis 用于状态和光标（bootstrap、cursor更新）
-        let session_repo: Arc<dyn crate::domain::repositories::SessionRepository> = if let Some(ref postgres_url) = session_config.postgres_url {
-            info!(postgres_url = %postgres_url, "Using PostgreSQL repository for session metadata");
-            // 使用 PostgreSQL 仓库（支持所有操作）
-            let pool = Arc::new(
-                sqlx::PgPool::connect(postgres_url)
+        // 使用 ServiceRuntime 管理服务生命周期
+        let address_clone = address;
+        let runtime = ServiceRuntime::new("session", address)
+            .add_spawn_with_shutdown("session-grpc", move |shutdown_rx| async move {
+                Server::builder()
+                    .add_service(SessionServiceServer::new(handler))
+                    .serve_with_shutdown(address_clone, async move {
+                        info!(
+                            address = %address_clone,
+                            port = %address_clone.port(),
+                            "✅ Session gRPC service is listening"
+                        );
+                        
+                        // 同时监听 Ctrl+C 和关闭通道
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("shutdown signal received (Ctrl+C)");
+                            }
+                            _ = shutdown_rx => {
+                                tracing::info!("shutdown signal received (service registration failed)");
+                            }
+                        }
+                    })
                     .await
-                    .context("Failed to connect to PostgreSQL")?,
-            );
-            Arc::new(PostgresSessionRepository::new(pool, session_config.clone()))
-        } else {
-            info!("PostgreSQL URL not configured, using Redis repository (limited functionality)");
-            // 使用 Redis 仓库（仅支持状态和光标操作）
-            Arc::new(RedisSessionRepository::new(
-                redis_client.clone(),
-                session_config.clone(),
-            ))
-        };
-        let presence_repo = Arc::new(RedisPresenceRepository::new(
-            redis_client.clone(),
-            session_config.clone(),
-        )) as Arc<_>;
+                    .map_err(|e| format!("gRPC server error: {}", e).into())
+            });
 
-        let message_provider: Option<Arc<dyn MessageProvider>> = session_config
-            .storage_reader_endpoint
-            .clone()
-            .map(StorageReaderMessageProvider::new)
-            .map(|provider| Arc::new(provider) as Arc<dyn MessageProvider>);
-
-        let application_service = Arc::new(SessionApplicationService::new(
-            session_repo,
-            presence_repo,
-            message_provider,
-            session_config.clone(),
-        ));
-
-        let handler = SessionGrpcHandler::new(application_service);
-
-        let grpc_server = GrpcServer::new(handler, address);
-
-        Ok(Self { grpc_server })
-    }
-
-    pub async fn run(&self) -> Result<()> {
-        info!(address = %self.grpc_server.address(), "flare-session listening");
-        self.grpc_server.run().await
-    }
-
-    pub fn address(&self) -> SocketAddr {
-        self.grpc_server.address()
+        // 运行服务（带服务注册）
+        runtime.run_with_registration(|addr| {
+            Box::pin(async move {
+                // 注册服务（使用常量）
+                use flare_im_core::service_names::SESSION;
+                match flare_im_core::discovery::register_service_only(SESSION, addr, None).await {
+                    Ok(Some(registry)) => {
+                        info!("✅ Service registered: {}", SESSION);
+                        Ok(Some(registry))
+                    }
+                    Ok(None) => {
+                        info!("Service discovery not configured, skipping registration");
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "❌ Service registration failed"
+                        );
+                        Err(format!("Service registration failed: {}", e).into())
+                    }
+                }
+            })
+        }).await
     }
 }
 

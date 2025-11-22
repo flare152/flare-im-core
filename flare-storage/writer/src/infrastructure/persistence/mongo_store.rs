@@ -8,7 +8,7 @@ use mongodb::{Client, Collection, IndexModel};
 use prost::Message as _;
 
 use crate::config::StorageWriterConfig;
-use crate::domain::repositories::RealtimeStoreRepository;
+use crate::domain::repository::RealtimeStoreRepository;
 
 pub struct MongoMessageStore {
     collection: Collection<Document>,
@@ -67,7 +67,7 @@ async fn ensure_indexes(collection: &Collection<Document>) -> Result<()> {
 
 #[async_trait]
 impl RealtimeStoreRepository for MongoMessageStore {
-    async fn store_realtime(&self, message: &flare_proto::storage::Message) -> Result<()> {
+    async fn store_realtime(&self, message: &flare_proto::common::Message) -> Result<()> {
         // 将 Message 编码为 BSON
         let mut buf = Vec::new();
         message.encode(&mut buf)?;

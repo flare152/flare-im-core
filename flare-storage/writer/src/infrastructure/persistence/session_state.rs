@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 
-use crate::domain::repositories::SessionStateRepository;
+use crate::domain::repository::SessionStateRepository;
 
 pub struct RedisSessionStateRepository {
     client: Arc<redis::Client>,
@@ -22,7 +22,7 @@ impl RedisSessionStateRepository {
 
 #[async_trait]
 impl SessionStateRepository for RedisSessionStateRepository {
-    async fn apply_message(&self, message: &flare_proto::storage::Message) -> Result<()> {
+    async fn apply_message(&self, message: &flare_proto::common::Message) -> Result<()> {
         let mut conn = self.connection().await?;
 
         let session_id = &message.session_id;
@@ -38,10 +38,17 @@ impl SessionStateRepository for RedisSessionStateRepository {
         // 推断 content_type
         let content_type = message.content.as_ref()
             .map(|c| match &c.content {
-                Some(flare_proto::storage::message_content::Content::Text(_)) => "text/plain",
-                Some(flare_proto::storage::message_content::Content::Binary(_)) => "application/octet-stream",
-                Some(flare_proto::storage::message_content::Content::Json(_)) => "application/json",
-                Some(flare_proto::storage::message_content::Content::Custom(_)) => "application/custom",
+                Some(flare_proto::common::message_content::Content::Text(_)) => "text/plain",
+                Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
+                Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
+                Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
+                Some(flare_proto::common::message_content::Content::File(_)) => "application/octet-stream",
+                Some(flare_proto::common::message_content::Content::Location(_)) => "location",
+                Some(flare_proto::common::message_content::Content::Card(_)) => "card",
+                Some(flare_proto::common::message_content::Content::Notification(_)) => "notification",
+                Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
+                Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
+                Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
                 None => "application/unknown",
             })
             .unwrap_or("application/unknown");

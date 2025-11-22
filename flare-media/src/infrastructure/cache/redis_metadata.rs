@@ -8,8 +8,8 @@ use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::domain::models::{FileAccessType, MediaAssetStatus, MediaFileMetadata};
-use crate::domain::repositories::MediaMetadataCache;
+use crate::domain::model::{FileAccessType, MediaAssetStatus, MediaFileMetadata};
+use crate::domain::repository::MediaMetadataCache;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CachedMetadata {

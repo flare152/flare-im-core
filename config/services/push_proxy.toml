@@ -1,7 +1,6 @@
 # Push Proxy 服务配置
 
 [services.push_proxy]
-service_name = "flare-push-proxy"
 kafka = "push"
 message_topic = "push-messages"
 notification_topic = "push-notifications"

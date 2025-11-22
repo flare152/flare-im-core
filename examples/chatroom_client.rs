@@ -1,7 +1,7 @@
 //! # 聊天室客户端示例
 //!
-//! 这是一个基于 Flare IM Core 的聊天室客户端示例，连接到 `flare-access-gateway`，
-//! 支持多人同时在线聊天。
+//! 这是一个基于 Flare IM Core 的聊天室客户端示例，连接到 `flare-signaling-gateway`，
+//! 支持多人同时在线聊天。所有消息都发送到同一个聊天室（session_id: "chatroom"），只支持文本消息。
 //!
 //! ## 使用方法
 //!
@@ -207,18 +207,27 @@ async fn main() -> Result<()> {
                             _ => {}
                         }
 
-                        // 发送消息
+                        // 发送消息（统一使用 "chatroom" 作为 session_id，确保所有消息都发送到同一个聊天室）
+                        let mut metadata = std::collections::HashMap::new();
+                        metadata.insert("session_id".to_string(), "chatroom".as_bytes().to_vec());
+                        metadata.insert("message_type".to_string(), "text".as_bytes().to_vec()); // 只发送文本消息
+                        
                         let cmd = send_message(
                             generate_message_id(),
                             message.into_bytes(),
-                            None,
+                            Some(metadata),
                             None,
                         );
                         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
-                        if let Err(err) = client.send_frame(&frame).await {
-                            error!(?err, "发送消息失败");
-                        } else {
-                            debug!("消息已发送");
+                        match client.send_frame(&frame).await {
+                            Ok(_) => {
+                                debug!("消息已发送");
+                            }
+                            Err(err) => {
+                                error!(?err, "发送消息失败");
+                                println!("\n❌ 发送消息失败: {}", err);
+                                println!("   请检查网络连接或稍后重试");
+                            }
                         }
                     }
                     Err(err) => {
@@ -321,6 +330,40 @@ impl ConnectionObserver for ChatObserver {
                 match parser.parse(data) {
                     Ok(frame) => {
                         if let Some(cmd) = &frame.command {
+                            // 处理通知命令（错误提示等）
+                            if let Some(Type::Notification(notif)) = &cmd.r#type {
+                                if let Ok(notif_type) = NotifType::try_from(notif.r#type) {
+                                    match notif_type {
+                                        NotifType::Alert => {
+                                            // 警告/错误通知
+                                            let title = notif.title.clone();
+                                            let content = String::from_utf8_lossy(&notif.content);
+                                            println!("\n⚠️  [错误] {}: {}", title, content);
+                                            
+                                            // 如果有原始消息ID，显示
+                                            if let Some(msg_id_bytes) = notif.metadata.get("original_message_id") {
+                                                if let Ok(msg_id) = String::from_utf8(msg_id_bytes.clone()) {
+                                                    println!("   原始消息ID: {}", msg_id);
+                                                }
+                                            }
+                                        }
+                                        NotifType::System => {
+                                            // 系统通知
+                                            let title = notif.title.clone();
+                                            let content = String::from_utf8_lossy(&notif.content);
+                                            info!("[系统通知] {}: {}", title, content);
+                                        }
+                                        _ => {
+                                            // 其他类型的通知
+                                            let title = notif.title.clone();
+                                            let content = String::from_utf8_lossy(&notif.content);
+                                            info!("[通知] {}: {}", title, content);
+                                        }
+                                    }
+                                }
+                                return; // 通知已处理，不继续处理消息
+                            }
+                            
                             if let Some(Type::Message(msg)) = &cmd.r#type {
                                 let index = self
                                     .message_count
@@ -328,11 +371,11 @@ impl ConnectionObserver for ChatObserver {
                                     + 1;
                                 
                                 // 尝试解析消息内容
-                                // Access Gateway 发送的 payload 是序列化后的 Storage Message
-                                let (sender, content_text, message_id) = match flare_proto::storage::Message::decode(msg.payload.as_slice()) {
-                                    Ok(storage_msg) => {
-                                        let sender = storage_msg.sender_id.clone();
-                                        let message_id = storage_msg.id.clone();
+                                // Access Gateway 发送的 payload 是序列化后的 Message (common.v1.Message)
+                                let (sender, content_text, _message_id) = match flare_proto::common::Message::decode(msg.payload.as_slice()) {
+                                    Ok(message) => {
+                                        let sender = message.sender_id.clone();
+                                        let message_id = message.id.clone();
                                         
                                         // 检查消息是否已经处理过（去重）
                                         {
@@ -351,24 +394,42 @@ impl ConnectionObserver for ChatObserver {
                                         
                                         // 从 MessageContent 中提取文本内容
                                         // MessageContent 的 oneof 在 prost 中会生成 message_content::Content 枚举
-                                        let content_text = if let Some(ref content) = storage_msg.content {
-                                            // 使用 match 匹配 Content 枚举
+                                        let content_text = if let Some(ref content) = message.content {
+                                            // 使用 match 匹配 Content 枚举（只处理文本消息）
                                             match &content.content {
-                                                Some(flare_proto::storage::message_content::Content::Text(text_content)) => {
+                                                Some(flare_proto::common::message_content::Content::Text(text_content)) => {
                                                     // 文本消息：提取 text 字段
                                                     text_content.text.clone()
                                                 }
-                                                Some(flare_proto::storage::message_content::Content::Binary(binary)) => {
-                                                    // 二进制消息
-                                                    format!("[二进制消息，长度: {} 字节]", binary.len())
+                                                Some(flare_proto::common::message_content::Content::Image(_)) => {
+                                                    "[图片消息]".to_string()
                                                 }
-                                                Some(flare_proto::storage::message_content::Content::Json(json)) => {
-                                                    // JSON 消息
-                                                    json.clone()
+                                                Some(flare_proto::common::message_content::Content::Video(_)) => {
+                                                    "[视频消息]".to_string()
                                                 }
-                                                Some(flare_proto::storage::message_content::Content::Custom(_)) => {
-                                                    // 自定义消息
+                                                Some(flare_proto::common::message_content::Content::Audio(_)) => {
+                                                    "[语音消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::File(_)) => {
+                                                    "[文件消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Location(_)) => {
+                                                    "[位置消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Card(_)) => {
+                                                    "[名片消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Notification(_)) => {
+                                                    "[通知消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Custom(_)) => {
                                                     "[自定义消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Forward(_)) => {
+                                                    "[转发消息]".to_string()
+                                                }
+                                                Some(flare_proto::common::message_content::Content::Typing(_)) => {
+                                                    "[正在输入]".to_string()
                                                 }
                                                 None => {
                                                     // content.content 为空，尝试从原始 payload 提取可读文本

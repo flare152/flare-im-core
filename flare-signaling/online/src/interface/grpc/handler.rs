@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use anyhow::Context;
+use flare_proto::signaling::signaling_service_server::SignalingService;
 use flare_proto::signaling::*;
 use flare_server_core::error::ErrorCode;
 use prost_types::Timestamp;
@@ -8,25 +10,31 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::application::{OnlineStatusService, SubscriptionService};
-use crate::domain::repositories::PresenceWatcher;
+use crate::application::commands::{
+    HeartbeatCommand, LoginCommand, LogoutCommand, PublishSignalCommand, SubscribeCommand,
+    UnsubscribeCommand,
+};
+use crate::application::handlers::{OnlineCommandHandler, OnlineQueryHandler};
+use crate::application::queries::GetOnlineStatusQuery;
+use crate::domain::repository::PresenceWatcher;
 use crate::util;
 
+#[derive(Clone)]
 pub struct OnlineHandler {
-    service: Arc<OnlineStatusService>,
-    subscription_service: Arc<SubscriptionService>,
+    command_handler: Arc<OnlineCommandHandler>,
+    query_handler: Arc<OnlineQueryHandler>,
     presence_watcher: Arc<dyn PresenceWatcher>,
 }
 
 impl OnlineHandler {
     pub fn new(
-        service: Arc<OnlineStatusService>,
-        subscription_service: Arc<SubscriptionService>,
+        command_handler: Arc<OnlineCommandHandler>,
+        query_handler: Arc<OnlineQueryHandler>,
         presence_watcher: Arc<dyn PresenceWatcher>,
     ) -> Self {
         Self {
-            service,
-            subscription_service,
+            command_handler,
+            query_handler,
             presence_watcher,
         }
     }
@@ -35,11 +43,14 @@ impl OnlineHandler {
         &self,
         request: Request<LoginRequest>,
     ) -> std::result::Result<Response<LoginResponse>, Status> {
-        match self.service.login(request.into_inner()).await {
+        let command = LoginCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_login(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "login failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -48,11 +59,14 @@ impl OnlineHandler {
         &self,
         request: Request<LogoutRequest>,
     ) -> std::result::Result<Response<LogoutResponse>, Status> {
-        match self.service.logout(request.into_inner()).await {
+        let command = LogoutCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_logout(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "logout failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -61,12 +75,14 @@ impl OnlineHandler {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> std::result::Result<Response<HeartbeatResponse>, Status> {
-        let req = request.into_inner();
-        match self.service.heartbeat(&req.session_id, &req.user_id).await {
+        let command = HeartbeatCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_heartbeat(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "heartbeat failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -75,12 +91,14 @@ impl OnlineHandler {
         &self,
         request: Request<GetOnlineStatusRequest>,
     ) -> std::result::Result<Response<GetOnlineStatusResponse>, Status> {
-        let req = request.into_inner();
-        match self.service.get_online_status(&req.user_ids).await {
+        let query = GetOnlineStatusQuery {
+            request: request.into_inner(),
+        };
+        match self.query_handler.get_online_status(query).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "get_online_status failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -101,11 +119,14 @@ impl OnlineHandler {
         &self,
         request: Request<SubscribeRequest>,
     ) -> std::result::Result<Response<SubscribeResponse>, Status> {
-        match self.subscription_service.subscribe(request.into_inner()).await {
+        let command = SubscribeCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_subscribe(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "subscribe failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -114,11 +135,14 @@ impl OnlineHandler {
         &self,
         request: Request<UnsubscribeRequest>,
     ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
-        match self.subscription_service.unsubscribe(request.into_inner()).await {
+        let command = UnsubscribeCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_unsubscribe(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "unsubscribe failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -127,11 +151,14 @@ impl OnlineHandler {
         &self,
         request: Request<PublishSignalRequest>,
     ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
-        match self.subscription_service.publish_signal(request.into_inner()).await {
+        let command = PublishSignalCommand {
+            request: request.into_inner(),
+        };
+        match self.command_handler.handle_publish_signal(command).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "publish_signal failed");
-                Err(Status::from(err))
+                Err(Status::internal(err.to_string()))
             }
         }
     }
@@ -197,5 +224,73 @@ impl OnlineHandler {
         });
 
         Ok(Response::new(ReceiverStream::new(stream_rx)))
+    }
+}
+
+#[tonic::async_trait]
+impl SignalingService for OnlineHandler {
+    async fn login(
+        &self,
+        request: Request<LoginRequest>,
+    ) -> std::result::Result<Response<LoginResponse>, Status> {
+        self.handle_login(request).await
+    }
+
+    async fn logout(
+        &self,
+        request: Request<LogoutRequest>,
+    ) -> std::result::Result<Response<LogoutResponse>, Status> {
+        self.handle_logout(request).await
+    }
+
+    async fn heartbeat(
+        &self,
+        request: Request<HeartbeatRequest>,
+    ) -> std::result::Result<Response<HeartbeatResponse>, Status> {
+        self.handle_heartbeat(request).await
+    }
+
+    async fn get_online_status(
+        &self,
+        request: Request<GetOnlineStatusRequest>,
+    ) -> std::result::Result<Response<GetOnlineStatusResponse>, Status> {
+        self.handle_get_online_status(request).await
+    }
+
+    async fn route_message(
+        &self,
+        request: Request<RouteMessageRequest>,
+    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
+        self.handle_route_message(request).await
+    }
+
+    async fn subscribe(
+        &self,
+        request: Request<SubscribeRequest>,
+    ) -> std::result::Result<Response<SubscribeResponse>, Status> {
+        self.handle_subscribe(request).await
+    }
+
+    async fn unsubscribe(
+        &self,
+        request: Request<UnsubscribeRequest>,
+    ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
+        self.handle_unsubscribe(request).await
+    }
+
+    async fn publish_signal(
+        &self,
+        request: Request<PublishSignalRequest>,
+    ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
+        self.handle_publish_signal(request).await
+    }
+
+    type WatchPresenceStream = ReceiverStream<std::result::Result<PresenceEvent, Status>>;
+
+    async fn watch_presence(
+        &self,
+        request: Request<WatchPresenceRequest>,
+    ) -> std::result::Result<Response<Self::WatchPresenceStream>, Status> {
+        self.handle_watch_presence(request).await
     }
 }

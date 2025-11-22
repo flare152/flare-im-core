@@ -1,4 +1,3 @@
 pub mod handler;
-pub mod server;
 
-pub use server::SignalingRouteServer;
+pub use handler::RouteHandler;

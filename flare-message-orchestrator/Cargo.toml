@@ -15,7 +15,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
-flare-server-core = { path = "../../flare-server-core" }
+flare-server-core = { path = "../../flare-server-core", features = ["kafka"] }
 flare-proto = { path = "../../flare-proto" }
 redis = { workspace = true }
 tokio = { workspace = true }

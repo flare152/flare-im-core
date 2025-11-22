@@ -2,11 +2,7 @@ pub mod noop;
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use flare_server_core::error::Result;
-
-use crate::domain::models::PushDispatchTask;
-use crate::domain::repositories::OnlinePushSender;
+use crate::domain::repository::OnlinePushSender;
 
 pub type OnlinePushSenderRef = Arc<dyn OnlinePushSender>;
 

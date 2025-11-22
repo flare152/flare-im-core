@@ -4,21 +4,16 @@
 
 use anyhow::Result;
 use flare_hook_engine::service::bootstrap::{ApplicationBootstrap, HookEngineConfig};
-use flare_hook_engine::domain::models::ExecutionMode;
-use tracing::Level;
-use tracing_subscriber::FmtSubscriber;
-
-/// 初始化日志系统
-fn init_tracing() {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
-        .finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
-}
+use flare_hook_engine::domain::model::ExecutionMode;
+use flare_im_core::{load_config, tracing::init_tracing_from_config};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    // 加载配置（Hook Engine 可能不使用标准配置，但为了统一日志初始化，先加载）
+    let app_config = load_config(Some("config"));
+    
+    // 从配置初始化日志系统（默认 debug 级别）
+    init_tracing_from_config(Some(app_config.logging()));
 
     // 从环境变量读取配置
     let database_url = std::env::var("DATABASE_URL")

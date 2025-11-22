@@ -41,7 +41,7 @@ clean:
 	run-media run-session
 
 run-access-gateway:
-	$(CARGO) run -p flare-access-gateway --bin flare-access-gateway
+	$(CARGO) run -p flare-signaling-gateway --bin flare-signaling-gateway
 
 run-core-gateway:
 	$(CARGO) run -p flare-core-gateway --bin flare-core-gateway

@@ -9,10 +9,31 @@ address = "0.0.0.0"
 port = 50051
 
 [registry]
-registry_type = "etcd"
-endpoints = ["http://localhost:22379"]
+# 注册中心类型：etcd, consul, mesh
+registry_type = "consul"
+# 注册中心端点列表（Consul 默认端口 8500）
+endpoints = ["http://localhost:28500"]
+# 命名空间
 namespace = "flare"
+# TTL（秒）
 ttl = 30
+# 负载均衡策略：round_robin, random, consistent_hash, least_connections
+# 默认：consistent_hash（一致性哈希，推荐用于网关路由）
+load_balance_strategy = "consistent_hash"
+
+[logging]
+# 日志级别：trace, debug, info, warn, error
+# 默认：debug（开发环境推荐，生产环境建议使用 info）
+# 可以通过环境变量 RUST_LOG 覆盖，例如：RUST_LOG=info cargo run
+level = "debug"
+# 是否显示目标模块名称
+with_target = false
+# 是否显示线程ID
+with_thread_ids = true
+# 是否显示文件名
+with_file = true
+# 是否显示行号
+with_line_number = true
 
 [mesh]
 enabled = false

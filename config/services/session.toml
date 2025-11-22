@@ -7,7 +7,6 @@
 # - 所有基础设施配置都在 base.toml 中定义，services 只引用名称
 
 [services.session]
-service_name = "flare-session"
 
 # Redis 配置：引用 base.toml 中的 redis.session_store
 redis = "session_store"
@@ -24,8 +23,7 @@ presence_prefix = "presence:user"
 
 # 消息存储服务配置（可选）
 # 如果配置了，将启用消息同步功能
-# 可以从服务发现或配置中心获取 endpoint
-storage_reader_endpoint = ""  # 例如: "http://localhost:60083" 或通过服务发现获取
+# 通过服务发现自动获取服务地址
 
 # 会话引导配置
 recent_message_limit = 20  # 最近消息数量限制

@@ -1,16 +1,19 @@
-# Access Gateway 服务配置
+# Signaling Gateway 服务配置（原 Access Gateway，位于 flare-signaling/gateway）
 
 [services.access_gateway]
-service_name = "flare-access-gateway"
-signaling_endpoint = "http://localhost:50051"
-message_endpoint = "http://localhost:50081"
-push_endpoint = "http://localhost:50091"
 token_secret = "insecure-secret"
 token_issuer = "flare-im-core"
 token_ttl_seconds = 3600
 token_store = "token_store"
 session_store = "session_store"
 session_store_ttl_seconds = 3600
+
+# Route 服务配置（可选，用于通过 Route 服务路由消息）
+# 默认不使用 Route 服务，保持向后兼容
+# use_route_service = false
+# route_service = "signaling-route"
+# default_svid = "svid.im"
+
 # 跨地区网关路由配置（可选）
 # gateway_id = "gateway-beijing-1"  # 如果不设置，会自动生成
 # region = "beijing"  # 网关所在地区

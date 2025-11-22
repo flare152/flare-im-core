@@ -23,15 +23,15 @@ pub trait StorageClient: Send + Sync {
 }
 
 pub struct GrpcStorageClient {
-    endpoint: String,
+    service_name: String,
     // Note: Storage operations are handled through Message Orchestrator
     // This client is kept for backward compatibility but may not be fully implemented
 }
 
 impl GrpcStorageClient {
-    pub fn new(endpoint: String) -> Arc<Self> {
+    pub fn new(service_name: String) -> Arc<Self> {
         Arc::new(Self {
-            endpoint,
+            service_name,
         })
     }
 }

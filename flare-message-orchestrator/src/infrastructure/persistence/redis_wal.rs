@@ -8,8 +8,8 @@ use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
 use serde::Serialize;
 
-use crate::domain::message_submission::MessageSubmission;
-use crate::domain::repositories::WalRepository;
+use crate::domain::model::MessageSubmission;
+use crate::domain::repository::WalRepository;
 use crate::config::MessageOrchestratorConfig;
 
 #[derive(Serialize)]

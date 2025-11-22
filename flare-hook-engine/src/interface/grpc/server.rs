@@ -9,8 +9,8 @@ use flare_proto::hooks::hook_extension_server::HookExtension;
 use flare_proto::hooks::*;
 use flare_proto::common::{RpcStatus, ErrorContext, ErrorCode as ProtoErrorCode};
 
-use crate::application::service::HookApplicationService;
-use crate::domain::models::HookExecutionPlan;
+use crate::application::handlers::HookCommandHandler;
+use crate::domain::model::HookExecutionPlan;
 use crate::infrastructure::adapters::HookAdapterFactory;
 use crate::infrastructure::adapters::conversion::{
     hook_context_to_proto, message_draft_to_proto, proto_to_message_draft,
@@ -23,19 +23,19 @@ use flare_im_core::{PreSendDecision, HookContext, MessageDraft, MessageRecord, D
 
 /// HookExtension gRPC服务实现
 pub struct HookExtensionServer {
-    application_service: Arc<HookApplicationService>,
+    command_handler: Arc<HookCommandHandler>,
     registry: Arc<CoreHookRegistry>,
     adapter_factory: Arc<HookAdapterFactory>,
 }
 
 impl HookExtensionServer {
     pub fn new(
-        application_service: Arc<HookApplicationService>,
+        command_handler: Arc<HookCommandHandler>,
         registry: Arc<CoreHookRegistry>,
         adapter_factory: Arc<HookAdapterFactory>,
     ) -> Self {
         Self {
-            application_service,
+            command_handler,
             registry,
             adapter_factory,
         }
@@ -129,14 +129,14 @@ impl HookExtensionServer {
     /// * `hook_type` - Hook类型（pre_send, post_send, delivery, recall等）
     async fn create_execution_plan(
         &self,
-        config: crate::domain::models::HookConfigItem,
+        config: crate::domain::model::HookConfigItem,
         hook_type: &str,
     ) -> Result<HookExecutionPlan> {
         let mut plan = HookExecutionPlan::from_hook_config(config.clone(), hook_type);
         
         // 如果配置已启用且不是 Local Plugin，创建适配器
         if config.enabled {
-            if !matches!(config.transport, crate::domain::models::HookTransportConfig::Local { .. }) {
+            if !matches!(config.transport, crate::domain::model::HookTransportConfig::Local { .. }) {
                 let adapter = self.adapter_factory.create_adapter(&config.transport).await?;
                 plan = plan.with_adapter(adapter);
             }
@@ -213,8 +213,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        let decision = self.application_service
-            .execute_pre_send(&ctx, &mut message_draft, execution_plans)
+        let decision = self.command_handler
+            .handle_pre_send(&ctx, &mut message_draft, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
 
@@ -281,8 +281,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        self.application_service
-            .execute_post_send(&ctx, &message_record, &message_draft, execution_plans)
+        self.command_handler
+            .handle_post_send(&ctx, &message_record, &message_draft, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
 
@@ -328,8 +328,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        self.application_service
-            .execute_delivery(&ctx, &delivery_event, execution_plans)
+        self.command_handler
+            .handle_delivery(&ctx, &delivery_event, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
 
@@ -375,8 +375,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        let decision = self.application_service
-            .execute_recall(&ctx, &recall_event, execution_plans)
+        let decision = self.command_handler
+            .handle_recall(&ctx, &recall_event, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
 

@@ -8,7 +8,7 @@ use flare_proto::push::PushMessageRequest;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 
-use crate::domain::repositories::MessageEventPublisher;
+use crate::domain::repository::MessageEventPublisher;
 use crate::config::MessageOrchestratorConfig;
 
 pub struct KafkaMessagePublisher {

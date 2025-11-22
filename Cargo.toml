@@ -4,10 +4,8 @@ members = [
     # 通信核心层 - 统一网关
     "flare-core-gateway",
     
-    # 通信核心层 - 统一接入网关（客户端连接接入、认证、会话管理、消息传输）
-    "flare-access-gateway",
-    
     # 通信核心层 - 信令系统
+    "flare-signaling/gateway",
     "flare-signaling/online",
     "flare-signaling/route",
     
@@ -82,6 +80,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 once_cell = "1.19"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rand = "0.8"
 
 # Service Mesh 和中间件
 tower = "0.5"
@@ -131,6 +130,8 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 base64 = { workspace = true }
+rand = { workspace = true }
+etcd-client = { workspace = true }
 prost-types = { workspace = true }
 chrono = { workspace = true }
 flare-core = { workspace = true }
@@ -145,6 +146,11 @@ tracing-opentelemetry = { version = "0.25", optional = true }
 [features]
 default = []
 tracing = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
+discovery = []  # 服务发现功能（默认启用，但可以通过 feature 控制）
+
+[lints.rust]
+# 允许 tracing feature（用于条件编译）
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("tracing"))'] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

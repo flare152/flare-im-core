@@ -9,7 +9,7 @@ use anyhow::Result;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::domain::models::HookConfig;
+use crate::domain::model::HookConfig;
 use crate::infrastructure::config::loader::{ConfigLoader, ConfigMerger, ConfigValidator};
 
 /// 配置监听器

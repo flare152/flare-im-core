@@ -1,5 +1,7 @@
-pub mod models;
-pub mod repositories;
+pub mod model;
+pub mod repository;
 pub mod service;
 
-pub use service::PushService;
+pub use model::{DispatchNotification, PushDispatchTask, RequestMetadata};
+pub use repository::{OnlineStatus, OnlineStatusRepository, PushTaskPublisher};
+pub use service::PushDomainService;

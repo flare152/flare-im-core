@@ -15,31 +15,30 @@ use flare_proto::media::{
     UploadFileRequest, UploadFileResponse, UploadMultipartChunkRequest,
     UploadMultipartChunkResponse,
 };
-use flare_server_core::error::{ErrorBuilder, ErrorCode, ok_status};
+use flare_server_core::error::ok_status;
 use prost_types::Timestamp;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 
-use crate::application::commands::MediaCommandService;
-use crate::application::queries::MediaQueryService;
-use crate::application::service::{to_proto_file_info, to_proto_reference};
-use crate::domain::models::MediaReferenceScope;
+use crate::application::handlers::{MediaCommandHandler, MediaQueryHandler};
+use crate::application::utils::{to_proto_file_info, to_proto_reference};
+use crate::domain::model::MediaReferenceScope;
 
 #[derive(Clone)]
 pub struct MediaGrpcHandler {
-    command_service: Arc<MediaCommandService>,
-    query_service: Arc<MediaQueryService>,
+    command_handler: Arc<MediaCommandHandler>,
+    query_handler: Arc<MediaQueryHandler>,
 }
 
 impl MediaGrpcHandler {
     pub fn new(
-        command_service: Arc<MediaCommandService>,
-        query_service: Arc<MediaQueryService>,
+        command_handler: Arc<MediaCommandHandler>,
+        query_handler: Arc<MediaQueryHandler>,
     ) -> Self {
         Self {
-            command_service,
-            query_service,
+            command_handler,
+            query_handler,
         }
     }
 }
@@ -77,14 +76,14 @@ impl MediaService for MediaGrpcHandler {
         }
 
         let metadata = self
-            .command_service
-            .upload_file(upload_metadata, payload)
+            .command_handler
+            .handle_upload_file(upload_metadata, payload)
             .await
             .map_err(status_internal)?;
         // 上传完成后，返回预签名URL
         let presigned = self
-            .query_service
-            .get_file_url(flare_proto::media::GetFileUrlRequest {
+            .query_handler
+            .handle_get_file_url(flare_proto::media::GetFileUrlRequest {
                 file_id: metadata.file_id.clone(),
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
@@ -112,8 +111,8 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<InitiateMultipartUploadResponse>, Status> {
         let req = request.into_inner();
         let session = self
-            .command_service
-            .initiate_multipart_upload(req)
+            .command_handler
+            .handle_initiate_multipart_upload(req)
             .await
             .map_err(status_internal)?;
 
@@ -135,8 +134,8 @@ impl MediaService for MediaGrpcHandler {
         let req = request.into_inner();
         let chunk_index = req.chunk_index;
         let session = self
-            .command_service
-            .upload_multipart_chunk(req)
+            .command_handler
+            .handle_upload_multipart_chunk(req)
             .await
             .map_err(status_internal)?;
 
@@ -158,14 +157,14 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<UploadFileResponse>, Status> {
         let req = request.into_inner();
         let metadata = self
-            .command_service
-            .complete_multipart_upload(req)
+            .command_handler
+            .handle_complete_multipart_upload(req)
             .await
             .map_err(status_internal)?;
         // 完成分片上传后也返回预签名URL
         let presigned = self
-            .query_service
-            .get_file_url(flare_proto::media::GetFileUrlRequest {
+            .query_handler
+            .handle_get_file_url(flare_proto::media::GetFileUrlRequest {
                 file_id: metadata.file_id.clone(),
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
@@ -192,8 +191,8 @@ impl MediaService for MediaGrpcHandler {
         request: Request<AbortMultipartUploadRequest>,
     ) -> Result<Response<AbortMultipartUploadResponse>, Status> {
         let req = request.into_inner();
-        self.command_service
-            .abort_multipart_upload(req)
+        self.command_handler
+            .handle_abort_multipart_upload(req)
             .await
             .map_err(status_internal)?;
 
@@ -240,8 +239,8 @@ impl MediaService for MediaGrpcHandler {
         };
 
         let metadata = self
-            .command_service
-            .attach_reference(&req.file_id, scope, req.metadata)
+            .command_handler
+            .handle_attach_reference(&req.file_id, scope, req.metadata)
             .await
             .map_err(status_internal)?;
 
@@ -271,8 +270,8 @@ impl MediaService for MediaGrpcHandler {
         };
 
         let metadata = self
-            .command_service
-            .release_reference(&req.file_id, reference_id)
+            .command_handler
+            .handle_release_reference(&req.file_id, reference_id)
             .await
             .map_err(status_internal)?;
 
@@ -296,8 +295,8 @@ impl MediaService for MediaGrpcHandler {
         }
 
         let references = self
-            .query_service
-            .list_references(&req.file_id)
+            .query_handler
+            .handle_list_references(&req.file_id)
             .await
             .map_err(status_internal)?;
 
@@ -323,8 +322,8 @@ impl MediaService for MediaGrpcHandler {
         let _req = request.into_inner();
 
         let cleaned = self
-            .command_service
-            .cleanup_orphaned_assets()
+            .command_handler
+            .handle_cleanup_orphaned_assets()
             .await
             .map_err(status_internal)?;
 
@@ -345,8 +344,8 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<GetFileUrlResponse>, Status> {
         let req = request.into_inner();
         let presigned = self
-            .query_service
-            .get_file_url(req)
+            .query_handler
+            .handle_get_file_url(req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(GetFileUrlResponse {
@@ -366,8 +365,8 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<GetFileInfoResponse>, Status> {
         let req = request.into_inner();
         let metadata = self
-            .query_service
-            .get_file_info(&req.file_id)
+            .query_handler
+            .handle_get_file_info(&req.file_id)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(GetFileInfoResponse {
@@ -384,8 +383,8 @@ impl MediaService for MediaGrpcHandler {
         request: Request<DeleteFileRequest>,
     ) -> Result<Response<DeleteFileResponse>, Status> {
         let req = request.into_inner();
-        self.command_service
-            .delete_file(req)
+        self.command_handler
+            .handle_delete_file(req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(DeleteFileResponse {
@@ -402,8 +401,8 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<ProcessImageResponse>, Status> {
         let req = request.into_inner();
         let result = self
-            .command_service
-            .process_image(req)
+            .command_handler
+            .handle_process_image(req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(ProcessImageResponse {
@@ -423,8 +422,8 @@ impl MediaService for MediaGrpcHandler {
     ) -> Result<Response<ProcessVideoResponse>, Status> {
         let req = request.into_inner();
         let result = self
-            .command_service
-            .process_video(req)
+            .command_handler
+            .handle_process_video(req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(ProcessVideoResponse {
@@ -467,16 +466,11 @@ impl MediaService for MediaGrpcHandler {
 }
 
 fn status_internal<E: std::fmt::Display>(err: E) -> Status {
-    status_from_code(ErrorCode::InternalError, err.to_string())
+    Status::internal(err.to_string())
 }
 
 fn status_invalid_argument(message: impl Into<String>) -> Status {
-    status_from_code(ErrorCode::InvalidParameter, message.into())
-}
-
-fn status_from_code(code: ErrorCode, message: String) -> Status {
-    let flare_error = ErrorBuilder::new(code, message).build_error();
-    Status::from(flare_error)
+    Status::invalid_argument(message.into())
 }
 
 fn to_proto_timestamp(value: chrono::DateTime<chrono::Utc>) -> Timestamp {

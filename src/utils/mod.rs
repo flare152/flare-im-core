@@ -86,7 +86,7 @@ pub fn extract_timeline_from_extra(
 
 /// 将时间线元数据嵌入到消息的 extra 字段中
 pub fn embed_timeline_in_extra(
-    message: &mut flare_proto::storage::Message,
+    message: &mut flare_proto::common::Message,
     timeline: &TimelineMetadata,
 ) {
     let mut timeline_map = HashMap::new();

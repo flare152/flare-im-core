@@ -4,13 +4,12 @@ use async_trait::async_trait;
 use flare_server_core::error::Result;
 use tracing::info;
 
-use crate::domain::models::PushDispatchTask;
-use crate::domain::repositories::OnlinePushSender;
+use crate::domain::model::PushDispatchTask;
 
 pub struct NoopOnlinePushSender;
 
 #[async_trait]
-impl OnlinePushSender for NoopOnlinePushSender {
+impl crate::domain::repository::OnlinePushSender for NoopOnlinePushSender {
     async fn send(&self, task: &PushDispatchTask) -> Result<()> {
         info!(user_id = %task.user_id, "noop online push sender invoked");
         Ok(())

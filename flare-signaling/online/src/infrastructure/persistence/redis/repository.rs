@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
 
 use crate::config::OnlineConfig;
-use crate::domain::entities::{OnlineStatusRecord, SessionRecord};
-use crate::domain::repositories::SessionRepository;
+use crate::domain::model::{OnlineStatusRecord, SessionRecord};
+use crate::domain::repository::SessionRepository;
 
 const SESSION_KEY_PREFIX: &str = "session";
 
@@ -30,14 +30,7 @@ impl RedisSessionRepository {
     async fn connection(&self) -> Result<ConnectionManager> {
         ConnectionManager::new(self.client.as_ref().clone())
             .await
-            .map_err(|err| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "failed to open redis connection",
-                )
-                .details(err.to_string())
-                .build_error()
-            })
+            .context("failed to open redis connection")
     }
 
     fn to_timestamp(seconds: i64) -> Option<DateTime<Utc>> {
@@ -58,30 +51,21 @@ impl SessionRepository for RedisSessionRepository {
             "device_platform": record.device_platform,
             "last_seen": record.last_seen.timestamp(),
         });
-        let _: () = conn.set(&key, value.to_string()).await.map_err(|err| {
-            ErrorBuilder::new(ErrorCode::DatabaseError, "failed to store session")
-                .details(err.to_string())
-                .build_error()
-        })?;
-        let _: bool = conn
-            .expire(&key, self.config.redis_ttl_seconds as i64)
+        let _: () = conn.set(&key, value.to_string())
             .await
-            .map_err(|err| {
-                ErrorBuilder::new(ErrorCode::DatabaseError, "failed to set session ttl")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            .context("failed to store session")?;
+        let _: bool = conn.expire(&key, self.config.redis_ttl_seconds as i64)
+            .await
+            .context("failed to set session ttl")?;
         Ok(())
     }
 
     async fn remove_session(&self, session_id: &str, user_id: &str) -> Result<()> {
         let mut conn = self.connection().await?;
         let key = self.session_key(user_id);
-        let _: usize = conn.del(&key).await.map_err(|err| {
-            ErrorBuilder::new(ErrorCode::DatabaseError, "failed to delete session")
-                .details(err.to_string())
-                .build_error()
-        })?;
+        let _: usize = conn.del(&key)
+            .await
+            .context("failed to delete session")?;
         tracing::info!(%session_id, %user_id, "session removed from redis");
         Ok(())
     }
@@ -89,14 +73,9 @@ impl SessionRepository for RedisSessionRepository {
     async fn touch_session(&self, user_id: &str) -> Result<()> {
         let mut conn = self.connection().await?;
         let key = self.session_key(user_id);
-        let _: bool = conn
-            .expire(&key, self.config.redis_ttl_seconds as i64)
+        let _: bool = conn.expire(&key, self.config.redis_ttl_seconds as i64)
             .await
-            .map_err(|err| {
-                ErrorBuilder::new(ErrorCode::DatabaseError, "failed to refresh session ttl")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            .context("failed to refresh session ttl")?;
         Ok(())
     }
 
@@ -108,20 +87,12 @@ impl SessionRepository for RedisSessionRepository {
         let mut result = HashMap::new();
         for user_id in user_ids {
             let key = self.session_key(user_id);
-            let value: Option<String> = conn.get(&key).await.map_err(|err| {
-                ErrorBuilder::new(ErrorCode::DatabaseError, "failed to read session")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            let value: Option<String> = conn.get(&key)
+                .await
+                .context("failed to read session")?;
             if let Some(payload) = value {
-                let json: serde_json::Value = serde_json::from_str(&payload).map_err(|err| {
-                    ErrorBuilder::new(
-                        ErrorCode::DeserializationError,
-                        "failed to decode session json",
-                    )
-                    .details(err.to_string())
-                    .build_error()
-                })?;
+                let json: serde_json::Value = serde_json::from_str(&payload)
+                    .context("failed to decode session json")?;
                 let last_seen = json
                     .get("last_seen")
                     .and_then(|v| v.as_i64())
@@ -160,21 +131,13 @@ impl SessionRepository for RedisSessionRepository {
     async fn get_user_sessions(&self, user_id: &str) -> Result<Vec<SessionRecord>> {
         let mut conn = self.connection().await?;
         let key = self.session_key(user_id);
-        let value: Option<String> = conn.get(&key).await.map_err(|err| {
-            ErrorBuilder::new(ErrorCode::DatabaseError, "failed to read session")
-                .details(err.to_string())
-                .build_error()
-        })?;
+        let value: Option<String> = conn.get(&key)
+            .await
+            .context("failed to read session")?;
         
         if let Some(payload) = value {
-            let json: serde_json::Value = serde_json::from_str(&payload).map_err(|err| {
-                ErrorBuilder::new(
-                    ErrorCode::DeserializationError,
-                    "failed to decode session json",
-                )
-                .details(err.to_string())
-                .build_error()
-            })?;
+            let json: serde_json::Value = serde_json::from_str(&payload)
+                .context("failed to decode session json")?;
             
             let last_seen = json
                 .get("last_seen")
@@ -225,21 +188,13 @@ impl SessionRepository for RedisSessionRepository {
         // 未来如果需要支持多设备，可以扩展为Hash结构存储多个设备会话
         if let Some(device_ids) = device_ids {
             // 获取当前会话
-            let value: Option<String> = conn.get(&key).await.map_err(|err| {
-                ErrorBuilder::new(ErrorCode::DatabaseError, "failed to read session")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            let value: Option<String> = conn.get(&key)
+                .await
+                .context("failed to read session")?;
             
             if let Some(payload) = value {
-                let json: serde_json::Value = serde_json::from_str(&payload).map_err(|err| {
-                    ErrorBuilder::new(
-                        ErrorCode::DeserializationError,
-                        "failed to decode session json",
-                    )
-                    .details(err.to_string())
-                    .build_error()
-                })?;
+                let json: serde_json::Value = serde_json::from_str(&payload)
+                    .context("failed to decode session json")?;
                 
                 let current_device_id = json
                     .get("device_id")
@@ -248,20 +203,16 @@ impl SessionRepository for RedisSessionRepository {
                 
                 // 只删除匹配的设备
                 if device_ids.contains(&current_device_id.to_string()) {
-                    let _: usize = conn.del(&key).await.map_err(|err| {
-                        ErrorBuilder::new(ErrorCode::DatabaseError, "failed to delete session")
-                            .details(err.to_string())
-                            .build_error()
-                    })?;
+                    let _: usize = conn.del(&key)
+                        .await
+                        .context("failed to delete session")?;
                 }
             }
         } else {
             // 删除所有会话
-            let _: usize = conn.del(&key).await.map_err(|err| {
-                ErrorBuilder::new(ErrorCode::DatabaseError, "failed to delete session")
-                    .details(err.to_string())
-                    .build_error()
-            })?;
+            let _: usize = conn.del(&key)
+                .await
+                .context("failed to delete session")?;
         }
         
         Ok(())
@@ -272,11 +223,11 @@ impl SessionRepository for RedisSessionRepository {
         Ok(sessions.into_iter().find(|s| s.device_id == device_id))
     }
 
-    async fn list_user_devices(&self, user_id: &str) -> Result<Vec<crate::domain::entities::DeviceInfo>> {
+    async fn list_user_devices(&self, user_id: &str) -> Result<Vec<crate::domain::model::DeviceInfo>> {
         let sessions = self.get_user_sessions(user_id).await?;
-        let devices: Vec<crate::domain::entities::DeviceInfo> = sessions
+        let devices: Vec<crate::domain::model::DeviceInfo> = sessions
             .into_iter()
-            .map(|s| crate::domain::entities::DeviceInfo {
+            .map(|s| crate::domain::model::DeviceInfo {
                 device_id: s.device_id,
                 platform: s.device_platform,
                 model: None,
@@ -287,9 +238,9 @@ impl SessionRepository for RedisSessionRepository {
         Ok(devices)
     }
 
-    async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<crate::domain::entities::DeviceInfo>> {
+    async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<crate::domain::model::DeviceInfo>> {
         let session = self.get_session_by_device(user_id, device_id).await?;
-        Ok(session.map(|s| crate::domain::entities::DeviceInfo {
+        Ok(session.map(|s| crate::domain::model::DeviceInfo {
             device_id: s.device_id,
             platform: s.device_platform,
             model: None,

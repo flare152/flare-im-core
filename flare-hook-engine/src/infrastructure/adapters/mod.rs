@@ -3,10 +3,11 @@
 //! 提供Hook适配器的创建和管理
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use anyhow::{Context, Result};
 
-use crate::domain::models::{HookTransportConfig, LoadBalanceStrategy};
+use crate::domain::model::{HookTransportConfig, LoadBalanceStrategy};
 use crate::infrastructure::adapters::grpc::GrpcHookAdapter;
 use crate::infrastructure::adapters::local::LocalHookAdapter;
 use crate::infrastructure::adapters::webhook::WebhookHookAdapter;
@@ -19,22 +20,23 @@ pub mod webhook;
 /// Hook适配器工厂
 pub struct HookAdapterFactory {
     /// 服务注册发现（可选，用于服务发现模式）
-    service_registry: Option<Arc<dyn flare_server_core::registry::ServiceRegistryTrait>>,
+    /// 使用新的统一服务发现接口
+    service_client: Option<Arc<Mutex<flare_server_core::ServiceClient>>>,
 }
 
 impl HookAdapterFactory {
     pub fn new() -> Self {
         Self {
-            service_registry: None,
+            service_client: None,
         }
     }
 
     /// 设置服务注册发现
-    pub fn with_service_registry(
+    pub fn with_service_client(
         mut self,
-        registry: Option<Arc<dyn flare_server_core::registry::ServiceRegistryTrait>>,
+        client: Option<Arc<Mutex<flare_server_core::ServiceClient>>>,
     ) -> Self {
-        self.service_registry = registry;
+        self.service_client = client;
         self
     }
 
@@ -56,10 +58,10 @@ impl HookAdapterFactory {
             } => {
                 // 优先级1: 服务发现模式（推荐，生产环境）
                 if let Some(service_name) = service_name {
-                    if let Some(registry) = &self.service_registry {
+                    if let Some(service_client) = &self.service_client {
                         let strategy = load_balance.unwrap_or(LoadBalanceStrategy::RoundRobin);
-                        let adapter = GrpcHookAdapter::new_from_service_discovery(
-                            registry.clone(),
+                        let adapter = GrpcHookAdapter::new_from_service_client(
+                            service_client.clone(),
                             service_name.clone(),
                             strategy,
                             metadata.clone(),
@@ -71,7 +73,7 @@ impl HookAdapterFactory {
                         // 如果没有注册中心但配置了 service_name，给出警告并使用 endpoint fallback
                         tracing::warn!(
                             service_name = %service_name,
-                            "Service registry not available, falling back to endpoint mode"
+                            "Service client not available, falling back to endpoint mode"
                         );
                     }
                 }
