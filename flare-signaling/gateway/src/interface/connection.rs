@@ -311,11 +311,54 @@ impl LongConnectionHandler {
 
     /// 刷新连接对应会话的心跳
     pub async fn refresh_session(&self, connection_id: &str) -> Result<()> {
+        use flare_proto::signaling::HeartbeatRequest;
+        
         if let Some(user_id) = self.user_id_for_connection(connection_id).await {
             let sessions = self.session_store.find_by_user(&user_id).await?;
             for session in sessions {
                 if session.connection_id.as_deref() == Some(connection_id) {
+                    // 1. 更新 Redis 中的会话信息
                     let _ = self.session_store.touch(&session.session_id).await?;
+                    
+                    // 2. 调用 Signaling Online 服务的心跳接口，更新在线状态
+                    let heartbeat_request = HeartbeatRequest {
+                        user_id: user_id.clone(),
+                        session_id: session.session_id.clone(),
+                        context: None,
+                        tenant: None,
+                    };
+                    
+                    // 添加超时保护，避免阻塞
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        self.signaling_gateway.heartbeat(heartbeat_request)
+                    ).await {
+                        Ok(Ok(_)) => {
+                            debug!(
+                                user_id = %user_id,
+                                session_id = %session.session_id,
+                                connection_id = %connection_id,
+                                "Heartbeat sent to Signaling Online service"
+                            );
+                        },
+                        Ok(Err(e)) => {
+                            warn!(
+                                error = %e,
+                                user_id = %user_id,
+                                session_id = %session.session_id,
+                                connection_id = %connection_id,
+                                "Failed to send heartbeat to Signaling Online service"
+                            );
+                        },
+                        Err(_) => {
+                            warn!(
+                                user_id = %user_id,
+                                session_id = %session.session_id,
+                                connection_id = %connection_id,
+                                "Timeout sending heartbeat to Signaling Online service (3s)"
+                            );
+                        }
+                    }
                 }
             }
         }
