@@ -1,7 +1,7 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::domain::repository::SessionStateRepository;
@@ -19,6 +19,7 @@ impl RedisSessionStateRepository {
         Ok(ConnectionManager::new(self.client.as_ref().clone()).await?)
     }
 }
+
 
 #[async_trait]
 impl SessionStateRepository for RedisSessionStateRepository {
@@ -43,12 +44,17 @@ impl SessionStateRepository for RedisSessionStateRepository {
                 Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
                 Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
                 Some(flare_proto::common::message_content::Content::File(_)) => "application/octet-stream",
-                Some(flare_proto::common::message_content::Content::Location(_)) => "location",
-                Some(flare_proto::common::message_content::Content::Card(_)) => "card",
-                Some(flare_proto::common::message_content::Content::Notification(_)) => "notification",
+                Some(flare_proto::common::message_content::Content::Location(_)) => "application/location",
+                Some(flare_proto::common::message_content::Content::Card(_)) => "application/card",
+                Some(flare_proto::common::message_content::Content::Notification(_)) => "application/notification",
                 Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
-                Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
-                Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
+                Some(flare_proto::common::message_content::Content::Forward(_)) => "application/forward",
+                Some(flare_proto::common::message_content::Content::Typing(_)) => "application/typing",
+                Some(flare_proto::common::message_content::Content::Vote(_)) => "application/vote",
+                Some(flare_proto::common::message_content::Content::Task(_)) => "application/task",
+                Some(flare_proto::common::message_content::Content::Schedule(_)) => "application/schedule",
+                Some(flare_proto::common::message_content::Content::Announcement(_)) => "application/announcement",
+                Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "application/system_event",
                 None => "application/unknown",
             })
             .unwrap_or("application/unknown");

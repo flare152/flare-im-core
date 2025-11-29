@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use async_trait::async_trait;
 use flare_server_core::kafka::build_kafka_producer;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde_json::{to_vec, json};
@@ -35,6 +35,7 @@ impl KafkaPushTaskPublisher {
         })
     }
 }
+
 
 #[async_trait]
 impl PushTaskPublisher for KafkaPushTaskPublisher {

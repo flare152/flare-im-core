@@ -13,7 +13,7 @@ pub struct MediaAttachmentMetadata {
     pub cdn_url: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PreparedMessage {
     pub session_id: String,
     pub message_id: String,

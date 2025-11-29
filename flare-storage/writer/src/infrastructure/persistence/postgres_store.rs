@@ -68,6 +68,8 @@ impl PostgresMessageStore {
                 recalled_at TIMESTAMP WITH TIME ZONE,
                 is_burn_after_read BOOLEAN DEFAULT FALSE,
                 burn_after_seconds INTEGER,
+                seq BIGINT,
+                updated_at TIMESTAMP WITH TIME ZONE,
                 visibility JSONB,
                 read_by JSONB,
                 operations JSONB,
@@ -151,6 +153,26 @@ impl PostgresMessageStore {
         .execute(&self.pool)
         .await?;
 
+        // 为 seq 字段创建索引（用于按会话查询消息时排序）
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_session_seq 
+            ON messages(session_id, seq)
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 为 updated_at 字段创建索引（用于查询最近更新的消息）
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_updated_at 
+            ON messages(updated_at DESC)
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 如果使用 TimescaleDB，转换为 Hypertable（与 deploy/init.sql 保持一致）
         let _ = sqlx::query(
             r#"
@@ -200,6 +222,11 @@ impl ArchiveStoreRepository for PostgresMessageStore {
                 Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
                 Some(flare_proto::common::message_content::Content::Forward(_)) => "application/forward",
                 Some(flare_proto::common::message_content::Content::Typing(_)) => "application/typing",
+                Some(flare_proto::common::message_content::Content::Vote(_)) => "application/vote",
+                Some(flare_proto::common::message_content::Content::Task(_)) => "application/task",
+                Some(flare_proto::common::message_content::Content::Schedule(_)) => "application/schedule",
+                Some(flare_proto::common::message_content::Content::Announcement(_)) => "application/announcement",
+                Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "application/system_event",
                 None => "application/unknown",
             })
             .unwrap_or_else(|| {
@@ -344,6 +371,199 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+    
+    /// 批量存储消息（优化性能）
+    async fn store_archive_batch(&self, messages: &[Message]) -> Result<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        
+        // 对于小批量，使用循环插入（避免复杂的批量 SQL 构建）
+        // 对于大批量，使用批量插入
+        if messages.len() <= 10 {
+            // 小批量：逐个插入（简单且可靠）
+            for message in messages {
+                self.store_archive(message).await?;
+            }
+            return Ok(());
+        }
+        
+        // 大批量：使用事务批量插入
+        let mut tx = self.pool.begin().await?;
+        
+        for message in messages {
+            let timestamp = message
+                .timestamp
+                .as_ref()
+                .and_then(|ts| timestamp_to_datetime(ts))
+                .unwrap_or_else(|| Utc::now());
+            
+            // 构建 extra JSONB 字段（复用单条插入的逻辑）
+            let mut extra_value = serde_json::Map::new();
+            if let Some(ref tenant) = message.tenant {
+                extra_value.insert("tenant_id".to_string(), serde_json::Value::String(tenant.tenant_id.clone()));
+            }
+            let source_str = match MessageSource::from_i32(message.source) {
+                Some(MessageSource::User) => "user",
+                Some(MessageSource::System) => "system",
+                Some(MessageSource::Bot) => "bot",
+                Some(MessageSource::Admin) => "admin",
+                _ => "",
+            };
+            if !source_str.is_empty() {
+                extra_value.insert("sender_type".to_string(), serde_json::Value::String(source_str.to_string()));
+            }
+            if !message.receiver_id.is_empty() {
+                extra_value.insert("receiver_id".to_string(), serde_json::Value::String(message.receiver_id.clone()));
+            }
+            if !message.session_type.is_empty() {
+                extra_value.insert("session_type".to_string(), serde_json::Value::String(message.session_type.clone()));
+            }
+            if !message.tags.is_empty() {
+                extra_value.insert("tags".to_string(), serde_json::Value::Array(
+                    message.tags.iter().map(|t| serde_json::Value::String(t.clone())).collect()
+                ));
+            }
+            if !message.attributes.is_empty() {
+                for (k, v) in &message.attributes {
+                    extra_value.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+            if let Ok(existing_extra) = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(to_value(&message.extra)?) {
+                for (k, v) in existing_extra {
+                    extra_value.insert(k, v);
+                }
+            }
+            
+            let content_type = message.content.as_ref()
+                .map(|c| match &c.content {
+                    Some(flare_proto::common::message_content::Content::Text(_)) => "text/plain",
+                    Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
+                    Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
+                    Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
+                    Some(flare_proto::common::message_content::Content::File(_)) => "application/octet-stream",
+                    Some(flare_proto::common::message_content::Content::Location(_)) => "application/location",
+                    Some(flare_proto::common::message_content::Content::Card(_)) => "application/card",
+                    Some(flare_proto::common::message_content::Content::Notification(_)) => "application/notification",
+                    Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
+                    Some(flare_proto::common::message_content::Content::Forward(_)) => "application/forward",
+                    Some(flare_proto::common::message_content::Content::Typing(_)) => "application/typing",
+                    Some(flare_proto::common::message_content::Content::Vote(_)) => "application/vote",
+                    Some(flare_proto::common::message_content::Content::Task(_)) => "application/task",
+                    Some(flare_proto::common::message_content::Content::Schedule(_)) => "application/schedule",
+                    Some(flare_proto::common::message_content::Content::Announcement(_)) => "application/announcement",
+                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "application/system_event",
+                    None => "application/unknown",
+                })
+                .unwrap_or_else(|| {
+                    match message.content_type {
+                        x if x == ContentType::PlainText as i32 => "text/plain",
+                        x if x == ContentType::RichText as i32 => "text/html",
+                        x if x == ContentType::Markdown as i32 => "text/markdown",
+                        x if x == ContentType::Html as i32 => "text/html",
+                        x if x == ContentType::Json as i32 => "application/json",
+                        _ => "application/unknown",
+                    }
+                });
+            
+            let content_bytes = message.content.as_ref()
+                .map(|c| {
+                    let mut buf = Vec::new();
+                    c.encode(&mut buf).unwrap_or_default();
+                    buf
+                })
+                .unwrap_or_default();
+            
+            let message_type_str = MessageType::from_i32(message.message_type)
+                .map(|mt| match mt {
+                    MessageType::Text => "text",
+                    MessageType::Image => "image",
+                    MessageType::Video => "video",
+                    MessageType::Audio => "audio",
+                    MessageType::File => "file",
+                    MessageType::Location => "location",
+                    MessageType::Card => "card",
+                    MessageType::Custom => "custom",
+                    MessageType::Notification => "notification",
+                    MessageType::Typing => "typing",
+                    MessageType::Recall => "recall",
+                    MessageType::Read => "read",
+                    MessageType::Forward => "forward",
+                    _ => "unknown",
+                })
+                .map(|s| s.to_string());
+            
+            let seq: Option<i64> = extra_value
+                .get("seq")
+                .and_then(|v| v.as_i64());
+            
+            let status_str = MessageStatus::from_i32(message.status)
+                .map(|s| match s {
+                    MessageStatus::Created => "created",
+                    MessageStatus::Sent => "sent",
+                    MessageStatus::Delivered => "delivered",
+                    MessageStatus::Read => "read",
+                    MessageStatus::Failed => "failed",
+                    MessageStatus::Recalled => "recalled",
+                    _ => "unknown",
+                })
+                .unwrap_or("unknown");
+            
+            sqlx::query(
+                r#"
+                INSERT INTO messages (
+                    id, session_id, sender_id, receiver_ids, content, timestamp,
+                    extra, created_at, message_type, content_type, business_type,
+                    status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
+                    seq, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                ON CONFLICT (timestamp, id) DO UPDATE
+                SET session_id = EXCLUDED.session_id,
+                    sender_id = EXCLUDED.sender_id,
+                    receiver_ids = EXCLUDED.receiver_ids,
+                    content = EXCLUDED.content,
+                    content_type = EXCLUDED.content_type,
+                    status = EXCLUDED.status,
+                    extra = EXCLUDED.extra,
+                    business_type = EXCLUDED.business_type,
+                    message_type = EXCLUDED.message_type,
+                    seq = EXCLUDED.seq,
+                    updated_at = EXCLUDED.updated_at
+                "#,
+            )
+            .bind(&message.id)
+            .bind(&message.session_id)
+            .bind(&message.sender_id)
+            .bind(to_value(&message.receiver_ids)?)
+            .bind(&content_bytes)
+            .bind(timestamp)
+            .bind(to_value(&extra_value)?)
+            .bind(timestamp) // created_at
+            .bind(message_type_str.as_deref())
+            .bind(content_type)
+            .bind(&message.business_type)
+            .bind(status_str)
+            .bind(message.is_recalled)
+            .bind(message.recalled_at.as_ref().and_then(|ts| timestamp_to_datetime(ts)))
+            .bind(message.is_burn_after_read)
+            .bind(message.burn_after_seconds)
+            .bind(seq)
+            .bind(timestamp) // updated_at
+            .execute(&mut *tx)
+            .await?;
+        }
+        
+        tx.commit().await?;
+        
+        tracing::info!(
+            batch_size = messages.len(),
+            "Successfully batch inserted {} messages into PostgreSQL",
+            messages.len()
+        );
+        
         Ok(())
     }
 }

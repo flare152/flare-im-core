@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use redis::{AsyncCommands, aio::ConnectionManager};
 
@@ -12,6 +11,7 @@ use crate::domain::model::{
     SessionSummary,
 };
 use crate::domain::repository::SessionRepository;
+use async_trait::async_trait;
 
 pub struct RedisSessionRepository {
     client: Arc<redis::Client>,
@@ -39,6 +39,7 @@ impl RedisSessionRepository {
         format!("{}:{}", self.config.user_cursor_prefix, user_id)
     }
 }
+
 
 #[async_trait]
 impl SessionRepository for RedisSessionRepository {

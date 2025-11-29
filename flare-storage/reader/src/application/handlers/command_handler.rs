@@ -80,6 +80,18 @@ impl MessageStorageCommandHandler {
             .await
     }
 
+    /// 设置消息属性并追加一条操作审计记录
+    #[instrument(skip(self), fields(message_id = %command.message_id, operation_type = %operation.operation_type))]
+    pub async fn handle_set_attributes_with_operation(
+        &self,
+        command: SetMessageAttributesCommand,
+        operation: flare_proto::common::MessageOperation,
+    ) -> Result<()> {
+        self.domain_service
+            .append_operation_and_attributes(&command.message_id, operation, command.attributes, command.tags)
+            .await
+    }
+
     /// 清理会话
     #[instrument(skip(self), fields(session_id = %command.session_id))]
     pub async fn handle_clear_session(
@@ -105,4 +117,3 @@ impl MessageStorageCommandHandler {
         Ok(export_task_id)
     }
 }
-

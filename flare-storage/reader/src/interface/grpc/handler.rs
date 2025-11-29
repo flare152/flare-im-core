@@ -60,8 +60,11 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 let message_count = messages.len() as i32;
                 // 构建简单的游标（基于最后一条消息）
                 let next_cursor = messages.last()
-                    .and_then(|msg| msg.timestamp.as_ref())
-                    .map(|ts| format!("{}:{}", ts.seconds, messages.last().unwrap().id.clone()))
+                    .and_then(|msg| {
+                        msg.timestamp.as_ref().map(|ts| {
+                            format!("{}:{}", ts.seconds, msg.id.clone())
+                        })
+                    })
                     .unwrap_or_default();
                 let has_more = message_count >= req.limit;
                 
@@ -372,18 +375,62 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<SetMessageAttributesRequest>,
     ) -> Result<Response<SetMessageAttributesResponse>, Status> {
         let req = request.into_inner();
+        let attributes_map: std::collections::HashMap<String, String> = req.attributes.into_iter().collect();
         let command = SetMessageAttributesCommand {
-            message_id: req.message_id,
-            attributes: req.attributes.into_iter().collect(),
-            tags: req.tags,
+            message_id: req.message_id.clone(),
+            attributes: attributes_map.clone(),
+            tags: req.tags.clone(),
         };
 
-        match self.command_handler.handle_set_message_attributes(command).await {
+        // 从上下文提取操作者ID
+        let operator_id = req
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.actor.as_ref())
+            .map(|actor| actor.actor_id.clone())
+            .unwrap_or_default();
+
+        // 判定操作类型
+        let operation_type = if attributes_map.keys().any(|k| k.starts_with("edit")) {
+            "edit"
+        } else if attributes_map.keys().any(|k| k.starts_with("reaction:")) {
+            "reaction"
+        } else if attributes_map.keys().any(|k| k.starts_with("reply")) {
+            "reply"
+        } else if attributes_map.keys().any(|k| k.starts_with("thread")) {
+            "thread"
+        } else {
+            "attributes_update"
+        };
+
+        // 构造操作记录
+        let now = chrono::Utc::now();
+        let operation = flare_proto::common::MessageOperation {
+            operation_type: operation_type.to_string(),
+            operator_id,
+            operated_at: Some(prost_types::Timestamp {
+                seconds: now.timestamp(),
+                nanos: now.timestamp_subsec_nanos() as i32,
+            }),
+            target_user_id: String::new(),
+            metadata: {
+                let mut meta = std::collections::HashMap::new();
+                // 记录变更的属性键列表
+                meta.insert("keys".to_string(), attributes_map.keys().cloned().collect::<Vec<_>>().join(","));
+                meta
+            },
+        };
+
+        match self
+            .command_handler
+            .handle_set_attributes_with_operation(command, operation)
+            .await
+        {
             Ok(()) => Ok(Response::new(SetMessageAttributesResponse {
                 status: Some(flare_server_core::error::ok_status()),
             })),
             Err(err) => {
-                error!(error = ?err, "Failed to set message attributes");
+                error!(error = ?err, "Failed to set message attributes with operation");
                 Err(Status::internal(err.to_string()))
             }
         }

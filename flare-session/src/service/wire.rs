@@ -86,8 +86,9 @@ pub async fn initialize(
             let service_client = flare_server_core::discovery::ServiceClient::new(discover);
             StorageReaderMessageProvider::with_service_client(service_client)
         } else {
-            tracing::warn!("Storage Reader service discovery not configured, message sync will not work");
-            return Err(anyhow::anyhow!("Storage Reader service discovery is required for message sync"));
+            // Fallback: construct provider with service name; provider will try env direct connect
+            tracing::warn!("Storage Reader service discovery not configured, using env fallback");
+            StorageReaderMessageProvider::new(storage_reader_service)
         };
         
         Some(Arc::new(provider) as Arc<dyn MessageProvider + Send + Sync>)

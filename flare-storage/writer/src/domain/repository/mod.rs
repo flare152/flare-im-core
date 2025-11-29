@@ -7,8 +7,7 @@ use flare_proto::common::Message;
 use crate::domain::events::AckEvent;
 use crate::domain::model::MediaAttachmentMetadata;
 
-// Rust 2024: trait 中直接使用 async fn
-// 注意：对于 trait 对象（dyn Trait），仍需要使用 async_trait
+// Rust 2024: trait 中直接使用 async fn（原生支持，包括 trait 对象）
 #[async_trait]
 pub trait MessageIdempotencyRepository: Send + Sync {
     async fn is_new(&self, message_id: &str) -> Result<bool>;
@@ -17,16 +16,43 @@ pub trait MessageIdempotencyRepository: Send + Sync {
 #[async_trait]
 pub trait HotCacheRepository: Send + Sync {
     async fn store_hot(&self, message: &Message) -> Result<()>;
+    
+    /// 批量存储消息（优化性能）
+    async fn store_hot_batch(&self, messages: &[Message]) -> Result<()> {
+        // 默认实现：逐个存储（子类可以覆盖以优化）
+        for message in messages {
+            self.store_hot(message).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 pub trait RealtimeStoreRepository: Send + Sync {
     async fn store_realtime(&self, message: &Message) -> Result<()>;
+    
+    /// 批量存储消息（优化性能）
+    async fn store_realtime_batch(&self, messages: &[Message]) -> Result<()> {
+        // 默认实现：逐个存储（子类可以覆盖以优化）
+        for message in messages {
+            self.store_realtime(message).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 pub trait ArchiveStoreRepository: Send + Sync {
     async fn store_archive(&self, message: &Message) -> Result<()>;
+    
+    /// 批量存储消息（优化性能）
+    async fn store_archive_batch(&self, messages: &[Message]) -> Result<()> {
+        // 默认实现：逐个存储（子类可以覆盖以优化）
+        for message in messages {
+            self.store_archive(message).await?;
+        }
+        Ok(())
+    }
     
     /// 获取 Any trait 引用（用于向下转型）
     fn as_any(&self) -> &dyn std::any::Any;

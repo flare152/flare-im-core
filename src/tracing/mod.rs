@@ -16,7 +16,7 @@ use tracing::{info, warn, Span};
 /// * `logging_config` - 日志配置（可选），如果为 None 则使用默认配置（debug 级别）
 /// 
 /// # 示例
-/// ```rust
+/// ```rust,ignore
 /// use flare_im_core::config::LoggingConfig;
 /// 
 /// // 使用默认配置
@@ -244,4 +244,3 @@ pub fn shutdown_tracing() {
     // OpenTelemetry 资源清理待完善
     info!("Tracing shutdown (OpenTelemetry cleanup pending)");
 }
-

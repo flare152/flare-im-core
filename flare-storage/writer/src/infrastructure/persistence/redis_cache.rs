@@ -1,7 +1,7 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use prost::Message as _;
 use redis::{AsyncCommands, aio::ConnectionManager};

@@ -5,7 +5,8 @@
 // 推送命令
 mod push_commands {
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH, Instant};
+    use std::time::Instant;
+    use chrono::Utc;
 
     use flare_proto::access_gateway::{
         BatchPushMessageRequest, BatchPushMessageResponse, BatchPushOptions, BatchPushStatistics,
@@ -128,10 +129,7 @@ mod push_commands {
                         failure_count: 0,
                         error_message: "User is offline".to_string(),
                         pushed_at: Some(prost_types::Timestamp {
-                            seconds: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs() as i64,
+                            seconds: Utc::now().timestamp(),
                             nanos: 0,
                         }),
                     });
@@ -153,10 +151,7 @@ mod push_commands {
                             failure_count: 0,
                             error_message: format!("Failed to get connections: {}", e),
                             pushed_at: Some(prost_types::Timestamp {
-                                seconds: SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs() as i64,
+                                seconds: Utc::now().timestamp(),
                                 nanos: 0,
                             }),
                         });
@@ -173,10 +168,7 @@ mod push_commands {
                         failure_count: 0,
                         error_message: "No matching connections".to_string(),
                         pushed_at: Some(prost_types::Timestamp {
-                            seconds: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs() as i64,
+                            seconds: Utc::now().timestamp(),
                             nanos: 0,
                         }),
                     });
@@ -248,10 +240,7 @@ mod push_commands {
                             gateway_id: self.gateway_id.clone(),
                             ack_type: "push_ack".to_string(),
                             status: ack_status.to_string(),
-                            timestamp: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs() as i64,
+                            timestamp: Utc::now().timestamp(),
                         };
                         
                         if let Err(e) = ack_publisher.publish_ack(&ack_event).await {
@@ -281,10 +270,7 @@ mod push_commands {
                     failure_count: domain_result.failure_count,
                     error_message: domain_result.error_message,
                     pushed_at: Some(prost_types::Timestamp {
-                        seconds: SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as i64,
+                        seconds: Utc::now().timestamp(),
                         nanos: 0,
                     }),
                 });
@@ -353,104 +339,40 @@ mod push_commands {
 
                 while let Some((idx, result)) = stream.next().await {
                     total_tasks += 1;
-                    match result {
-                        Ok(response) => {
-                            success_tasks += 1;
-                            total_users += response.statistics.as_ref().map(|s| s.total_users).unwrap_or(0);
-                            success_users += response
-                                .statistics
-                                .as_ref()
-                                .map(|s| s.success_count)
-                                .unwrap_or(0);
-                            failure_users += response
-                                .statistics
-                                .as_ref()
-                                .map(|s| s.failure_count)
-                                .unwrap_or(0);
-                            results.push(response);
-
-                            if options.fail_fast && failure_users > 0 {
-                                failure_tasks += (pushes_len - idx - 1) as i32;
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            // 立即转换为 String，避免 Send 问题
-                            let error_msg = err.to_string();
-                            
-                            failure_tasks += 1;
-                            failure_users += 1;
-                            tracing::error!(error = %error_msg, task_index = idx, "Failed to process batch push task");
-
-                            if options.fail_fast {
-                                failure_tasks += (pushes_len - idx - 1) as i32;
-                                break;
-                            }
-
-                            // 返回错误响应
-                            use flare_server_core::error::{to_rpc_status, ErrorBuilder, ErrorCode};
-                            let flare_error = ErrorBuilder::new(ErrorCode::InternalError, error_msg)
-                                .build_error();
-                            let error_status = to_rpc_status(&flare_error);
-                            results.push(PushMessageResponse {
-                                results: vec![],
-                                status: Some(error_status),
-                                statistics: None,
-                            });
-                        }
+                    let should_break = self.process_batch_push_result(
+                        result,
+                        idx,
+                        pushes_len,
+                        &mut results,
+                        &mut success_tasks,
+                        &mut failure_tasks,
+                        &mut total_users,
+                        &mut success_users,
+                        &mut failure_users,
+                        &options,
+                    );
+                    if should_break {
+                        break;
                     }
                 }
             } else {
                 // 串行推送
                 for push in pushes {
                     total_tasks += 1;
-                    match self
-                        .handle_push_message(PushMessageCommand {
-                            request: push,
-                        })
-                        .await
-                    {
-                        Ok(response) => {
-                            success_tasks += 1;
-                            total_users += response.statistics.as_ref().map(|s| s.total_users).unwrap_or(0);
-                            success_users += response
-                                .statistics
-                                .as_ref()
-                                .map(|s| s.success_count)
-                                .unwrap_or(0);
-                            failure_users += response
-                                .statistics
-                                .as_ref()
-                                .map(|s| s.failure_count)
-                                .unwrap_or(0);
-                            results.push(response);
-
-                            if options.fail_fast && failure_users > 0 {
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            // 立即转换为 String，避免 Send 问题
-                            let error_msg = err.to_string();
-                            
-                            failure_tasks += 1;
-                            failure_users += 1;
-                            tracing::error!(error = %error_msg, "Failed to process batch push task");
-
-                            if options.fail_fast {
-                                break;
-                            }
-
-                            use flare_server_core::error::{to_rpc_status, ErrorBuilder, ErrorCode};
-                            let flare_error = ErrorBuilder::new(ErrorCode::InternalError, error_msg)
-                                .build_error();
-                            let error_status = to_rpc_status(&flare_error);
-                            results.push(PushMessageResponse {
-                                results: vec![],
-                                status: Some(error_status),
-                                statistics: None,
-                            });
-                        }
+                    let should_break = self.process_batch_push_result(
+                        self.handle_push_message(PushMessageCommand { request: push }).await,
+                        0, // 串行模式下不使用索引
+                        pushes_len,
+                        &mut results,
+                        &mut success_tasks,
+                        &mut failure_tasks,
+                        &mut total_users,
+                        &mut success_users,
+                        &mut failure_users,
+                        &options,
+                    );
+                    if should_break {
+                        break;
                     }
                 }
             }
@@ -477,6 +399,78 @@ mod push_commands {
                 ack_publisher: self.ack_publisher.clone(),
                 gateway_id: self.gateway_id.clone(),
                 metrics: Arc::clone(&self.metrics),
+            }
+        }
+
+        /// 处理批量推送结果（内部辅助函数）
+        /// 
+        /// 提取统计信息收集和错误处理逻辑，减少代码重复
+        /// 返回是否应该中断处理（fail_fast 模式）
+        fn process_batch_push_result(
+            &self,
+            result: Result<PushMessageResponse>,
+            task_index: usize,
+            total_tasks: usize,
+            results: &mut Vec<PushMessageResponse>,
+            success_tasks: &mut i32,
+            failure_tasks: &mut i32,
+            total_users: &mut i32,
+            success_users: &mut i32,
+            failure_users: &mut i32,
+            options: &BatchPushOptions,
+        ) -> bool {
+            match result {
+                Ok(response) => {
+                    *success_tasks += 1;
+                    if let Some(ref stats) = response.statistics {
+                        *total_users += stats.total_users;
+                        *success_users += stats.success_count;
+                        *failure_users += stats.failure_count;
+                    }
+                    results.push(response);
+
+                    // 检查 fail_fast 条件
+                    if options.fail_fast && *failure_users > 0 {
+                        if task_index > 0 {
+                            // 并行模式下，计算剩余任务数
+                            *failure_tasks += (total_tasks - task_index - 1) as i32;
+                        }
+                        return true;
+                    }
+                    false
+                }
+                Err(err) => {
+                    // 立即转换为 String，避免 Send 问题
+                    let error_msg = err.to_string();
+                    
+                    *failure_tasks += 1;
+                    *failure_users += 1;
+                    tracing::error!(
+                        error = %error_msg,
+                        task_index = task_index,
+                        "Failed to process batch push task"
+                    );
+
+                    if options.fail_fast {
+                        if task_index > 0 {
+                            // 并行模式下，计算剩余任务数
+                            *failure_tasks += (total_tasks - task_index - 1) as i32;
+                        }
+                        return true;
+                    }
+
+                    // 返回错误响应
+                    use flare_server_core::error::{to_rpc_status, ErrorBuilder, ErrorCode};
+                    let flare_error = ErrorBuilder::new(ErrorCode::InternalError, error_msg)
+                        .build_error();
+                    let error_status = to_rpc_status(&flare_error);
+                    results.push(PushMessageResponse {
+                        results: vec![],
+                        status: Some(error_status),
+                        statistics: None,
+                    });
+                    false
+                }
             }
         }
     }

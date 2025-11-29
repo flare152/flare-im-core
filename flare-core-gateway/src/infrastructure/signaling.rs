@@ -12,6 +12,7 @@ use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
+
 #[async_trait]
 pub trait SignalingClient: Send + Sync {
     async fn login(&self, request: LoginRequest) -> Result<LoginResponse>;
@@ -90,6 +91,7 @@ impl GrpcSignalingClient {
         Ok(client)
     }
 }
+
 
 #[async_trait]
 impl SignalingClient for GrpcSignalingClient {

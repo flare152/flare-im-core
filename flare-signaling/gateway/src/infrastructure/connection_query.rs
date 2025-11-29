@@ -25,6 +25,7 @@ impl ManagerConnectionQuery {
     }
 }
 
+
 #[async_trait]
 impl ConnectionQuery for ManagerConnectionQuery {
     async fn query_user_connections(&self, user_id: &str) -> Result<Vec<ConnectionInfo>> {

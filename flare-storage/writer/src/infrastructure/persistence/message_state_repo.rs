@@ -3,13 +3,13 @@
 //! 负责存储和查询用户对消息的私有行为（已读、删除、阅后即焚）
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
 use crate::domain::repository::MessageStateRepository;
+use async_trait::async_trait;
 
 /// PostgreSQL 消息状态仓储实现
 pub struct PostgresMessageStateRepository {
@@ -21,6 +21,7 @@ impl PostgresMessageStateRepository {
         Self { pool }
     }
 }
+
 
 #[async_trait]
 impl MessageStateRepository for PostgresMessageStateRepository {

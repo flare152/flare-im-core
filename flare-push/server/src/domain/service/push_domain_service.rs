@@ -471,7 +471,12 @@ impl PushDomainService {
                             // 从 metadata 中提取所有 message_id（必需字段，不再降级）
                             let message_ids_str: Vec<String> = push_request.metadata
                                 .get("message_ids")
-                                .expect("message_ids must be in metadata")
+                                .ok_or_else(|| {
+                                    flare_server_core::error::ErrorBuilder::new(
+                                        flare_server_core::error::ErrorCode::InvalidParameter,
+                                        "message_ids must be in metadata"
+                                    ).build_error()
+                                })?
                                 .split(',')
                                 .map(|s| s.to_string())
                                 .collect();

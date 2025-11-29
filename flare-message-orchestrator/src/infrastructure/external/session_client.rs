@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 use anyhow::{Result, Context};
-use async_trait::async_trait;
 use flare_proto::session::session_service_client::SessionServiceClient;
 use flare_proto::session::{CreateSessionRequest, SessionParticipant, SessionVisibility};
 use flare_proto::common::{RequestContext, ActorContext, ActorType};
@@ -12,6 +11,7 @@ use tracing::{debug, warn};
 use crate::domain::repository::SessionRepository;
 
 /// Session 服务客户端实现
+#[derive(Debug)]
 pub struct GrpcSessionClient {
     client: Arc<tokio::sync::Mutex<SessionServiceClient<Channel>>>,
 }
@@ -24,7 +24,6 @@ impl GrpcSessionClient {
     }
 }
 
-#[async_trait]
 impl SessionRepository for GrpcSessionClient {
     async fn ensure_session(
         &self,

@@ -277,7 +277,9 @@ impl KafkaConsumerConfig for StorageWriterConfig {
     }
     
     fn auto_offset_reset(&self) -> &str {
-        "earliest"
+        // 开发阶段：从最新位置开始消费，跳过旧的有问题的消息
+        // 生产环境应该改为 "earliest" 以确保不丢失消息
+        "latest"
     }
 }
 

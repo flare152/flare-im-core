@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use prost::Message;
 use redis::AsyncCommands;
@@ -19,6 +18,7 @@ struct WalEntrySnapshot {
     persisted: bool,
 }
 
+#[derive(Debug)]
 pub struct RedisWalRepository {
     client: Arc<redis::Client>,
     config: Arc<MessageOrchestratorConfig>,
@@ -39,7 +39,6 @@ impl RedisWalRepository {
     }
 }
 
-#[async_trait]
 impl WalRepository for RedisWalRepository {
     async fn append(&self, submission: &MessageSubmission) -> Result<()> {
         let wal_key = match &self.config.wal_hash_key {

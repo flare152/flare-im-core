@@ -22,6 +22,8 @@ pub struct PushAckEvent {
 }
 
 /// ACK发布器trait
+
+/// ACK 发布器（需要作为 trait 对象使用，保留 async-trait）
 #[async_trait]
 pub trait AckPublisher: Send + Sync {
     async fn publish_ack(&self, event: &PushAckEvent) -> Result<()>;
@@ -72,6 +74,7 @@ impl KafkaAckPublisher {
     }
 }
 
+
 #[async_trait]
 impl AckPublisher for KafkaAckPublisher {
     async fn publish_ack(&self, event: &PushAckEvent) -> Result<()> {
@@ -119,6 +122,7 @@ impl AckPublisher for KafkaAckPublisher {
 
 /// Noop ACK发布器（用于测试或禁用ACK上报）
 pub struct NoopAckPublisher;
+
 
 #[async_trait]
 impl AckPublisher for NoopAckPublisher {

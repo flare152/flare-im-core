@@ -7,3 +7,6 @@ pub mod session_repo;
 pub mod session_state;
 pub mod user_cursor;
 pub mod message_state_repo;
+
+#[cfg(test)]
+mod postgres_store_test;

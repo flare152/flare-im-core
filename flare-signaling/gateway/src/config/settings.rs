@@ -23,6 +23,9 @@ pub struct AccessGatewayConfig {
     // 跨地区网关路由配置
     pub gateway_id: Option<String>,
     pub region: Option<String>,
+    // 消息大小限制配置
+    pub max_message_size_bytes: usize,  // 最大消息大小（字节），默认 10MB
+    pub max_text_content_length: usize, // 最大文本内容长度（字符），默认 100KB
 }
 
 impl AccessGatewayConfig {
@@ -130,6 +133,17 @@ impl AccessGatewayConfig {
             .ok()
             .or_else(|| service.region.clone());
 
+        // 消息大小限制配置（从环境变量或使用默认值）
+        let max_message_size_bytes = std::env::var("GATEWAY_MAX_MESSAGE_SIZE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10 * 1024 * 1024); // 默认 10MB
+
+        let max_text_content_length = std::env::var("GATEWAY_MAX_TEXT_CONTENT_LENGTH")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100 * 1024); // 默认 100KB 字符
+
         Self {
             signaling_service,
             route_service,
@@ -149,6 +163,8 @@ impl AccessGatewayConfig {
             ack_topic,
             gateway_id,
             region,
+            max_message_size_bytes,
+            max_text_content_length,
         }
     }
 }

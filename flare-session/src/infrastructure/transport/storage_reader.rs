@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use flare_proto::common::TenantContext;
 use flare_proto::storage::QueryMessagesRequest;
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
@@ -8,11 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::Request;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, Endpoint};
 
 use crate::domain::model::MessageSyncResult;
 use crate::domain::repository::MessageProvider;
-
+use async_trait::async_trait;
 pub struct StorageReaderMessageProvider {
     service_name: String,
     service_client: Arc<Mutex<Option<ServiceClient>>>,
@@ -51,11 +50,24 @@ impl StorageReaderMessageProvider {
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
-                return Err(anyhow::anyhow!("Service discovery not configured"));
+                // Fallback: direct gRPC address via env STORAGE_READER_GRPC_ADDR
+                let addr = std::env::var("STORAGE_READER_GRPC_ADDR")
+                    .ok()
+                    .unwrap_or_else(|| "127.0.0.1:60083".to_string());
+                let endpoint = Endpoint::from_shared(format!("http://{}", addr))
+                    .map_err(|e| anyhow::anyhow!("create endpoint: {}", e))?;
+                let channel = endpoint
+                    .connect()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("connect storage reader: {}", e))?;
+                tracing::warn!(address = %addr, "Using STORAGE_READER_GRPC_ADDR fallback for storage reader");
+                return Ok(StorageReaderServiceClient::new(channel));
             }
         }
         
-        let service_client = service_client_guard.as_mut().unwrap();
+        let service_client = service_client_guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Service client not initialized")
+        })?;
         let channel = service_client.get_channel().await
             .map_err(|e| anyhow::anyhow!("Failed to get channel from service discovery: {}", e))?;
         
@@ -113,6 +125,7 @@ impl StorageReaderMessageProvider {
         }
     }
 }
+
 
 #[async_trait]
 impl MessageProvider for StorageReaderMessageProvider {

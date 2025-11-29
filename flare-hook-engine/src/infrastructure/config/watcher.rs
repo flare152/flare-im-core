@@ -10,19 +10,19 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::domain::model::HookConfig;
-use crate::infrastructure::config::loader::{ConfigLoader, ConfigMerger, ConfigValidator};
+use crate::infrastructure::config::loader::{ConfigLoaderItem, ConfigMerger, ConfigValidator};
 
 /// 配置监听器
 ///
 /// 监听配置变更并自动重新加载配置
 pub struct ConfigWatcher {
-    loaders: Vec<Arc<dyn ConfigLoader>>,
+    loaders: Vec<Arc<ConfigLoaderItem>>,
     current_config: Arc<RwLock<HookConfig>>,
     refresh_interval: Duration,
 }
 
 impl ConfigWatcher {
-    pub fn new(loaders: Vec<Arc<dyn ConfigLoader>>, refresh_interval: Duration) -> Self {
+    pub fn new(loaders: Vec<Arc<ConfigLoaderItem>>, refresh_interval: Duration) -> Self {
         Self {
             loaders,
             current_config: Arc::new(RwLock::new(HookConfig::default())),
@@ -80,7 +80,7 @@ impl ConfigWatcher {
         Ok(())
     }
     
-    async fn load_all(loaders: &[Arc<dyn ConfigLoader>]) -> Result<HookConfig> {
+    async fn load_all(loaders: &[Arc<ConfigLoaderItem>]) -> Result<HookConfig> {
         let mut configs = Vec::new();
         
         for loader in loaders {

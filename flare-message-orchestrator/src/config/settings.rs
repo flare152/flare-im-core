@@ -11,6 +11,9 @@ pub struct MessageOrchestratorConfig {
     pub kafka_storage_topic: String,  // 存储队列: flare.im.message.created
     pub kafka_push_topic: String,    // 推送队列: flare.im.push.tasks
     pub kafka_timeout_ms: u64,
+    // 批量发送配置
+    pub kafka_batch_size: usize,     // 批量发送大小
+    pub kafka_flush_interval_ms: u64, // 刷新间隔（毫秒）
     pub redis_url: Option<String>,
     pub wal_hash_key: Option<String>,
     pub wal_ttl_seconds: u64,
@@ -86,6 +89,21 @@ impl MessageOrchestratorConfig {
                 .and_then(|profile| profile.timeout_ms)
         })
         .unwrap_or(5000);
+
+        // 批量发送配置
+        let kafka_batch_size = env_or_fallback(
+            "MESSAGE_ORCHESTRATOR_KAFKA_BATCH_SIZE",
+            "KAFKA_BATCH_SIZE",
+        )
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(100); // 默认批量大小：100
+
+        let kafka_flush_interval_ms = env_or_fallback(
+            "MESSAGE_ORCHESTRATOR_KAFKA_FLUSH_INTERVAL_MS",
+            "KAFKA_FLUSH_INTERVAL_MS",
+        )
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50); // 默认刷新间隔：50ms
 
         let redis_url = env_or_fallback("MESSAGE_ORCHESTRATOR_REDIS_URL", "STORAGE_REDIS_URL")
             .or_else(|| redis_profile.as_ref().map(|profile| profile.url.clone()));
@@ -174,6 +192,8 @@ impl MessageOrchestratorConfig {
             kafka_storage_topic,
             kafka_push_topic,
             kafka_timeout_ms,
+            kafka_batch_size,
+            kafka_flush_interval_ms,
             redis_url,
             wal_hash_key,
             wal_ttl_seconds,

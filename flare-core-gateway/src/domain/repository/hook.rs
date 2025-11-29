@@ -3,14 +3,13 @@
 //! 提供Hook配置数据的持久化访问接口。
 
 use anyhow::Result;
-use async_trait::async_trait;
 use sqlx::{PgPool, FromRow};
 use tracing::debug;
 use serde_json;
 use chrono::{DateTime, Utc};
 
 /// Hook配置仓储接口
-#[async_trait]
+
 pub trait HookConfigRepository: Send + Sync {
     /// 获取租户的所有Hook配置
     async fn get_hook_configs(&self, tenant_id: &str) -> Result<Vec<HookConfigRecord>>;
@@ -59,7 +58,7 @@ impl HookConfigRepositoryImpl {
     }
 }
 
-#[async_trait]
+
 impl HookConfigRepository for HookConfigRepositoryImpl {
     async fn get_hook_configs(&self, tenant_id: &str) -> Result<Vec<HookConfigRecord>> {
         let records = sqlx::query_as::<_, HookConfigRecord>(

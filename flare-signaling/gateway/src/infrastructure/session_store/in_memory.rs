@@ -19,6 +19,7 @@ impl InMemorySessionStore {
     }
 }
 
+
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
     async fn insert(&self, session: Session) -> Result<()> {

@@ -2,6 +2,9 @@
 
 CARGO ?= cargo
 
+# 自动检测 protoc 路径
+PROTOC ?= $(shell which protoc || echo "/opt/homebrew/bin/protoc" || echo "/usr/local/bin/protoc" || echo "")
+
 .PHONY: help build fmt lint check test clean
 
 help:
@@ -14,9 +17,19 @@ help:
 	@echo "  test            cargo test"
 	@echo "  clean           cargo clean"
 	@echo "  run-<service>   Start service (see list below)"
+	@echo ""
+	@echo "Environment variables:"
+	@echo "  PROTOC          Path to protoc binary (auto-detected: $(PROTOC))"
 
 build:
-	$(CARGO) build --all
+	@if [ -z "$(PROTOC)" ] || [ ! -f "$(PROTOC)" ]; then \
+		echo "❌ Error: protoc not found. Please install protobuf:"; \
+		echo "   macOS: brew install protobuf"; \
+		echo "   Or set PROTOC environment variable to protoc path"; \
+		exit 1; \
+	fi
+	@echo "📦 Using protoc: $(PROTOC)"
+	PROTOC=$(PROTOC) $(CARGO) build --all
 
 fmt:
 	$(CARGO) fmt --all

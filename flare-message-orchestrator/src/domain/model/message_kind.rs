@@ -44,6 +44,11 @@ impl MessageProfile {
                         }
                         Some(flare_proto::common::message_content::Content::Forward(_)) => Some("forward".to_string()),
                         Some(flare_proto::common::message_content::Content::Typing(_)) => Some("typing".to_string()),
+                        Some(flare_proto::common::message_content::Content::Vote(_)) => Some("vote".to_string()),
+                        Some(flare_proto::common::message_content::Content::Task(_)) => Some("task".to_string()),
+                        Some(flare_proto::common::message_content::Content::Schedule(_)) => Some("schedule".to_string()),
+                        Some(flare_proto::common::message_content::Content::Announcement(_)) => Some("announcement".to_string()),
+                        Some(flare_proto::common::message_content::Content::SystemEvent(_)) => Some("system_event".to_string()),
                         None => None,
                     }
                 } else {
@@ -66,6 +71,10 @@ impl MessageProfile {
             "recall" => MessageType::Recall,
             "read" => MessageType::Read,
             "forward" => MessageType::Forward,
+            "vote" => MessageType::Vote,
+            "task" => MessageType::Task,
+            "schedule" => MessageType::Schedule,
+            "announcement" => MessageType::Announcement,
             "custom" | "json" | "sticker" | "command" | "event" | "system" => MessageType::Custom,
             _ => MessageType::Unspecified,
         };

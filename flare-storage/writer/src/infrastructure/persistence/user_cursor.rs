@@ -1,7 +1,7 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::domain::repository::UserSyncCursorRepository;
@@ -19,6 +19,7 @@ impl RedisUserCursorRepository {
         Ok(ConnectionManager::new(self.client.as_ref().clone()).await?)
     }
 }
+
 
 #[async_trait]
 impl UserSyncCursorRepository for RedisUserCursorRepository {

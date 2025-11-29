@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
 
 use crate::config::OnlineConfig;
 use crate::domain::repository::SubscriptionRepository;
+use async_trait::async_trait;
 
 const SUBSCRIPTION_KEY_PREFIX: &str = "subscription";
 const TOPIC_SUBSCRIBERS_KEY_PREFIX: &str = "topic:subscribers";
@@ -36,6 +36,7 @@ impl RedisSubscriptionRepository {
             .context("failed to open redis connection")
     }
 }
+
 
 #[async_trait]
 impl SubscriptionRepository for RedisSubscriptionRepository {

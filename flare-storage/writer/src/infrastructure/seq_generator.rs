@@ -10,9 +10,9 @@
 //! 4. **降级方案**：Redis 不可用时，自动降级到数据库
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 use std::sync::Arc;
+use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use crate::domain::repository::SeqGenerator as SeqGeneratorTrait;

@@ -9,6 +9,13 @@ use anyhow::{Context, Result};
 use crate::application::handlers::{HookCommandHandler, HookQueryHandler};
 use crate::domain::service::HookOrchestrationService;
 use crate::infrastructure::adapters::HookAdapterFactory;
+use crate::infrastructure::config::loader::{
+    ConfigCenterLoader,
+    ConfigLoaderItem,
+    DatabaseConfigLoader,
+    FileConfigLoader,
+};
+use crate::infrastructure::config::ConfigWatcher;
 use crate::infrastructure::monitoring::{ExecutionRecorder, MetricsCollector};
 use crate::interface::grpc::{HookExtensionServer, HookServiceServer};
 use crate::service::bootstrap::HookEngineConfig;
@@ -31,18 +38,22 @@ pub struct ApplicationContext {
 /// * `ApplicationContext` - 构建好的应用上下文
 pub async fn initialize(config: HookEngineConfig) -> Result<ApplicationContext> {
     // 1. 创建配置加载器（按优先级从低到高）
-    let mut loaders: Vec<Arc<dyn crate::infrastructure::config::ConfigLoader>> = Vec::new();
+    let mut loaders: Vec<Arc<ConfigLoaderItem>> = Vec::new();
     
     // 配置文件（最低优先级）
     if let Some(ref path) = config.config_file {
-        loaders.push(Arc::new(crate::infrastructure::config::FileConfigLoader::new(path.clone())));
+        loaders.push(Arc::new(ConfigLoaderItem::File(FileConfigLoader::new(
+            path.clone(),
+        ))));
     }
     
     // 配置中心（中等优先级）
     if let Some(ref endpoint) = config.config_center_endpoint {
-        loaders.push(Arc::new(crate::infrastructure::config::ConfigCenterLoader::new(
+        loaders.push(Arc::new(ConfigLoaderItem::ConfigCenter(
+            ConfigCenterLoader::new(
             endpoint.clone(),
             config.tenant_id.clone(),
+            ),
         )));
     }
     
@@ -59,9 +70,11 @@ pub async fn initialize(config: HookEngineConfig) -> Result<ApplicationContext> 
             .context("Failed to initialize database schema")?;
         
         let repository_clone = repository.clone();
-        loaders.push(Arc::new(crate::infrastructure::config::DatabaseConfigLoader::new(
+        loaders.push(Arc::new(ConfigLoaderItem::Database(
+            DatabaseConfigLoader::new(
             repository_clone,
             config.tenant_id.clone(),
+            ),
         )));
         
         Some(repository)
@@ -70,7 +83,7 @@ pub async fn initialize(config: HookEngineConfig) -> Result<ApplicationContext> 
     };
     
     // 2. 创建配置监听器
-    let config_watcher = Arc::new(crate::infrastructure::config::ConfigWatcher::new(
+    let config_watcher = Arc::new(ConfigWatcher::new(
         loaders,
         std::time::Duration::from_secs(config.refresh_interval_secs),
     ));

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use flare_server_core::error::Result;
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::domain::model::PushDispatchTask;
@@ -12,6 +12,7 @@ pub struct OnlineStatus {
     pub gateway_id: Option<String>,
     pub server_id: Option<String>,
 }
+
 
 #[async_trait]
 pub trait OnlineStatusRepository: Send + Sync {
@@ -38,6 +39,7 @@ pub trait OnlineStatusRepository: Send + Sync {
     /// 自动查询该聊天室的所有在线用户进行推送。
     async fn get_all_online_users_for_session(&self, session_id: &str) -> Result<Vec<String>>;
 }
+
 
 #[async_trait]
 pub trait PushTaskPublisher: Send + Sync {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use mongodb::bson::{Document, doc};
 use mongodb::options::{ClientOptions, IndexOptions, UpdateOptions};
 use mongodb::{Client, Collection, IndexModel};
@@ -64,6 +64,7 @@ async fn ensure_indexes(collection: &Collection<Document>) -> Result<()> {
 
     Ok(())
 }
+
 
 #[async_trait]
 impl RealtimeStoreRepository for MongoMessageStore {

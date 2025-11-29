@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_server_core::kafka::build_kafka_producer;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
+use async_trait::async_trait;
 
 use crate::domain::repositories::PushEventPublisher;
 use crate::infrastructure::config::PushProxyConfig;
@@ -28,6 +28,7 @@ impl KafkaPushEventPublisher {
         })
     }
 }
+
 
 #[async_trait]
 impl PushEventPublisher for KafkaPushEventPublisher {

@@ -22,6 +22,7 @@ impl TenantRepositoryImpl {
     }
 }
 
+
 #[async_trait]
 impl TenantRepository for TenantRepositoryImpl {
     async fn tenant_exists(&self, tenant_id: &str) -> Result<bool> {

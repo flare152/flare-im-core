@@ -527,10 +527,47 @@ impl MessageStorageDomainService {
         attributes: HashMap<String, String>,
         tags: Vec<String>,
     ) -> Result<()> {
+        // 默认行为：仅更新属性与标签
         self.storage
             .update_message_attributes(message_id, attributes, tags)
             .await
             .map_err(|e| anyhow!("Failed to set message attributes: {}", e))
+    }
+
+    /// 追加一条操作记录并同时更新属性与标签
+    #[instrument(skip(self), fields(message_id = %message_id, operation_type = %operation.operation_type))]
+    pub async fn append_operation_and_attributes(
+        &self,
+        message_id: &str,
+        operation: flare_proto::common::MessageOperation,
+        attributes: HashMap<String, String>,
+        tags: Vec<String>,
+    ) -> Result<()> {
+        // 读取当前消息以获取已有操作记录
+        let current = self.storage
+            .get_message(message_id)
+            .await
+            .map_err(|e| anyhow!("Failed to get message for operation append: {}", e))?;
+
+        let mut operations = current
+            .map(|m| m.operations)
+            .unwrap_or_default();
+        operations.push(operation);
+
+        let updates = crate::domain::model::MessageUpdate {
+            is_recalled: None,
+            recalled_at: None,
+            visibility: None,
+            read_by: None,
+            operations: Some(operations),
+            attributes: Some(attributes),
+            tags: Some(tags),
+        };
+
+        self.storage
+            .update_message(message_id, updates)
+            .await
+            .map_err(|e| anyhow!("Failed to update message with operation: {}", e))
     }
 
     /// 清理会话
@@ -566,4 +603,3 @@ impl MessageStorageDomainService {
         Ok(cleared_count)
     }
 }
-

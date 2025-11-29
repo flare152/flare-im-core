@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use async_trait::async_trait;
+use anyhow::Context;
 use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
 use flare_proto::signaling::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, HeartbeatRequest, HeartbeatResponse,
@@ -62,7 +62,9 @@ impl GrpcSignalingGateway {
             }
         }
         
-        let service_client = service_client_guard.as_mut().unwrap();
+        let service_client = service_client_guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Service client not initialized")
+        })?;
         let channel = service_client.get_channel().await
             .map_err(|e| {
                 ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
@@ -77,6 +79,7 @@ impl GrpcSignalingGateway {
         Ok(client)
     }
 }
+
 
 #[async_trait]
 impl SignalingGateway for GrpcSignalingGateway {

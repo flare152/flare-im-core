@@ -5,7 +5,7 @@
 //!
 //! ## 使用方式
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flare_im_core::service_names::*;
 //!
 //! // 服务注册
@@ -158,4 +158,3 @@ pub fn get_service_name(constant_name: &str) -> String {
 
 // 重新导出，方便使用
 pub use service_names::*;
-

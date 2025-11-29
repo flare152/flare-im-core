@@ -59,10 +59,7 @@ impl crate::domain::repository::DlqPublisher for KafkaDlqPublisher {
         let dlq_message = serde_json::json!({
             "task": task,
             "error": error,
-            "timestamp": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
+            "timestamp": chrono::Utc::now().timestamp(),
         });
 
         let payload = serde_json::to_vec(&dlq_message).map_err(|e| {

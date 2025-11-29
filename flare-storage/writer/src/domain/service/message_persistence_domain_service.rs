@@ -225,6 +225,108 @@ impl MessagePersistenceDomainService {
         Ok(())
     }
 
+    /// 批量持久化消息到存储（优化性能）
+    #[instrument(skip(self), fields(batch_size = prepared.len()))]
+    pub async fn persist_batch(&self, mut prepared: Vec<PreparedMessage>) -> Result<()> {
+        if prepared.is_empty() {
+            return Ok(());
+        }
+        
+        // 1. 批量生成 seq
+        let mut seqs = Vec::with_capacity(prepared.len());
+        if let Some(generator) = &self.seq_generator {
+            for p in &mut prepared {
+                let seq = generator.generate_seq(&p.session_id).await?;
+                embed_seq_in_message(&mut p.message, seq);
+                seqs.push(seq);
+            }
+        } else {
+            seqs = vec![0; prepared.len()];
+        }
+        
+        // 提取消息用于批量写入
+        let messages: Vec<Message> = prepared.iter().map(|p| p.message.clone()).collect();
+        
+        // 2. 批量写入数据库
+        if let Some(repo) = &self.hot_cache_repo {
+            repo.store_hot_batch(&messages).await?;
+        }
+        if let Some(repo) = &self.realtime_repo {
+            repo.store_realtime_batch(&messages).await?;
+        }
+        if let Some(repo) = &self.archive_repo {
+            repo.store_archive_batch(&messages).await?;
+        }
+        
+        // 3. 批量更新 Redis（按会话分组）
+        let mut session_groups: std::collections::HashMap<String, Vec<(&PreparedMessage, i64)>> = 
+            std::collections::HashMap::new();
+        for (p, seq) in prepared.iter().zip(seqs.iter()) {
+            session_groups
+                .entry(p.session_id.clone())
+                .or_insert_with(Vec::new)
+                .push((p, *seq));
+        }
+        
+        // 批量更新会话状态
+        if let Some(repo) = &self.session_state_repo {
+            for message in &messages {
+                repo.apply_message(message).await?;
+            }
+        }
+        
+        // 批量更新游标（按用户分组）
+        if let Some(cursor_repo) = &self.user_cursor_repo {
+            let mut user_cursors: std::collections::HashMap<(String, String), i64> = 
+                std::collections::HashMap::new();
+            
+            for p in &prepared {
+                for receiver in &p.message.receiver_ids {
+                    let key = (p.session_id.clone(), receiver.clone());
+                    let ts = p.timeline.ingestion_ts;
+                    user_cursors.entry(key).or_insert(ts);
+                }
+                if !p.message.receiver_id.is_empty() {
+                    let key = (p.session_id.clone(), p.message.receiver_id.clone());
+                    let ts = p.timeline.ingestion_ts;
+                    user_cursors.entry(key).or_insert(ts);
+                }
+                let key = (p.session_id.clone(), p.message.sender_id.clone());
+                let ts = p.timeline.ingestion_ts;
+                user_cursors.entry(key).or_insert(ts);
+            }
+            
+            // 批量更新游标
+            for ((session_id, user_id), ts) in user_cursors {
+                cursor_repo.advance_cursor(&session_id, &user_id, ts).await?;
+            }
+        }
+        
+        // 4. 批量更新会话的最后消息信息（按会话分组）
+        if let Some(repo) = &self.session_update_repo {
+            for (session_id, updates) in &session_groups {
+                if let Some((last_p, last_seq)) = updates.last() {
+                    repo.update_last_message(&session_id, &last_p.message_id, *last_seq).await?;
+                }
+            }
+        }
+        
+        // 5. 批量更新未读数（按会话分组）
+        if let Some(repo) = &self.session_update_repo {
+            for (session_id, updates) in &session_groups {
+                if let Some((last_p, last_seq)) = updates.last() {
+                    repo.batch_update_unread_count(
+                        &session_id,
+                        *last_seq,
+                        Some(&last_p.message.sender_id),
+                    ).await?;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
     /// 清理 WAL 条目
     #[instrument(skip(self), fields(message_id = %message_id))]
     pub async fn cleanup_wal(&self, message_id: &str) -> Result<()> {

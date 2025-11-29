@@ -19,7 +19,6 @@ use crate::infrastructure::session_store::redis::RedisSessionStore;
 use crate::infrastructure::signaling::grpc::GrpcSignalingGateway;
 use crate::infrastructure::{AckPublisher, KafkaAckPublisher};
 use crate::interface::connection::LongConnectionHandler;
-use crate::interface::events::GatewayEventHandler;
 use crate::interface::gateway::UnifiedGatewayHandler;
 use crate::interface::grpc::handler::{AccessGatewayHandler, UnifiedGatewayGrpcHandler};
 use crate::service::service_manager::PortConfig;
@@ -32,14 +31,15 @@ pub struct GrpcServices {
 }
 use flare_core::server::connection::ConnectionManager;
 use flare_core::server::handle::{DefaultServerHandle, ServerHandle};
-use flare_core::server::ObserverServerBuilder;
+use flare_core::server::builder::flare::{FlareServerBuilder, FlareServer};
+use flare_core::common::message::{ArcMessageMiddleware, LoggingMiddleware, MetricsMiddleware, ValidationMiddleware, LogLevel};
 use flare_im_core::metrics::AccessGatewayMetrics;
 use flare_server_core::auth::{RedisTokenStore, TokenService};
 use flare_server_core::Config;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
-    pub long_connection_server: Arc<tokio::sync::Mutex<Option<flare_core::server::ObserverServer>>>,
+    pub long_connection_server: Arc<tokio::sync::Mutex<Option<FlareServer>>>,
     pub grpc_services: GrpcServices,
     /// 网关 ID
     pub gateway_id: String,
@@ -275,6 +275,7 @@ pub async fn initialize(
         ack_publisher.clone(),
         message_router.clone(),
         metrics.clone(),
+        access_config.clone(),
     ));
     
     // 16. 构建推送领域服务
@@ -443,26 +444,54 @@ async fn build_long_connection_server(
     runtime_config: &Config,
     ws_port: u16,
     quic_port: u16,
-    handler: Arc<UnifiedGatewayHandler>,
+    _handler: Arc<UnifiedGatewayHandler>,
     connection_manager: Arc<ConnectionManager>,
     authenticator: Arc<dyn flare_core::server::auth::Authenticator + Send + Sync>,
     connection_handler: Arc<LongConnectionHandler>,
-) -> Result<Arc<tokio::sync::Mutex<Option<flare_core::server::ObserverServer>>>> {
+) -> Result<Arc<tokio::sync::Mutex<Option<FlareServer>>>> {
     use tracing::{error, info};
     use std::io::Write;
     
-    let event_handler = Arc::new(GatewayEventHandler::new(connection_handler));
+    // 创建中间件
+    let validation_middleware = Arc::new(ValidationMiddleware::new(
+        "GatewayValidation",
+        |frame: &flare_core::common::protocol::Frame| -> flare_core::common::error::Result<()> {
+            // 验证消息 ID 不为空
+            if frame.message_id.is_empty() {
+                return Err(flare_core::common::error::FlareError::message_format_error("Message ID is empty".to_string()));
+            }
+            Ok(())
+        },
+    )) as ArcMessageMiddleware;
     
-    let mut server = ObserverServerBuilder::new(format!(
+    let logging_middleware = Arc::new(LoggingMiddleware::new("GatewayLogging")
+        .with_level(LogLevel::Info)) as ArcMessageMiddleware;
+    
+    let metrics_middleware = Arc::new(MetricsMiddleware::new("GatewayMetrics")) as ArcMessageMiddleware;
+    
+    // 创建设备管理器（用于设备冲突管理）
+    use flare_core::server::device::DeviceManager;
+    use flare_core::common::device::DeviceConflictStrategyBuilder;
+    let device_manager = Arc::new(DeviceManager::new(
+        DeviceConflictStrategyBuilder::new()
+            .platform_exclusive() // 平台互斥：同一用户同一平台只能有一个设备在线
+            .build()
+    ));
+    
+    // 使用 FlareServerBuilder 构建服务器（参照 flare_chat_server.rs 示例）
+    let server = FlareServerBuilder::new(format!(
         "{}:{}",
         runtime_config.server.address, ws_port
     ))
-    .with_handler(handler.connection_handler())
+    .with_listener(connection_handler.clone())
+    .with_middleware(validation_middleware)
+    .with_middleware(logging_middleware)
+    .with_middleware(metrics_middleware)
     .with_connection_manager(connection_manager)
+    .with_device_manager(device_manager)
     .enable_auth()
     .with_authenticator(authenticator)
     .with_auth_timeout(Duration::from_secs(30))
-    .with_event_handler(event_handler)
     .with_protocols(vec![
         flare_core::common::config_types::TransportProtocol::WebSocket,
         flare_core::common::config_types::TransportProtocol::QUIC,
@@ -476,6 +505,7 @@ async fn build_long_connection_server(
         format!("{}:{}", runtime_config.server.address, quic_port),
     )
     .with_max_connections(10000)
+    .with_connection_timeout(Duration::from_secs(60))
     .with_heartbeat(flare_core::common::config_types::HeartbeatConfig {
         interval: Duration::from_secs(30),
         timeout: Duration::from_secs(90),
@@ -485,7 +515,7 @@ async fn build_long_connection_server(
     .with_default_compression(flare_core::common::compression::CompressionAlgorithm::None)
     .build()
     .map_err(|e| {
-        error!(error = %e, "Failed to build ObserverServer");
+        error!(error = %e, "Failed to build FlareServer");
         anyhow::anyhow!("Failed to build server: {}", e)
     })?;
     
@@ -493,7 +523,7 @@ async fn build_long_connection_server(
     let _ = std::io::stdout().flush();
     
     server.start().await.map_err(|e| {
-        error!(error = %e, "Failed to start ObserverServer");
+        error!(error = %e, "Failed to start FlareServer");
         eprintln!("❌ 启动长连接服务器失败: {}", e);
         anyhow::anyhow!("Failed to start server: {}", e)
     })?;

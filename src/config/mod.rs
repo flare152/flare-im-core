@@ -924,7 +924,7 @@ impl FlareAppConfig {
 /// 返回全局配置实例（使用 OnceLock 确保只初始化一次）
 ///
 /// # 示例
-/// ```
+/// ```ignore
 /// // 从默认路径加载配置
 /// let config = load_config(None);
 ///

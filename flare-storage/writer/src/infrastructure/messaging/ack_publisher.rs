@@ -1,8 +1,8 @@
 use std::sync::Arc;
+use async_trait::async_trait;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use serde_json::to_vec;
 
@@ -29,6 +29,7 @@ impl KafkaAckPublisher {
         }
     }
 }
+
 
 #[async_trait]
 impl AckPublisher for KafkaAckPublisher {

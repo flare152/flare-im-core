@@ -88,6 +88,7 @@ impl RedisPresenceWatcher {
     }
 }
 
+
 #[async_trait]
 impl PresenceWatcher for RedisPresenceWatcher {
     async fn watch_presence(

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use tokio::sync::RwLock;
+use async_trait::async_trait;
 
 use crate::domain::model::Route;
 use crate::domain::repository::RouteRepository;
@@ -19,6 +19,7 @@ impl InMemoryRouteRepository {
         }
     }
 }
+
 
 #[async_trait]
 impl RouteRepository for InMemoryRouteRepository {

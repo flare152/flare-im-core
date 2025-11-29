@@ -5,8 +5,9 @@ use async_trait::async_trait;
 
 use crate::domain::model::{DeviceInfo, OnlineStatusRecord, SessionRecord};
 
-// Rust 2024: trait 中直接使用 async fn
-// 注意：对于 trait 对象（dyn Trait），仍需要使用 async_trait
+// Rust 2024: 对于需要作为 trait 对象使用的 trait（Arc<dyn Trait>），
+// 如果方法参数包含引用，需要保留 async-trait 宏
+
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
     async fn save_session(&self, record: &SessionRecord) -> Result<()>;
@@ -44,6 +45,7 @@ pub trait SignalPublisher: Send + Sync {
 }
 
 /// 在线状态监听接口
+
 #[async_trait]
 pub trait PresenceWatcher: Send + Sync {
     /// 监听用户在线状态变化

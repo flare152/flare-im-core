@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod connection_query;
+pub mod error;
 pub mod online_cache;
 pub mod messaging;
 

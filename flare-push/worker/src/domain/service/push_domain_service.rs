@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
+use chrono::Utc;
 
 use flare_im_core::gateway::GatewayRouterTrait;
 use flare_im_core::hooks::HookDispatcher;
@@ -353,10 +353,7 @@ impl PushDomainService {
                 content: message_content,
                 content_type: 1, // ContentType::PlainText
                 timestamp: Some(Timestamp {
-                    seconds: SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64,
+                    seconds: chrono::Utc::now().timestamp(),
                     nanos: 0,
                 }),
                 created_at: None,
@@ -402,10 +399,7 @@ impl PushDomainService {
             user_id: task.user_id.clone(),
             success,
             error: error.map(|s| s.to_string()),
-            timestamp: SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64,
+            timestamp: chrono::Utc::now().timestamp(),
         };
 
         self.ack_publisher.publish_ack(&event).await

@@ -19,11 +19,22 @@ use flare_proto::message::{
     SendMessageResponse,
     SendSystemMessageRequest,
     SendSystemMessageResponse,
+    EditMessageRequest as MessageEditMessageRequest,
+    EditMessageResponse as MessageEditMessageResponse,
+    ReplyMessageRequest as MessageReplyMessageRequest,
+    ReplyMessageResponse as MessageReplyMessageResponse,
+    AddThreadReplyRequest as MessageAddThreadReplyRequest,
+    AddThreadReplyResponse as MessageAddThreadReplyResponse,
+    AddReactionRequest as MessageAddReactionRequest,
+    AddReactionResponse as MessageAddReactionResponse,
+    RemoveReactionRequest as MessageRemoveReactionRequest,
+    RemoveReactionResponse as MessageRemoveReactionResponse,
 };
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
 use flare_proto::storage::{
     DeleteMessageRequest, GetMessageRequest, MarkMessageReadRequest, QueryMessagesRequest,
     RecallMessageRequest, SearchMessagesRequest, StoreMessageRequest,
+    SetMessageAttributesRequest,
 };
 use prost_types;
 use tonic::{Request, Response, Status};
@@ -102,6 +113,7 @@ impl MessageGrpcHandler {
                         nanos: now.timestamp_subsec_nanos() as i32,
                     }),
                     timeline,
+                    unified_message: None,
                     status: Some(ok_status()),
                 }))
             }
@@ -183,9 +195,9 @@ impl MessageGrpcHandler {
             return Err(Status::invalid_argument("session_id is required"));
         }
 
-        if req.message.is_none() {
-            return Err(Status::invalid_argument("message is required"));
-        }
+        let mut message = req.message.ok_or_else(|| {
+            Status::invalid_argument("message is required")
+        })?;
 
         if req.system_message_type.is_empty() {
             return Err(Status::invalid_argument("system_message_type is required"));
@@ -195,8 +207,6 @@ impl MessageGrpcHandler {
         let mut tags = std::collections::HashMap::new();
         tags.insert("system_message_type".to_string(), req.system_message_type.clone());
         tags.insert("is_system_message".to_string(), "true".to_string());
-
-        let mut message = req.message.unwrap();
         // 确保消息类型标记为系统消息
         message
             .extra
@@ -282,6 +292,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageQueryMessagesResponse {
             messages: storage_resp.messages,
+            unified_messages: Vec::new(),
             next_cursor: storage_resp.next_cursor,
             has_more: storage_resp.has_more,
             pagination: storage_resp.pagination,
@@ -322,6 +333,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageSearchMessagesResponse {
             messages: storage_resp.messages,
+            unified_messages: Vec::new(),
             pagination: storage_resp.pagination,
             status: storage_resp.status,
         }))
@@ -357,6 +369,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageGetMessageResponse {
             message: storage_resp.message,
+            unified_message: None,
             status: storage_resp.status,
         }))
     }
@@ -473,6 +486,336 @@ impl MessageGrpcHandler {
             status: storage_resp.status,
         }))
     }
+
+    #[instrument(skip(self, request))]
+    pub async fn edit_message(
+        &self,
+        request: Request<MessageEditMessageRequest>,
+    ) -> Result<Response<MessageEditMessageResponse>, Status> {
+        let req = request.into_inner();
+
+        let client = self.reader_client.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Storage Reader not configured")
+        })?;
+
+        let storage_req = SetMessageAttributesRequest {
+            context: req.context,
+            tenant: req.tenant,
+            message_id: req.message_id,
+            attributes: req.attributes,
+            tags: req.tags,
+        };
+
+        let _ = client
+            .clone()
+            .set_message_attributes(Request::new(storage_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to set message attributes for edit");
+                Status::internal("edit message failed")
+            })?
+            .into_inner();
+
+        Ok(Response::new(MessageEditMessageResponse {
+            success: true,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    pub async fn add_reaction(
+        &self,
+        request: Request<MessageAddReactionRequest>,
+    ) -> Result<Response<MessageAddReactionResponse>, Status> {
+        let req = request.into_inner();
+
+        let client = self.reader_client.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Storage Reader not configured")
+        })?;
+
+        let get_req = GetMessageRequest {
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            message_id: req.message_id.clone(),
+        };
+        let current = client
+            .clone()
+            .get_message(Request::new(get_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to get message for add_reaction");
+                Status::internal("get message failed")
+            })?
+            .into_inner();
+
+        let mut count = 0i32;
+        if let Some(msg) = current.message {
+            let key = format!("reaction:{}:count", req.emoji);
+            if let Some(v) = msg.attributes.get(&key) {
+                if let Ok(n) = v.parse::<i32>() { count = n; }
+            }
+        }
+        let new_count = count.saturating_add(1);
+
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(format!("reaction:{}:count", req.emoji), new_count.to_string());
+        attrs.insert(format!("reaction:{}:last_by", req.emoji), req.user_id.clone());
+
+        let set_req = SetMessageAttributesRequest {
+            context: req.context,
+            tenant: req.tenant,
+            message_id: req.message_id,
+            attributes: attrs,
+            tags: vec![],
+        };
+        let _ = client
+            .clone()
+            .set_message_attributes(Request::new(set_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to set attributes for add_reaction");
+                Status::internal("add reaction failed")
+            })?;
+
+        Ok(Response::new(MessageAddReactionResponse {
+            success: true,
+            error_message: String::new(),
+            new_count,
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    pub async fn remove_reaction(
+        &self,
+        request: Request<MessageRemoveReactionRequest>,
+    ) -> Result<Response<MessageRemoveReactionResponse>, Status> {
+        let req = request.into_inner();
+
+        let client = self.reader_client.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Storage Reader not configured")
+        })?;
+
+        let get_req = GetMessageRequest {
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            message_id: req.message_id.clone(),
+        };
+        let current = client
+            .clone()
+            .get_message(Request::new(get_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to get message for remove_reaction");
+                Status::internal("get message failed")
+            })?
+            .into_inner();
+
+        let mut count = 0i32;
+        if let Some(msg) = current.message {
+            let key = format!("reaction:{}:count", req.emoji);
+            if let Some(v) = msg.attributes.get(&key) {
+                if let Ok(n) = v.parse::<i32>() { count = n; }
+            }
+        }
+        let new_count = (count - 1).max(0);
+
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert(format!("reaction:{}:count", req.emoji), new_count.to_string());
+        attrs.insert(format!("reaction:{}:last_by", req.emoji), req.user_id.clone());
+
+        let set_req = SetMessageAttributesRequest {
+            context: req.context,
+            tenant: req.tenant,
+            message_id: req.message_id,
+            attributes: attrs,
+            tags: vec![],
+        };
+        let _ = client
+            .clone()
+            .set_message_attributes(Request::new(set_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to set attributes for remove_reaction");
+                Status::internal("remove reaction failed")
+            })?;
+
+        Ok(Response::new(MessageRemoveReactionResponse {
+            success: true,
+            error_message: String::new(),
+            new_count,
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    pub async fn reply_message(
+        &self,
+        request: Request<MessageReplyMessageRequest>,
+    ) -> Result<Response<MessageReplyMessageResponse>, Status> {
+        let req = request.into_inner();
+
+        let mut message = req.message.ok_or_else(|| Status::invalid_argument("message required"))?;
+        message
+            .attributes
+            .insert("reply_to".to_string(), req.reply_to_message_id.clone());
+
+        let send_req = SendMessageRequest {
+            session_id: req.session_id,
+            message: Some(message),
+            sync: req.sync,
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            payload: None,
+        };
+
+        let send_resp = self
+            .send_message(Request::new(send_req))
+            .await?
+            .into_inner();
+
+        let client = self.reader_client.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Storage Reader not configured")
+        })?;
+
+        let get_req = flare_proto::storage::GetMessageRequest {
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            message_id: req.reply_to_message_id.clone(),
+        };
+        let current = client
+            .clone()
+            .get_message(Request::new(get_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to get original message for reply");
+                Status::internal("reply get original failed")
+            })?
+            .into_inner()
+            ;
+
+        let mut count = 0i32;
+        if let Some(msg) = current.message {
+            if let Some(v) = msg.attributes.get("reply_count") {
+                if let Ok(n) = v.parse::<i32>() { count = n; }
+            }
+        }
+        let new_count = count.saturating_add(1);
+
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("reply_count".to_string(), new_count.to_string());
+        if let Some(actor) = req.context.as_ref().and_then(|c| c.actor.as_ref()) {
+            attrs.insert("reply_last_by".to_string(), actor.actor_id.clone());
+        }
+
+        let set_req = flare_proto::storage::SetMessageAttributesRequest {
+            context: req.context,
+            tenant: req.tenant,
+            message_id: req.reply_to_message_id,
+            attributes: attrs,
+            tags: vec![],
+        };
+        let _ = client
+            .clone()
+            .set_message_attributes(Request::new(set_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to set attributes for reply count");
+                Status::internal("reply set attributes failed")
+            })?;
+
+        Ok(Response::new(MessageReplyMessageResponse {
+            success: send_resp.success,
+            message_id: send_resp.message_id,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
+
+    #[instrument(skip(self, request))]
+    pub async fn add_thread_reply(
+        &self,
+        request: Request<MessageAddThreadReplyRequest>,
+    ) -> Result<Response<MessageAddThreadReplyResponse>, Status> {
+        let req = request.into_inner();
+
+        let mut message = req.message.ok_or_else(|| Status::invalid_argument("message required"))?;
+        message
+            .attributes
+            .insert("thread_id".to_string(), req.thread_id.clone());
+
+        let send_req = SendMessageRequest {
+            session_id: req.session_id,
+            message: Some(message),
+            sync: req.sync,
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            payload: None,
+        };
+
+        let send_resp = self
+            .send_message(Request::new(send_req))
+            .await?
+            .into_inner();
+
+        let client = self.reader_client.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Storage Reader not configured")
+        })?;
+
+        let get_req = flare_proto::storage::GetMessageRequest {
+            context: req.context.clone(),
+            tenant: req.tenant.clone(),
+            message_id: req.thread_id.clone(),
+        };
+        let current = client
+            .clone()
+            .get_message(Request::new(get_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to get thread head message");
+                Status::internal("thread get head failed")
+            })?
+            .into_inner()
+            ;
+
+        let mut count = 0i32;
+        if let Some(msg) = current.message {
+            if let Some(v) = msg.attributes.get("thread_reply_count") {
+                if let Ok(n) = v.parse::<i32>() { count = n; }
+            }
+        }
+        let new_count = count.saturating_add(1);
+
+        let mut attrs = std::collections::HashMap::new();
+        attrs.insert("thread_reply_count".to_string(), new_count.to_string());
+        if let Some(actor) = req.context.as_ref().and_then(|c| c.actor.as_ref()) {
+            attrs.insert("thread_last_by".to_string(), actor.actor_id.clone());
+        }
+
+        let set_req = flare_proto::storage::SetMessageAttributesRequest {
+            context: req.context,
+            tenant: req.tenant,
+            message_id: req.thread_id,
+            attributes: attrs,
+            tags: vec![],
+        };
+        let _ = client
+            .clone()
+            .set_message_attributes(Request::new(set_req))
+            .await
+            .map_err(|err| {
+                error!(error = ?err, "Failed to set attributes for thread reply count");
+                Status::internal("thread set attributes failed")
+            })?;
+
+        Ok(Response::new(MessageAddThreadReplyResponse {
+            success: send_resp.success,
+            message_id: send_resp.message_id,
+            error_message: String::new(),
+            status: Some(ok_status()),
+        }))
+    }
 }
 
 #[tonic::async_trait]
@@ -538,5 +881,40 @@ impl MessageService for MessageGrpcHandler {
         request: Request<MessageMarkMessageReadRequest>,
     ) -> Result<Response<MessageMarkMessageReadResponse>, Status> {
         self.mark_message_read(request).await
+    }
+
+    async fn edit_message(
+        &self,
+        request: Request<MessageEditMessageRequest>,
+    ) -> Result<Response<MessageEditMessageResponse>, Status> {
+        self.edit_message(request).await
+    }
+
+    async fn add_reaction(
+        &self,
+        request: Request<MessageAddReactionRequest>,
+    ) -> Result<Response<MessageAddReactionResponse>, Status> {
+        self.add_reaction(request).await
+    }
+
+    async fn remove_reaction(
+        &self,
+        request: Request<MessageRemoveReactionRequest>,
+    ) -> Result<Response<MessageRemoveReactionResponse>, Status> {
+        self.remove_reaction(request).await
+    }
+
+    async fn reply_message(
+        &self,
+        request: Request<MessageReplyMessageRequest>,
+    ) -> Result<Response<MessageReplyMessageResponse>, Status> {
+        self.reply_message(request).await
+    }
+
+    async fn add_thread_reply(
+        &self,
+        request: Request<MessageAddThreadReplyRequest>,
+    ) -> Result<Response<MessageAddThreadReplyResponse>, Status> {
+        self.add_thread_reply(request).await
     }
 }

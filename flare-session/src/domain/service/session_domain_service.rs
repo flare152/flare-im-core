@@ -127,6 +127,21 @@ impl SessionDomainService {
                                     Some(flare_proto::common::message_content::Content::Typing(_)) => {
                                         Some("typing".to_string())
                                     }
+                                    Some(flare_proto::common::message_content::Content::Vote(_)) => {
+                                        Some("vote".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::Task(_)) => {
+                                        Some("task".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::Schedule(_)) => {
+                                        Some("schedule".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::Announcement(_)) => {
+                                        Some("announcement".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
+                                        Some("system_event".to_string())
+                                    }
                                     None => None,
                                 };
                             }
@@ -582,4 +597,3 @@ fn parse_cursor(cursor: Option<&str>) -> (Option<i64>, String) {
     }
     (None, String::new())
 }
-

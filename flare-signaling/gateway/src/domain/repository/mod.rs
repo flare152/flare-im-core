@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
 use flare_proto::signaling::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, HeartbeatRequest, HeartbeatResponse,
     LoginRequest, LoginResponse, LogoutRequest, LogoutResponse,
 };
+use async_trait::async_trait;
 use flare_server_core::error::Result;
 
 use super::model::{ConnectionInfo, Session};
+
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -23,6 +24,7 @@ pub trait SessionStore: Send + Sync {
     async fn all(&self) -> Result<HashMap<String, Session>>;
 }
 
+
 #[async_trait]
 pub trait SignalingGateway: Send + Sync {
     async fn login(&self, request: LoginRequest) -> Result<LoginResponse>;
@@ -35,6 +37,7 @@ pub trait SignalingGateway: Send + Sync {
 }
 
 /// 连接查询接口
+
 #[async_trait]
 pub trait ConnectionQuery: Send + Sync {
     /// 查询用户的所有连接

@@ -11,6 +11,7 @@ use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
+
 #[async_trait]
 pub trait PushClient: Send + Sync {
     async fn push_message(&self, request: PushMessageRequest) -> Result<PushMessageResponse>;
@@ -87,6 +88,7 @@ impl GrpcPushClient {
         Ok(client)
     }
 }
+
 
 #[async_trait]
 impl PushClient for GrpcPushClient {

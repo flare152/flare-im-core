@@ -78,6 +78,7 @@ impl TryFrom<HookConfigRow> for HookConfigItem {
 }
 
 /// Hook配置数据库仓储
+#[derive(Debug)]
 pub struct PostgresHookConfigRepository {
     pool: Arc<PgPool>,
 }

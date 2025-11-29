@@ -130,11 +130,11 @@ pub fn build_hook_context(
     ctx
 }
 
-pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
+pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result<MessageDraft> {
     let message = request
         .message
         .as_ref()
-        .expect("StoreMessageRequest.message must be set");
+        .ok_or_else(|| anyhow::anyhow!("StoreMessageRequest.message must be set"))?;
 
     // MessageDraft::new 需要 Vec<u8>，但 message.content 是 Option<MessageContent>
     // 使用 prost 序列化 MessageContent，或使用空向量
@@ -183,6 +183,12 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
             Some(flare_proto::common::message_content::Content::Custom(_)) => "custom",
             Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
             Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
+            // 富交互类型
+            Some(flare_proto::common::message_content::Content::Vote(_)) => "vote",
+            Some(flare_proto::common::message_content::Content::Task(_)) => "task",
+            Some(flare_proto::common::message_content::Content::Schedule(_)) => "schedule",
+            Some(flare_proto::common::message_content::Content::Announcement(_)) => "announcement",
+            Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
             None => "unspecified",
         })
         .unwrap_or("unspecified");
@@ -243,7 +249,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> MessageDraft {
         );
     }
 
-    draft
+    Ok(draft)
 }
 
 pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &MessageDraft) {
@@ -314,6 +320,12 @@ pub fn build_message_record(
             Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
             Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
             Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
+            // 富交互类型
+            Some(flare_proto::common::message_content::Content::Vote(_)) => "vote",
+            Some(flare_proto::common::message_content::Content::Task(_)) => "task",
+            Some(flare_proto::common::message_content::Content::Schedule(_)) => "schedule",
+            Some(flare_proto::common::message_content::Content::Announcement(_)) => "announcement",
+            Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
             None => "application/unknown",
         })
         .unwrap_or("application/unknown");
@@ -343,7 +355,7 @@ pub fn build_message_record(
     }
 }
 
-pub fn draft_from_submission(submission: &MessageSubmission) -> MessageDraft {
+pub fn draft_from_submission(submission: &MessageSubmission) -> anyhow::Result<MessageDraft> {
     build_draft_from_request(&submission.kafka_payload)
 }
 
@@ -414,6 +426,17 @@ fn detect_message_type(message: &Message) -> &'static str {
         Ok(MessageType::Video) => "video",
         Ok(MessageType::Audio) => "audio",
         Ok(MessageType::File) => "file",
+        Ok(MessageType::Location) => "location",
+        Ok(MessageType::Card) => "card",
+        Ok(MessageType::Notification) => "notification",
+        Ok(MessageType::Typing) => "typing",
+        Ok(MessageType::Recall) => "recall",
+        Ok(MessageType::Read) => "read",
+        Ok(MessageType::Forward) => "forward",
+        Ok(MessageType::Vote) => "vote",
+        Ok(MessageType::Task) => "task",
+        Ok(MessageType::Schedule) => "schedule",
+        Ok(MessageType::Announcement) => "announcement",
         Ok(MessageType::Custom) | Ok(MessageType::Unspecified) | Err(_) => {
             // 从 MessageContent 推断类型
             if let Some(content) = message.content.as_ref() {
@@ -429,6 +452,11 @@ fn detect_message_type(message: &Message) -> &'static str {
                     Some(flare_proto::common::message_content::Content::Custom(_)) => "custom",
                     Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
                     Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
+                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
+                    Some(flare_proto::common::message_content::Content::Vote(_)) => "vote",
+                    Some(flare_proto::common::message_content::Content::Task(_)) => "task",
+                    Some(flare_proto::common::message_content::Content::Schedule(_)) => "schedule",
+                    Some(flare_proto::common::message_content::Content::Announcement(_)) => "announcement",
                     None => "unknown",
                 }
             } else {

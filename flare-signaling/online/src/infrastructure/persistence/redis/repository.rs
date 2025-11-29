@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
@@ -10,6 +9,7 @@ use serde_json::json;
 use crate::config::OnlineConfig;
 use crate::domain::model::{OnlineStatusRecord, SessionRecord};
 use crate::domain::repository::SessionRepository;
+use async_trait::async_trait;
 
 const SESSION_KEY_PREFIX: &str = "session";
 
@@ -37,6 +37,7 @@ impl RedisSessionRepository {
         Utc.timestamp_opt(seconds, 0).single()
     }
 }
+
 
 #[async_trait]
 impl SessionRepository for RedisSessionRepository {

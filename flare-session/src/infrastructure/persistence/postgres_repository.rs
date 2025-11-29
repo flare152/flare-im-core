@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use tracing::info;
@@ -17,6 +16,7 @@ use crate::domain::model::{
     SessionSort, SessionSummary,
 };
 use crate::domain::repository::SessionRepository;
+use async_trait::async_trait;
 use flare_im_core::utils::calculate_unread_count;
 
 /// 会话查询行结构（用于SQL查询结果映射）
@@ -140,6 +140,7 @@ impl PostgresSessionRepository {
         Ok(())
     }
 }
+
 
 #[async_trait]
 impl SessionRepository for PostgresSessionRepository {

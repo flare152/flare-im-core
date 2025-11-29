@@ -10,7 +10,7 @@ use flare_proto::storage::storage_reader_service_client::StorageReaderServiceCli
 
 use crate::application::handlers::MessageCommandHandler;
 use crate::config::MessageOrchestratorConfig;
-use crate::domain::repository::{SessionRepository, WalRepository};
+use crate::domain::repository::{MessageEventPublisherItem, SessionRepositoryItem, WalRepositoryItem};
 use crate::domain::service::MessageDomainService;
 use crate::infrastructure::external::session_client::GrpcSessionClient;
 use crate::infrastructure::messaging::kafka_publisher::KafkaMessagePublisher;
@@ -45,8 +45,9 @@ pub async fn initialize(
     let producer = build_kafka_producer(config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig)
         .context("Failed to create Kafka producer")?;
     
-    // 3. 构建消息发布器
-    let publisher = Arc::new(KafkaMessagePublisher::new(Arc::new(producer), config.clone()));
+    // 3. 构建消息发布器（new 方法返回 Arc<Self>，包装为 enum）
+    let kafka_publisher = KafkaMessagePublisher::new(Arc::new(producer), config.clone());
+    let publisher = Arc::new(MessageEventPublisherItem::Kafka(kafka_publisher));
     
     // 4. 构建 WAL Repository
     let wal_repository = build_wal_repository(&config)
@@ -91,15 +92,15 @@ pub async fn initialize(
 /// 构建 WAL Repository
 fn build_wal_repository(
     config: &Arc<MessageOrchestratorConfig>,
-) -> Result<Arc<dyn WalRepository + Send + Sync>> {
+) -> Result<Arc<WalRepositoryItem>> {
     if let Some(url) = &config.redis_url {
         let client = Arc::new(
             redis::Client::open(url.as_str())
                 .context("Failed to create Redis client")?
         );
-        Ok(Arc::new(RedisWalRepository::new(client, config.clone())) as Arc<dyn WalRepository + Send + Sync>)
+        Ok(Arc::new(WalRepositoryItem::Redis(Arc::new(RedisWalRepository::new(client, config.clone())))))
     } else {
-        Ok(NoopWalRepository::shared())
+        Ok(Arc::new(WalRepositoryItem::Noop(Arc::new(NoopWalRepository::default()))))
     }
 }
 
@@ -129,7 +130,7 @@ async fn build_hook_dispatcher(
 /// 构建 Session 服务客户端
 async fn build_session_client(
     config: &Arc<MessageOrchestratorConfig>,
-) -> Option<Arc<dyn SessionRepository + Send + Sync>> {
+) -> Option<Arc<SessionRepositoryItem>> {
     // 使用服务发现创建 session 服务客户端（使用常量，支持环境变量覆盖）
     use flare_im_core::service_names::{SESSION, get_service_name};
     let session_service = config.session_service_type.as_deref()
@@ -152,7 +153,7 @@ async fn build_session_client(
             ).await {
                 Ok(Ok(channel)) => {
                     tracing::info!(service = %session_service, "Connected to Session service via service discovery");
-                    Some(Arc::new(GrpcSessionClient::new(channel)) as Arc<dyn SessionRepository + Send + Sync>)
+                    Some(Arc::new(SessionRepositoryItem::Grpc(Arc::new(GrpcSessionClient::new(channel)))))
                 }
                 Ok(Err(err)) => {
                     tracing::warn!(error = %err, service = %session_service, "Failed to get Session service channel, session auto-creation disabled");

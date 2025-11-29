@@ -1,23 +1,17 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 use crate::domain::model::MessageSubmission;
 use crate::domain::repository::WalRepository;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct NoopWalRepository;
 
-#[async_trait]
 impl WalRepository for NoopWalRepository {
     async fn append(&self, _submission: &MessageSubmission) -> Result<()> {
         Ok(())
     }
 }
 
-impl NoopWalRepository {
-    pub fn shared() -> Arc<dyn WalRepository + Send + Sync> {
-        Arc::new(Self::default())
-    }
-}
+// shared() 方法已移除，现在使用 WalRepositoryItem::Noop 代替

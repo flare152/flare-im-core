@@ -171,50 +171,120 @@ impl StorageWriterConsumer {
             };
 
             match StoreMessageRequest::decode(payload) {
-                Ok(request) => {
+                Ok(mut request) => {
+                    // 即使解码成功，也要清理字符串字段，确保所有字段都是有效的 UTF-8
+                    // 这是为了避免后续处理中的编码问题
+                    if let Some(ref mut msg) = request.message {
+                        // 清理所有字符串字段
+                        msg.sender_platform_id = String::from_utf8_lossy(
+                            msg.sender_platform_id.as_bytes()
+                        ).to_string();
+                        msg.sender_nickname = String::from_utf8_lossy(
+                            msg.sender_nickname.as_bytes()
+                        ).to_string();
+                        msg.sender_avatar_url = String::from_utf8_lossy(
+                            msg.sender_avatar_url.as_bytes()
+                        ).to_string();
+                        msg.group_id = String::from_utf8_lossy(
+                            msg.group_id.as_bytes()
+                        ).to_string();
+                        msg.client_msg_id = String::from_utf8_lossy(
+                            msg.client_msg_id.as_bytes()
+                        ).to_string();
+                        msg.receiver_id = String::from_utf8_lossy(
+                            msg.receiver_id.as_bytes()
+                        ).to_string();
+                        
+                        // 清理消息内容中的 text 字段
+                        if let Some(ref mut content) = msg.content {
+                            if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
+                                text_content.text = String::from_utf8_lossy(
+                                    text_content.text.as_bytes()
+                                ).to_string();
+                            }
+                        }
+                    }
                     requests.push(request);
                     valid_messages.push(message);
                 }
                 Err(err) => {
-                    error!(error = ?err, "Failed to decode StoreMessageRequest");
+                    // 兼容：若收到的是 PushMessageRequest，尝试转换为 StoreMessageRequest
+                    tracing::warn!(error = ?err, "Failed to decode StoreMessageRequest, trying PushMessageRequest fallback");
+                    if let Ok(mut push_req) = flare_proto::push::PushMessageRequest::decode(payload) {
+                        if let Some(ref mut msg) = push_req.message {
+                            // 清理字符串字段，确保所有字段都是有效的 UTF-8
+                            msg.sender_platform_id = String::from_utf8_lossy(
+                                msg.sender_platform_id.as_bytes()
+                            ).to_string();
+                            msg.sender_nickname = String::from_utf8_lossy(
+                                msg.sender_nickname.as_bytes()
+                            ).to_string();
+                            msg.sender_avatar_url = String::from_utf8_lossy(
+                                msg.sender_avatar_url.as_bytes()
+                            ).to_string();
+                            msg.group_id = String::from_utf8_lossy(
+                                msg.group_id.as_bytes()
+                            ).to_string();
+                            msg.client_msg_id = String::from_utf8_lossy(
+                                msg.client_msg_id.as_bytes()
+                            ).to_string();
+                            msg.receiver_id = String::from_utf8_lossy(
+                                msg.receiver_id.as_bytes()
+                            ).to_string();
+                            
+                            // 清理消息内容中的 text 字段
+                            if let Some(ref mut content) = msg.content {
+                                if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
+                                    text_content.text = String::from_utf8_lossy(
+                                        text_content.text.as_bytes()
+                                    ).to_string();
+                                }
+                            }
+                            
+                            let store = flare_proto::storage::StoreMessageRequest {
+                                session_id: msg.session_id.clone(),
+                                message: Some(msg.clone()),
+                                sync: false,
+                                context: Default::default(),
+                                tenant: Default::default(),
+                                tags: std::collections::HashMap::new(),
+                            };
+                            requests.push(store);
+                            valid_messages.push(message);
+                        } else {
+                            error!("PushMessageRequest without message payload");
+                        }
+                    } else {
+                        // 开发阶段：直接跳过无法解码的旧消息，记录警告但不阻塞处理
+                        tracing::warn!(
+                            error = ?err,
+                            offset = message.offset(),
+                            partition = message.partition(),
+                            "Failed to decode message, skipping (development mode)"
+                        );
+                        // 不添加到 valid_messages，这样 offset 不会被提交，但也不会阻塞其他消息的处理
+                        // 在开发阶段，我们可以手动跳过这些消息
+                    }
                 }
             }
         }
         
-        // 并发处理消息
-        let mut handles = Vec::new();
-        for request in requests {
-            let handler = Arc::clone(&self.command_handler);
-            handles.push(tokio::spawn(async move {
-                handler.handle(ProcessStoreMessageCommand { request }).await
-            }));
-        }
+        // 批量处理消息（优化性能）
+        let commands: Vec<_> = requests
+            .into_iter()
+            .map(|req| ProcessStoreMessageCommand { request: req })
+            .collect();
         
-        // 等待所有任务完成
-        let mut results = Vec::new();
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(result)) => {
-                    results.push(Ok(result));
-                }
-                Ok(Err(e)) => {
-                    results.push(Err(e));
-                }
-                Err(e) => {
-                    error!(error = ?e, "Task join error");
-                }
+        if let Err(e) = self.command_handler.handle_batch(commands).await {
+                error!(error = %e, "Failed to process batch");
+            // 不提交 offset，等待后续重试
+                return Ok(());
             }
-        }
-        
-        // 根据处理结果决定是否提交offset
-        // 如果所有消息都成功，提交所有offset；否则不提交，等待重试
-        let all_success = results.iter().all(|r| r.is_ok());
         
         // 记录批量处理耗时
         let batch_duration = batch_start.elapsed();
         self.metrics.messages_persisted_duration_seconds.observe(batch_duration.as_secs_f64());
         
-        if all_success {
             // 提交所有消息的offset
             for message in &valid_messages {
                 self.commit_message(message);
@@ -225,15 +295,6 @@ impl StorageWriterConsumer {
                 batch_size = valid_messages.len(),
                 "Batch messages persisted successfully"
             );
-        } else {
-            // 有失败的消息，不提交offset，等待重试
-            let success_count = results.iter().filter(|r| r.is_ok()).count();
-            warn!(
-                batch_size = valid_messages.len(),
-                success_count = success_count,
-                "Some messages failed; keeping offset for retry"
-            );
-        }
         
         Ok(())
     }

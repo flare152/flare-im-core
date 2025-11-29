@@ -12,6 +12,7 @@ use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
+
 #[async_trait]
 pub trait StorageClient: Send + Sync {
     async fn store_message(&self, request: StoreMessageRequest) -> Result<StoreMessageResponse>;
@@ -35,6 +36,7 @@ impl GrpcStorageClient {
         })
     }
 }
+
 
 #[async_trait]
 impl StorageClient for GrpcStorageClient {

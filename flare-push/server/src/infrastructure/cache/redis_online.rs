@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use flare_server_core::error::Result;
+use async_trait::async_trait;
 use tracing::{info, warn};
 
 use crate::domain::repository::{OnlineStatus, OnlineStatusRepository};
@@ -47,6 +47,7 @@ impl OnlineStatusRepositoryImpl {
         }
     }
 }
+
 
 #[async_trait]
 impl OnlineStatusRepository for OnlineStatusRepositoryImpl {

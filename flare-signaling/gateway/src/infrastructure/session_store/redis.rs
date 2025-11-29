@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Error};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use async_trait::async_trait;
 use flare_server_core::error::{ErrorCode, InfraResult, InfraResultExt, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::{Value, json};
@@ -177,6 +177,7 @@ impl RedisSessionStore {
         Ok(())
     }
 }
+
 
 #[async_trait]
 impl SessionStore for RedisSessionStore {

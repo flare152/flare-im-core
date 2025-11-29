@@ -2,12 +2,10 @@
 //!
 //! 提供从不同源加载Hook配置的能力
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::{debug, info, warn};
@@ -16,10 +14,30 @@ use crate::domain::model::HookConfig;
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
 
 /// Hook配置加载器接口
-#[async_trait]
 pub trait ConfigLoader: Send + Sync {
     /// 加载Hook配置
     async fn load(&self) -> Result<HookConfig>;
+}
+
+/// ConfigLoader 的枚举封装，用于在 Rust 2024 下避免 `dyn` + async trait 带来的
+/// `E0038: trait is not dyn compatible` 问题。
+///
+/// 业务侧统一通过该枚举来做多态分发，而不是使用 `Arc<dyn ConfigLoader>`.
+#[derive(Debug)]
+pub enum ConfigLoaderItem {
+    File(FileConfigLoader),
+    Database(DatabaseConfigLoader),
+    ConfigCenter(ConfigCenterLoader),
+}
+
+impl ConfigLoaderItem {
+    pub async fn load(&self) -> Result<HookConfig> {
+        match self {
+            ConfigLoaderItem::File(loader) => loader.load().await,
+            ConfigLoaderItem::Database(loader) => loader.load().await,
+            ConfigLoaderItem::ConfigCenter(loader) => loader.load().await,
+        }
+    }
 }
 
 /// Hook配置合并器
@@ -115,6 +133,7 @@ impl ConfigValidator {
 }
 
 /// 配置文件加载器
+#[derive(Debug)]
 pub struct FileConfigLoader {
     path: PathBuf,
 }
@@ -127,7 +146,7 @@ impl FileConfigLoader {
     }
 }
 
-#[async_trait]
+
 impl ConfigLoader for FileConfigLoader {
     async fn load(&self) -> Result<HookConfig> {
         if !self.path.exists() {
@@ -153,6 +172,7 @@ impl ConfigLoader for FileConfigLoader {
 }
 
 /// 数据库配置加载器（动态API配置）
+#[derive(Debug)]
 pub struct DatabaseConfigLoader {
     repository: Arc<PostgresHookConfigRepository>,
     tenant_id: Option<String>,
@@ -167,7 +187,7 @@ impl DatabaseConfigLoader {
     }
 }
 
-#[async_trait]
+
 impl ConfigLoader for DatabaseConfigLoader {
     async fn load(&self) -> Result<HookConfig> {
         let config = self.repository
@@ -186,6 +206,7 @@ impl ConfigLoader for DatabaseConfigLoader {
 }
 
 /// 配置中心加载器（etcd/Consul）
+#[derive(Debug)]
 pub struct ConfigCenterLoader {
     endpoint: String,
     tenant_id: Option<String>,
@@ -229,7 +250,7 @@ impl ConfigCenterLoader {
     }
 }
 
-#[async_trait]
+
 impl ConfigLoader for ConfigCenterLoader {
     async fn load(&self) -> Result<HookConfig> {
         let (host, port) = self.parse_endpoint()?;

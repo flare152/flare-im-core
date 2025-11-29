@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
 
 use crate::config::OnlineConfig;
 use crate::domain::repository::SignalPublisher;
+use async_trait::async_trait;
 
 const SIGNAL_CHANNEL_PREFIX: &str = "signal";
 
@@ -34,6 +34,7 @@ impl RedisSignalPublisher {
             .context("failed to open redis connection")
     }
 }
+
 
 #[async_trait]
 impl SignalPublisher for RedisSignalPublisher {

@@ -66,14 +66,16 @@ impl RouteServiceClient {
                     anyhow::anyhow!("Failed to create service discover: {}", e)
                 })?;
             
-            if discover.is_none() {
-                return Err(anyhow::anyhow!("Service discovery not configured"));
-            }
+            let discover = discover.ok_or_else(|| {
+                anyhow::anyhow!("Service discovery not configured")
+            })?;
             
-            *service_client_guard = Some(ServiceClient::new(discover.unwrap()));
+            *service_client_guard = Some(ServiceClient::new(discover));
         }
         
-        let service_client = service_client_guard.as_mut().unwrap();
+        let service_client = service_client_guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Service client not initialized")
+        })?;
         let channel = service_client.get_channel().await
             .map_err(|e| {
                 error!(

@@ -18,22 +18,22 @@ use crate::domain::service::hook_builder::{
 };
 use crate::domain::model::MessageProfile;
 use crate::domain::model::{MessageDefaults, MessageSubmission};
-use crate::domain::repository::{MessageEventPublisher, SessionRepository, WalRepository};
+use crate::domain::repository::{MessageEventPublisher, MessageEventPublisherItem, SessionRepository, SessionRepositoryItem, WalRepository, WalRepositoryItem};
 
 /// 消息领域服务 - 包含所有业务逻辑
 pub struct MessageDomainService {
-    publisher: Arc<dyn MessageEventPublisher + Send + Sync>,
-    wal_repository: Arc<dyn WalRepository + Send + Sync>,
-    session_repository: Option<Arc<dyn SessionRepository + Send + Sync>>,
+    publisher: Arc<MessageEventPublisherItem>,
+    wal_repository: Arc<WalRepositoryItem>,
+    session_repository: Option<Arc<SessionRepositoryItem>>,
     defaults: MessageDefaults,
     hooks: Arc<HookDispatcher>,
 }
 
 impl MessageDomainService {
     pub fn new(
-        publisher: Arc<dyn MessageEventPublisher + Send + Sync>,
-        wal_repository: Arc<dyn WalRepository + Send + Sync>,
-        session_repository: Option<Arc<dyn SessionRepository + Send + Sync>>,
+        publisher: Arc<MessageEventPublisherItem>,
+        wal_repository: Arc<WalRepositoryItem>,
+        session_repository: Option<Arc<SessionRepositoryItem>>,
         defaults: MessageDefaults,
         hooks: Arc<HookDispatcher>,
     ) -> Self {
@@ -82,7 +82,8 @@ impl MessageDomainService {
 
         let original_context =
             build_hook_context(&request, self.defaults.default_tenant_id.as_ref());
-        let mut draft = build_draft_from_request(&request);
+        let mut draft = build_draft_from_request(&request)
+            .context("Failed to build draft from request")?;
 
         // 执行 PreSend Hook（如果启用）
         if execute_pre_send {
@@ -197,7 +198,8 @@ impl MessageDomainService {
         kafka_span.end();
 
         let record = build_message_record(&submission, &submission.kafka_payload);
-        let post_draft = draft_from_submission(&submission);
+        let post_draft = draft_from_submission(&submission)
+            .context("Failed to build draft from submission")?;
 
         // 执行 PostSend Hook（系统消息也需要执行，用于通知业务系统）
         self.hooks

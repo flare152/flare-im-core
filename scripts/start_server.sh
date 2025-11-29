@@ -162,9 +162,29 @@ cd "$PROJECT_ROOT"
 
 # 先统一编译所有服务（避免并发编译导致文件锁冲突）
 echo -e "${YELLOW}📦 编译所有核心服务...${NC}"
-if ! cargo build --all > /dev/null 2>&1; then
+# 自动检测并设置 PROTOC 环境变量
+if [ -z "$PROTOC" ]; then
+    if command -v protoc > /dev/null 2>&1; then
+        export PROTOC=$(which protoc)
+    elif [ -f "/opt/homebrew/bin/protoc" ]; then
+        export PROTOC="/opt/homebrew/bin/protoc"
+    elif [ -f "/usr/local/bin/protoc" ]; then
+        export PROTOC="/usr/local/bin/protoc"
+    fi
+fi
+
+if [ -n "$PROTOC" ] && [ -f "$PROTOC" ]; then
+    echo -e "${GREEN}   📦 使用 protoc: $PROTOC${NC}"
+else
+    echo -e "${RED}   ✗ 错误: 未找到 protoc 编译器${NC}"
+    echo -e "${YELLOW}   请安装 protobuf: brew install protobuf${NC}"
+    echo -e "${YELLOW}   或设置 PROTOC 环境变量指向 protoc 路径${NC}"
+    exit 1
+fi
+
+if ! PROTOC="$PROTOC" cargo build --all > /dev/null 2>&1; then
     echo -e "${RED}   ✗ 编译失败，请检查错误信息${NC}"
-    echo -e "${YELLOW}   运行 'cargo build --all' 查看详细错误${NC}"
+    echo -e "${YELLOW}   运行 'PROTOC=$PROTOC cargo build --all' 查看详细错误${NC}"
     exit 1
 fi
 echo -e "${GREEN}   ✓ 编译完成${NC}"

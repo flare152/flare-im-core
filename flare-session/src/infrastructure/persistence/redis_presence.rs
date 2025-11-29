@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::config::SessionConfig;
 use crate::domain::model::{DevicePresence, DeviceState};
 use crate::domain::repository::{PresenceRepository, PresenceUpdate};
+use async_trait::async_trait;
 
 pub struct RedisPresenceRepository {
     client: Arc<redis::Client>,
@@ -31,6 +31,7 @@ impl RedisPresenceRepository {
         format!("{}:{}:*", self.config.presence_prefix, user_id)
     }
 }
+
 
 #[async_trait]
 impl PresenceRepository for RedisPresenceRepository {

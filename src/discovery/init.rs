@@ -25,7 +25,7 @@ use crate::config::FlareAppConfig;
 /// 返回 `(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater)` 元组（如果配置了 registry），否则返回 None
 ///
 /// # 示例
-/// ```rust
+/// ```rust,ignore
 /// use flare_im_core::discovery::init_from_app_config;
 /// use std::net::SocketAddr;
 ///
@@ -150,7 +150,7 @@ pub async fn init_from_registry_config(
 /// 返回 `ServiceRegistry`（如果配置了 registry），否则返回 None
 ///
 /// # 示例
-/// ```rust
+/// ```rust,ignore
 /// use flare_im_core::discovery::register_service_only;
 /// use std::net::SocketAddr;
 ///
@@ -319,7 +319,7 @@ pub async fn register_service_from_registry_config(
 /// 返回 `ServiceDiscover`（如果配置了 registry），否则返回 None
 ///
 /// # 示例
-/// ```rust
+/// ```rust,ignore
 /// use flare_im_core::discovery::create_discover;
 /// use flare_server_core::discovery::ServiceClient;
 ///

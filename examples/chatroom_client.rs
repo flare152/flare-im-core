@@ -174,6 +174,9 @@ async fn main() -> Result<()> {
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
 
+    // 解析会话ID（默认聊天室 chatroom；可通过环境变量 SESSION_ID 自定义）
+    let session_id = std::env::var("SESSION_ID").unwrap_or_else(|_| "chatroom".to_string());
+
     loop {
         tokio::select! {
             read = reader.read_line(&mut line) => {
@@ -207,9 +210,9 @@ async fn main() -> Result<()> {
                             _ => {}
                         }
 
-                        // 发送消息（统一使用 "chatroom" 作为 session_id，确保所有消息都发送到同一个聊天室）
+                        // 发送消息（默认使用聊天室会话ID，可通过环境变量覆盖）
                         let mut metadata = std::collections::HashMap::new();
-                        metadata.insert("session_id".to_string(), "chatroom".as_bytes().to_vec());
+                        metadata.insert("session_id".to_string(), session_id.as_bytes().to_vec());
                         metadata.insert("message_type".to_string(), "text".as_bytes().to_vec()); // 只发送文本消息
                         
                         let cmd = send_message(
@@ -440,6 +443,12 @@ impl ConnectionObserver for ChatObserver {
                                                         .collect::<String>()
                                                         .trim()
                                                         .to_string()
+                                                },
+                                                _ => {
+                                                    // 其他未知类型，尝试直接解析 payload 为 UTF-8 文本
+                                                    String::from_utf8_lossy(&msg.payload)
+                                                        .trim()
+                                                        .to_string()
                                                 }
                                             }
                                         } else {
@@ -582,4 +591,3 @@ impl ClientEventHandler for ChatEventHandler {
         Ok(())
     }
 }
-

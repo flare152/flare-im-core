@@ -20,6 +20,7 @@ pub struct PresenceUpdate {
     pub conflict_reason: Option<String>,
 }
 
+/// Session 仓储接口（需要作为 trait 对象使用，保留 async-trait）
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
     async fn load_bootstrap(
@@ -72,11 +73,13 @@ pub trait SessionRepository: Send + Sync {
     ) -> Result<i32>;
 }
 
+/// Presence 仓储接口（需要作为 trait 对象使用，保留 async-trait）
 #[async_trait]
 pub trait PresenceRepository: Send + Sync {
     async fn list_devices(&self, user_id: &str) -> Result<Vec<DevicePresence>>;
     async fn update_presence(&self, update: PresenceUpdate) -> Result<()>;
 }
+
 
 #[async_trait]
 pub trait MessageProvider: Send + Sync {

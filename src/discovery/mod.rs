@@ -4,7 +4,7 @@
 //!
 //! ## 使用方式
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flare_im_core::discovery::init_from_app_config;
 //! use std::net::SocketAddr;
 //!

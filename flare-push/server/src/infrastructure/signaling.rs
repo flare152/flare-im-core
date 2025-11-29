@@ -65,7 +65,11 @@ impl SignalingOnlineClient {
             }
         }
         
-        let service_client = service_client_guard.as_mut().unwrap();
+        let service_client = service_client_guard.as_mut().ok_or_else(|| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
+                .details("Service client not initialized")
+                .build_error()
+        })?;
         // 添加超时保护，避免服务发现阻塞过长时间
         let channel = tokio::time::timeout(
             std::time::Duration::from_secs(3), // 3秒超时
