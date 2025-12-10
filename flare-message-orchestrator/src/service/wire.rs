@@ -11,7 +11,7 @@ use flare_proto::storage::storage_reader_service_client::StorageReaderServiceCli
 use crate::application::handlers::MessageCommandHandler;
 use crate::config::MessageOrchestratorConfig;
 use crate::domain::repository::{MessageEventPublisherItem, SessionRepositoryItem, WalRepositoryItem};
-use crate::domain::service::MessageDomainService;
+use crate::domain::service::{MessageDomainService, SequenceAllocator};
 use crate::infrastructure::external::session_client::GrpcSessionClient;
 use crate::infrastructure::messaging::kafka_publisher::KafkaMessagePublisher;
 use crate::infrastructure::persistence::noop_wal::NoopWalRepository;
@@ -20,6 +20,7 @@ use crate::interface::grpc::handler::MessageGrpcHandler;
 use flare_im_core::hooks::adapters::DefaultHookFactory;
 use flare_im_core::hooks::{HookConfigLoader, HookDispatcher, HookRegistry};
 use flare_im_core::metrics::MessageOrchestratorMetrics;
+use flare_proto::session::session_service_client::SessionServiceClient;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -57,31 +58,37 @@ pub async fn initialize(
     let hooks = build_hook_dispatcher(&config).await
         .context("Failed to create Hook dispatcher")?;
     
-    // 6. 初始化指标收集
+    // 6. 🔹 构建 SequenceAllocator（核心能力：保证消息顺序）
+    let sequence_allocator = build_sequence_allocator(&config).await
+        .context("Failed to create SequenceAllocator")?;
+    
+    // 7. 初始化指标收集
     let metrics = Arc::new(MessageOrchestratorMetrics::new());
     
-    // 7. 构建 Session 服务客户端（可选）
+    // 8. 构建 Session 服务客户端（可选）
     let session_repository = build_session_client(&config).await;
     
-    // 8. 构建领域服务
+    // 9. 构建领域服务
     let domain_service = Arc::new(MessageDomainService::new(
-        publisher,
+        Arc::clone(&publisher), // 使用 Arc::clone 避免移动
         wal_repository,
         session_repository,
+        sequence_allocator,
         config.defaults(),
         hooks,
     ));
     
-    // 9. 构建命令处理器
+    // 10. 构建命令处理器
     let command_handler = Arc::new(MessageCommandHandler::new(domain_service, metrics));
     
-    // 10. 初始化 Storage Reader 客户端（如果配置了 reader_endpoint）
+    // 11. 初始化 Storage Reader 客户端（如果配置了 reader_endpoint）
     let reader_client = build_storage_reader_client(&config).await;
     
-    // 11. 构建 gRPC 处理器
+    // 12. 构建 gRPC 处理器
     let handler = MessageGrpcHandler::new(
         command_handler,
         reader_client,
+        publisher, // 现在可以安全地移动，因为 domain_service 使用的是 clone
     );
     
     Ok(ApplicationContext { handler })
@@ -101,6 +108,51 @@ fn build_wal_repository(
         Ok(Arc::new(WalRepositoryItem::Redis(Arc::new(RedisWalRepository::new(client, config.clone())))))
     } else {
         Ok(Arc::new(WalRepositoryItem::Noop(Arc::new(NoopWalRepository::default()))))
+    }
+}
+
+/// 构建 SequenceAllocator（核心能力：保证消息顺序）
+/// 
+/// # 设计原理
+/// 
+/// 1. 优先使用 Redis 实现（高性能、强一致）
+/// 2. 如果未配置 Redis，降级到时间戳模式（性能更高，但不保证严格顺序）
+/// 3. 预分配批次大小从配置读取（默认 100）
+async fn build_sequence_allocator(
+    config: &Arc<MessageOrchestratorConfig>,
+) -> Result<Arc<SequenceAllocator>> {
+    if let Some(url) = &config.redis_url {
+        // Redis 模式（推荐）：强一致性序列号
+        let client = Arc::new(
+            redis::Client::open(url.as_str())
+                .context("Failed to create Redis client for SequenceAllocator")?
+        );
+        
+        // 批次大小可以从配置读取（这里默认 100）
+        let batch_size = 100;
+        
+        tracing::info!(
+            redis_url = %url,
+            batch_size = batch_size,
+            "SequenceAllocator initialized with Redis backend"
+        );
+        
+        Ok(Arc::new(SequenceAllocator::new(client, batch_size).await?))
+    } else {
+        // 降级模式：使用虚拟 Redis 客户端（所有操作都返回错误，触发降级到时间戳模式）
+        // 这样可以保持统一的接口，不需要特殊处理
+        tracing::warn!(
+            "Redis not configured, SequenceAllocator will use degraded mode (timestamp-based). \
+             This does NOT guarantee strict message ordering!"
+        );
+        
+        // 创建一个假的 Redis 客户端（连接到无效地址，确保所有操作失败）
+        let fake_client = Arc::new(
+            redis::Client::open("redis://127.0.0.1:0")
+                .context("Failed to create fake Redis client")?
+        );
+        
+        Ok(Arc::new(SequenceAllocator::new(fake_client, 100).await?))
     }
 }
 
@@ -153,7 +205,7 @@ async fn build_session_client(
             ).await {
                 Ok(Ok(channel)) => {
                     tracing::info!(service = %session_service, "Connected to Session service via service discovery");
-                    Some(Arc::new(SessionRepositoryItem::Grpc(Arc::new(GrpcSessionClient::new(channel)))))
+                    Some(Arc::new(SessionRepositoryItem::Grpc(Arc::new(GrpcSessionClient::new(SessionServiceClient::new(channel))))))
                 }
                 Ok(Err(err)) => {
                     tracing::warn!(error = %err, service = %session_service, "Failed to get Session service channel, session auto-creation disabled");

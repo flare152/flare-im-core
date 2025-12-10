@@ -13,12 +13,12 @@ use crate::domain::service::MessageDomainService;
 /// 注意：当前查询操作主要转发到 StorageReaderService，
 /// 如果未来需要在 orchestrator 中实现查询逻辑，可以在这里添加
 pub struct MessageQueryHandler {
-    domain_service: Arc<MessageDomainService>,
+    _domain_service: Arc<MessageDomainService>,  // 添加下划线前缀表示保留但暂时未使用
 }
 
 impl MessageQueryHandler {
     pub fn new(domain_service: Arc<MessageDomainService>) -> Self {
-        Self { domain_service }
+        Self { _domain_service: domain_service }  // 添加下划线前缀
     }
 
     /// 查询单条消息

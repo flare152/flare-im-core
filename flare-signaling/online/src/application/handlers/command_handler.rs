@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use flare_proto::signaling::{
-    HeartbeatResponse, LoginResponse, LogoutResponse, PublishSignalResponse, SubscribeResponse,
-    UnsubscribeResponse,
+use flare_proto::signaling::online::{
+    HeartbeatResponse, LoginResponse, LogoutResponse,
+};
+use flare_proto::access_gateway::{
+    PublishSignalResponse, SubscribeResponse, UnsubscribeResponse,
 };
 use tracing::instrument;
 
@@ -54,7 +56,11 @@ impl OnlineCommandHandler {
     #[instrument(skip(self), fields(session_id = %command.request.session_id, user_id = %command.request.user_id))]
     pub async fn handle_heartbeat(&self, command: HeartbeatCommand) -> Result<HeartbeatResponse> {
         self.online_domain_service
-            .heartbeat(&command.request.session_id, &command.request.user_id)
+            .heartbeat(
+                &command.request.session_id,
+                &command.request.user_id,
+                command.request.current_quality.as_ref(),
+            )
             .await
     }
 

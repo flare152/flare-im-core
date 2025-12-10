@@ -82,10 +82,12 @@ impl HookExtensionServer {
             client_message_id: None,
             conversation_id: message.session_id.clone(),
             sender_id: message.sender_id.clone(),
-            session_type: if message.session_type.is_empty() {
-                None
-            } else {
-                Some(message.session_type.clone())
+            session_type: match message.session_type {
+                v if v == flare_proto::common::SessionType::Unspecified as i32 => None,
+                1 => Some("single".to_string()),
+                2 => Some("group".to_string()),
+                3 => Some("channel".to_string()),
+                _ => Some("unspecified".to_string()),
             },
             message_type: None,
             persisted_at,
@@ -851,4 +853,3 @@ impl HookExtension for HookExtensionServer {
         }))
     }
 }
-

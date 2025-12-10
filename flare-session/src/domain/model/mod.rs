@@ -1,7 +1,7 @@
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 
-use flare_proto::session::{
+use flare_proto::common::{
     ConflictResolution as ProtoConflictResolution, DeviceState as ProtoDeviceState,
     SessionLifecycleState as ProtoSessionLifecycleState, SessionVisibility as ProtoSessionVisibility,
 };
@@ -270,23 +270,56 @@ pub struct SessionSort {
     pub ascending: bool,
 }
 
+/// 话题（Thread）模型
+#[derive(Clone, Debug)]
+pub struct Thread {
+    pub id: String,
+    pub session_id: String,
+    pub root_message_id: String,
+    pub title: Option<String>,
+    pub creator_id: String,
+    pub reply_count: i32,
+    pub last_reply_at: Option<DateTime<Utc>>,
+    pub last_reply_id: Option<String>,
+    pub last_reply_user_id: Option<String>,
+    pub participant_count: i32,
+    pub is_pinned: bool,
+    pub is_locked: bool,
+    pub is_archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub extra: HashMap<String, String>,
+}
+
+/// 话题排序方式
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadSortOrder {
+    UpdatedDesc,      // 按更新时间降序（默认）
+    UpdatedAsc,       // 按更新时间升序
+    ReplyCountDesc,   // 按回复数降序
+}
+
 /// 会话领域配置值对象（只包含领域相关的配置）
 #[derive(Clone, Debug)]
 pub struct SessionDomainConfig {
     /// 最近消息限制（默认值）
     pub recent_message_limit: i32,
+    /// Bootstrap 最大会话数（默认 100，避免响应过大）
+    pub max_bootstrap_sessions: Option<usize>,
 }
 
 impl SessionDomainConfig {
     pub fn new(recent_message_limit: i32) -> Self {
         Self {
             recent_message_limit,
+            max_bootstrap_sessions: Some(100),
         }
     }
 
     pub fn default() -> Self {
         Self {
             recent_message_limit: 20,
+            max_bootstrap_sessions: Some(100),
         }
     }
 }

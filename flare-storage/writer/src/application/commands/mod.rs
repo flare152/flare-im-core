@@ -7,3 +7,6 @@ use flare_proto::storage::StoreMessageRequest;
 pub struct ProcessStoreMessageCommand {
     pub request: StoreMessageRequest,
 }
+
+pub mod process_message_operation;
+pub use process_message_operation::ProcessMessageOperationCommand;

@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::pin::Pin;
+use std::future::Future;
 
 use anyhow::Result;
 
@@ -9,8 +10,10 @@ use crate::domain::repository::WalRepository;
 pub struct NoopWalRepository;
 
 impl WalRepository for NoopWalRepository {
-    async fn append(&self, _submission: &MessageSubmission) -> Result<()> {
-        Ok(())
+    fn append<'a>(&'a self, _submission: &'a MessageSubmission) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move { 
+            Ok(())
+        })
     }
 }
 

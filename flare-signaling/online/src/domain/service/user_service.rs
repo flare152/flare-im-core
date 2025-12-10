@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
-use flare_proto::signaling::{
+use flare_proto::signaling::online::{
     BatchGetUserPresenceRequest, BatchGetUserPresenceResponse, DeviceInfo, GetDeviceRequest,
     GetDeviceResponse, GetUserPresenceRequest, GetUserPresenceResponse, KickDeviceRequest,
     KickDeviceResponse, ListUserDevicesRequest, ListUserDevicesResponse, UserPresence,
@@ -60,6 +60,12 @@ impl UserService {
                         seconds: d.last_active_time.timestamp(),
                         nanos: d.last_active_time.timestamp_subsec_nanos() as i32,
                     }),
+                    priority: 0,  // TODO: 从 SessionRecord 获取
+                    token_version: 0,  // TODO: 从 SessionRecord 获取
+                    connection_quality: None,  // TODO: 从 SessionRecord 获取
+                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
                 })
                 .collect(),
             last_seen: Some(Timestamp {
@@ -144,6 +150,12 @@ impl UserService {
                         seconds: d.last_active_time.timestamp(),
                         nanos: d.last_active_time.timestamp_subsec_nanos() as i32,
                     }),
+                    priority: 0,  // TODO: 从 SessionRecord 获取
+                    token_version: 0,  // TODO: 从 SessionRecord 获取
+                    connection_quality: None,  // TODO: 从 SessionRecord 获取
+                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
                 })
                 .collect(),
             status: util::rpc_status_ok(),
@@ -156,21 +168,23 @@ impl UserService {
         let device_id = &request.device_id;
 
         // 查找设备对应的会话
+        let user_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
         let session = self
             .session_repository
-            .get_session_by_device(user_id, device_id)
+            .get_session_by_device(&user_vo, &device_vo)
             .await?;
 
         if let Some(session) = session {
             // 删除会话
             self.session_repository
-                .remove_session(&session.session_id, user_id)
+                .remove_session(&session.id(), &user_vo)
                 .await?;
 
             info!(
                 user_id = %user_id,
                 device_id = %device_id,
-                session_id = %session.session_id,
+                session_id = %session.id().as_str(),
                 "device kicked"
             );
 
@@ -207,6 +221,12 @@ impl UserService {
                         seconds: device.last_active_time.timestamp(),
                         nanos: device.last_active_time.timestamp_subsec_nanos() as i32,
                     }),
+                    priority: 0,  // TODO: 从 SessionRecord 获取
+                    token_version: 0,  // TODO: 从 SessionRecord 获取
+                    connection_quality: None,  // TODO: 从 SessionRecord 获取
+                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
                 }),
                 status: util::rpc_status_ok(),
             })

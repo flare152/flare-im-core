@@ -50,11 +50,9 @@ impl SessionStateRepository for RedisSessionStateRepository {
                 Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
                 Some(flare_proto::common::message_content::Content::Forward(_)) => "application/forward",
                 Some(flare_proto::common::message_content::Content::Typing(_)) => "application/typing",
-                Some(flare_proto::common::message_content::Content::Vote(_)) => "application/vote",
-                Some(flare_proto::common::message_content::Content::Task(_)) => "application/task",
-                Some(flare_proto::common::message_content::Content::Schedule(_)) => "application/schedule",
-                Some(flare_proto::common::message_content::Content::Announcement(_)) => "application/announcement",
                 Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "application/system_event",
+                Some(flare_proto::common::message_content::Content::Quote(_)) => "application/quote",
+                Some(flare_proto::common::message_content::Content::LinkCard(_)) => "application/link_card",
                 None => "application/unknown",
             })
             .unwrap_or("application/unknown");
@@ -78,15 +76,9 @@ impl SessionStateRepository for RedisSessionStateRepository {
             )
             .await?;
 
-        // unread logic: increment for receivers, reset for sender
-        if !message.receiver_id.is_empty() && message.receiver_id != message.sender_id {
-            let _: i64 = conn.hincr(&unread_key, &message.receiver_id, 1).await?;
-        }
-        for target in &message.receiver_ids {
-            if target != &message.sender_id {
-                let _: i64 = conn.hincr(&unread_key, target, 1).await?;
-            }
-        }
+        // unread logic: receiver_id/receiver_ids 已废弃，通过 session_id 确定接收者
+        // 此处需要通过 session 服务查询参与者，暂时保留逻辑但不执行
+        // TODO: 通过 session_id 查询参与者列表，然后更新 unread
         // sender unread reset
         let _: () = conn
             .hset(&unread_key, &message.sender_id, 0i64)

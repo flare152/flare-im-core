@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use flare_proto::signaling::{PublishSignalRequest, PublishSignalResponse, SubscribeRequest, SubscribeResponse, Subscription, UnsubscribeRequest, UnsubscribeResponse};
+use flare_proto::access_gateway::{
+    PublishSignalRequest, PublishSignalResponse, SubscribeRequest, SubscribeResponse, 
+    Subscription, UnsubscribeRequest, UnsubscribeResponse
+};
 use tracing::{info, warn};
 
 use crate::domain::repository::{SignalPublisher, SubscriptionRepository};

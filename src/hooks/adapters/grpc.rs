@@ -444,6 +444,9 @@ fn build_request_context(ctx: &HookContext) -> Option<ProtoRequestContext> {
                     }
                 })
                 .collect(),
+            priority: 0,  // 【新增】默认为 Unspecified
+            token_version: 0,  // 【新增】默认为 0
+            connection_quality: None,  // 【新增】默认为 None
         })
     };
 
@@ -541,7 +544,16 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
     message.id = record.message_id.clone();
     message.session_id = record.conversation_id.clone();
     message.sender_id = record.sender_id.clone();
-    message.session_type = record.session_type.clone().unwrap_or_default();
+    message.session_type = record
+        .session_type
+        .as_deref()
+        .map(|t| match t.to_ascii_lowercase().as_str() {
+            "single" | "session_type_single" | "1" => flare_proto::common::SessionType::Single as i32,
+            "group" | "session_type_group" | "2" => flare_proto::common::SessionType::Group as i32,
+            "channel" | "session_type_channel" | "3" => flare_proto::common::SessionType::Channel as i32,
+            _ => flare_proto::common::SessionType::Unspecified as i32,
+        })
+        .unwrap_or(flare_proto::common::SessionType::Unspecified as i32);
     message.extra = record.metadata.clone();
     message.timestamp = Some(persisted_ts.clone());
     message.message_type = record

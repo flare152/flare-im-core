@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::instrument;
 use flare_proto::common::Message;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::DateTime;
 use flare_im_core::utils::extract_seq_from_message;
 
 use crate::application::queries::{

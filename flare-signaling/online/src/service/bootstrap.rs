@@ -17,7 +17,7 @@ impl ApplicationBootstrap {
         use flare_im_core::{load_config, ServiceHelper};
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         let service_config = app_config.signaling_online_service();
         
         info!("Parsing server address...");
@@ -114,4 +114,3 @@ impl ApplicationBootstrap {
         }).await
     }
 }
-

@@ -76,7 +76,7 @@ impl UserHandler {
         };
 
         // 创建发送器用于流式响应
-        let (stream_tx, mut stream_rx) = mpsc::channel(100);
+        let (stream_tx, stream_rx) = mpsc::channel(100);
 
         // 启动后台任务转发事件
         tokio::spawn(async move {
@@ -191,4 +191,3 @@ impl UserService for UserHandler {
         self.handle_get_device(request).await
     }
 }
-

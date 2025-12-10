@@ -3,36 +3,37 @@
 //! 包含领域逻辑和业务流程
 
 pub mod push_domain_service;
+pub mod session_domain_service;
+pub mod connection_quality_service;
+pub mod multi_device_push_service;
+
+#[cfg(test)]
+mod push_domain_service_test;
 
 use std::sync::Arc;
 
-use crate::domain::repository::{ConnectionQuery, SessionStore, SignalingGateway};
+use crate::domain::repository::{ConnectionQuery, SignalingGateway};
 
 pub use push_domain_service::{DomainPushResult, PushDomainService};
+pub use session_domain_service::SessionDomainService;
+pub use connection_quality_service::{ConnectionQualityService, ConnectionQualityMetrics, QualityLevel};
+pub use multi_device_push_service::{MultiDevicePushService, PushStrategy, PushTarget};
 
 /// 网关领域服务
 pub struct GatewayService {
-    session_store: Arc<dyn SessionStore>,
     signaling_gateway: Arc<dyn SignalingGateway>,
     connection_query: Arc<dyn ConnectionQuery>,
 }
 
 impl GatewayService {
     pub fn new(
-        session_store: Arc<dyn SessionStore>,
         signaling_gateway: Arc<dyn SignalingGateway>,
         connection_query: Arc<dyn ConnectionQuery>,
     ) -> Self {
         Self {
-            session_store,
             signaling_gateway,
             connection_query,
         }
-    }
-
-    /// 获取会话存储
-    pub fn session_store(&self) -> Arc<dyn SessionStore> {
-        Arc::clone(&self.session_store)
     }
 
     /// 获取信令网关

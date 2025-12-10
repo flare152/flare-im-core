@@ -29,7 +29,7 @@ impl ApplicationBootstrap {
         }
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         let service_config = app_config.message_orchestrator_service();
         
         info!("Parsing server address...");

@@ -5,6 +5,16 @@ use std::env;
 #[derive(Debug, Clone)]
 pub struct RouteConfig {
     pub default_services: Vec<(String, String)>,
+    /// Online 服务的 gRPC 端点
+    pub online_service_endpoint: Option<String>,
+    /// 分片数（默认 64）
+    pub shard_count: usize,
+    /// 会话级 QPS 限制（默认 50）
+    pub session_qps_limit: u64,
+    /// 群聊 fanout 最大速率（默认 2000/s）
+    pub group_fanout_max: u64,
+    /// 是否开启流控（默认关闭）
+    pub flow_control_enabled: bool,
 }
 
 impl RouteConfig {
@@ -34,14 +44,29 @@ impl RouteConfig {
 
         Ok(Self {
             default_services: if default.is_empty() {
-                // 默认配置：至少配置 SVID_IM → message-orchestrator
                 vec![
                     ("svid.im".to_string(), "message-orchestrator".to_string()),
-                    // 其他业务系统可以通过服务发现或注册接口动态添加
                 ]
             } else {
                 default
             },
+            online_service_endpoint: env::var("ONLINE_SERVICE_ENDPOINT").ok(),
+            shard_count: env::var("ROUTER_SHARD_COUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(64),
+            session_qps_limit: env::var("ROUTER_SESSION_QPS_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(50),
+            group_fanout_max: env::var("ROUTER_GROUP_FANOUT_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2000),
+            flow_control_enabled: env::var("ROUTER_FLOW_CONTROL_ENABLED")
+                .ok()
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false),
         })
     }
 }

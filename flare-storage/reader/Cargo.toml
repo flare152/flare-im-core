@@ -26,6 +26,10 @@ toml = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 prost-types = { workspace = true }
+prost = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "postgres", "chrono", "json"] }
+redis = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 tokio-stream = { workspace = true }

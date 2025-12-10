@@ -17,7 +17,7 @@ impl ApplicationBootstrap {
         use flare_im_core::{load_config, ServiceHelper};
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         let service_config = app_config.signaling_route_service();
         
         info!("Parsing server address...");
@@ -43,7 +43,7 @@ impl ApplicationBootstrap {
         context: ApplicationContext,
         address: SocketAddr,
     ) -> Result<()> {
-        use flare_proto::signaling::signaling_service_server::SignalingServiceServer;
+        use flare_proto::signaling::router::router_service_server::RouterServiceServer;
         use tonic::transport::Server;
 
         let handler = context.handler.clone();
@@ -51,20 +51,20 @@ impl ApplicationBootstrap {
         info!(
             address = %address,
             port = %address.port(),
-            "Starting Signaling Route gRPC service..."
+            "Starting Router gRPC service..."
         );
 
         // 使用 ServiceRuntime 管理服务生命周期
         let address_clone = address;
-        let runtime = ServiceRuntime::new("signaling-route", address)
-            .add_spawn_with_shutdown("signaling-route-grpc", move |shutdown_rx| async move {
+        let runtime = ServiceRuntime::new("router", address)
+            .add_spawn_with_shutdown("router-grpc", move |shutdown_rx| async move {
                 Server::builder()
-                    .add_service(SignalingServiceServer::new(handler))
+                    .add_service(RouterServiceServer::new(handler))
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,
                             port = %address_clone.port(),
-                            "✅ Signaling Route gRPC service is listening"
+                            "✅ Router gRPC service is listening"
                         );
                         
                         // 同时监听 Ctrl+C 和关闭通道
@@ -107,4 +107,3 @@ impl ApplicationBootstrap {
         }).await
     }
 }
-

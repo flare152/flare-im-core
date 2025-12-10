@@ -50,6 +50,8 @@ pub struct MessageForwarder {
     business_clients: Arc<Mutex<HashMap<String, MessageServiceClient<Channel>>>>,
     /// 服务发现客户端
     service_client: Arc<Mutex<Option<ServiceClient>>>,
+    /// Router（可选，存在时用于分片/流控/跨机房决策）
+    router: Arc<Mutex<Option<Arc<crate::service::router::Router>>>>,
     /// 默认租户ID
     default_tenant_id: String,
 }
@@ -61,6 +63,7 @@ impl MessageForwarder {
             im_client: Arc::new(Mutex::new(None)),
             business_clients: Arc::new(Mutex::new(HashMap::new())),
             service_client: Arc::new(Mutex::new(None)),
+            router: Arc::new(Mutex::new(None)),
             default_tenant_id,
         }
     }
@@ -71,8 +74,15 @@ impl MessageForwarder {
             im_client: Arc::new(Mutex::new(None)),
             business_clients: Arc::new(Mutex::new(HashMap::new())),
             service_client: Arc::new(Mutex::new(Some(service_client))),
+            router: Arc::new(Mutex::new(None)),
             default_tenant_id,
         }
+    }
+
+    /// 注入 Router（可选）
+    pub async fn set_router(&self, router: Arc<crate::service::router::Router>) {
+        let mut guard = self.router.lock().await;
+        *guard = Some(router);
     }
 
     /// 初始化 IM 客户端（message-orchestrator）
@@ -162,6 +172,24 @@ impl MessageForwarder {
         let normalized_svid = svid::normalize(svid);
         debug!(svid = %normalized_svid, "Forwarding message to business system");
 
+        // 构造路由上下文（从 RequestContext.attributes 提取）
+        let route_ctx = crate::service::router::RouteContext {
+            svid: normalized_svid.clone(),
+            session_id: context.as_ref().and_then(|c| {
+                c.attributes.get("session_id").cloned()
+            }),
+            user_id: context.as_ref().and_then(|c| {
+                c.actor.as_ref().map(|a| a.actor_id.clone())
+            }),
+            tenant_id: tenant.as_ref().map(|t| t.tenant_id.clone()),
+            client_geo: context.as_ref().and_then(|c| {
+                c.attributes.get("geo").cloned()
+            }),
+            login_gateway: context.as_ref().and_then(|c| {
+                c.attributes.get("login_gateway").cloned()
+            }),
+        };
+
         // 根据 SVID 选择转发目标
         match normalized_svid.as_str() {
             svid::IM => {
@@ -169,35 +197,37 @@ impl MessageForwarder {
                 self.forward_to_im(payload, context, tenant).await
             }
             _ => {
-                // 其他业务系统：先解析 endpoint，然后转发
+                // 其他业务系统：使用 Router 解析端点并转发（占位）
                 if let Some(repo) = route_repository {
-                    // 从路由表查找 endpoint
-                    match repo.find_by_svid(&normalized_svid).await {
-                        Ok(Some(route)) => {
-                            // 获取业务系统客户端并转发
-                            let _client = self.get_business_client(&route.endpoint).await?;
-                            // TODO: 实现通用业务系统转发逻辑
-                            // 目前只支持 IM 业务系统（通过 SendMessageRequest）
-                            Err(anyhow::anyhow!(
-                                "Generic business system forwarding for SVID {} is not yet implemented. Endpoint: {}",
-                                normalized_svid,
-                                route.endpoint
-                            ))
+                    // 优先使用 Router 解析端点；无 Router 时回退到仓库查找
+                    let endpoint = if let Some(router_arc) = self.router.lock().await.clone() {
+                        router_arc.resolve_endpoint(&route_ctx, repo.clone()).await?
+                    } else {
+                        match repo.find_by_svid(&normalized_svid).await {
+                            Ok(Some(route)) => route.endpoint,
+                            Ok(None) => {
+                                return Err(anyhow::anyhow!(
+                                    "Business service not found for SVID {}",
+                                    normalized_svid
+                                ))
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to resolve route for SVID {}: {}",
+                                    normalized_svid,
+                                    e
+                                ))
+                            }
                         }
-                        Ok(None) => {
-                            Err(anyhow::anyhow!(
-                                "Business service not found for SVID {}",
-                                normalized_svid
-                            ))
-                        }
-                        Err(e) => {
-                            Err(anyhow::anyhow!(
-                                "Failed to resolve route for SVID {}: {}",
-                                normalized_svid,
-                                e
-                            ))
-                        }
-                    }
+                    };
+                    // 连接业务系统客户端（占位）
+                    let _client = self.get_business_client(&endpoint).await?;
+                    // TODO: 实现通用业务系统转发协议
+                    Err(anyhow::anyhow!(
+                        "Generic business system forwarding for SVID {} is not yet implemented. Endpoint: {}",
+                        normalized_svid,
+                        endpoint
+                    ))
                 } else {
                     Err(anyhow::anyhow!(
                         "Route repository not available, cannot resolve endpoint for SVID {}",

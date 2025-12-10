@@ -1,73 +1,54 @@
-//! Session 服务客户端 - 通过 gRPC 调用 session 服务
+use std::pin::Pin;
+use std::future::Future;
 
-use std::sync::Arc;
-use anyhow::{Result, Context};
+use anyhow::Result;
+use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::session::session_service_client::SessionServiceClient;
-use flare_proto::session::{CreateSessionRequest, SessionParticipant, SessionVisibility};
-use flare_proto::common::{RequestContext, ActorContext, ActorType};
+use flare_proto::session::{CreateSessionRequest, SessionParticipant};
 use tonic::transport::Channel;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::domain::repository::SessionRepository;
 
-/// Session 服务客户端实现
+/// gRPC Session 客户端（外部依赖）
 #[derive(Debug)]
 pub struct GrpcSessionClient {
-    client: Arc<tokio::sync::Mutex<SessionServiceClient<Channel>>>,
+    client: SessionServiceClient<Channel>,
 }
 
 impl GrpcSessionClient {
-    pub fn new(channel: Channel) -> Self {
-        Self {
-            client: Arc::new(tokio::sync::Mutex::new(SessionServiceClient::new(channel))),
-        }
+    pub fn new(client: SessionServiceClient<Channel>) -> Self {
+        Self { client }
     }
 }
 
 impl SessionRepository for GrpcSessionClient {
-    async fn ensure_session(
+    fn ensure_session(
         &self,
         session_id: &str,
         session_type: &str,
         business_type: &str,
         participants: Vec<String>,
         tenant_id: Option<&str>,
-    ) -> Result<()> {
-        // 构建 participants
-        let session_participants: Vec<SessionParticipant> = participants
-            .into_iter()
-            .map(|user_id| SessionParticipant {
-                user_id,
-                roles: vec![],
-                muted: false,
-                pinned: false,
-                attributes: std::collections::HashMap::new(),
-            })
-            .collect();
-
-        // 构建 attributes，包含 session_id（这样会话服务可以使用指定的 session_id）
-        let mut attributes = std::collections::HashMap::new();
-        attributes.insert("session_id".to_string(), session_id.to_string());
-
-        // 构建请求
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let session_id = session_id.to_string();
+        let session_type = session_type.to_string();
+        let business_type = business_type.to_string();
+        let tenant_id = tenant_id.map(|s| s.to_string());
+        
         let request = CreateSessionRequest {
             context: Some(RequestContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 trace: None,
-                actor: Some(ActorContext {
-                    actor_id: String::new(),
-                    r#type: 2, // ActorType::ActorTypeService
-                    roles: vec![],
-                    attributes: std::collections::HashMap::new(),
-                }),
+                actor: None,
                 device: None,
                 channel: String::new(),
                 user_agent: String::new(),
                 attributes: std::collections::HashMap::new(),
             }),
-            tenant: tenant_id.map(|id| flare_proto::common::TenantContext {
+            tenant: tenant_id.as_deref().map(|id| TenantContext {
                 tenant_id: id.to_string(),
-                business_type: business_type.to_string(),
+                business_type: String::new(),
                 environment: String::new(),
                 organization_id: String::new(),
                 labels: std::collections::HashMap::new(),
@@ -75,38 +56,23 @@ impl SessionRepository for GrpcSessionClient {
             }),
             session_type: session_type.to_string(),
             business_type: business_type.to_string(),
-            participants: session_participants,
-            attributes,
-            visibility: 1, // SessionVisibility::SessionVisibilityPrivate
+            participants: participants.into_iter().map(|p| SessionParticipant {
+                user_id: p,
+                roles: vec![],
+                muted: false,
+                pinned: false,
+                attributes: std::collections::HashMap::new(),
+            }).collect(),
+            attributes: std::collections::HashMap::new(),
+            visibility: 0,
         };
 
-        let mut client = self.client.lock().await;
-        match client.create_session(tonic::Request::new(request.clone())).await {
-            Ok(response) => {
-                let session = response.into_inner().session;
-                if let Some(s) = session {
-                    debug!(
-                        session_id = %s.session_id,
-                        "Session ensured (created or already exists)"
-                    );
-                }
-                Ok(())
-            }
-            Err(e) => {
-                // 如果 session 已存在，可能会返回错误，这里我们忽略该错误
-                if e.code() == tonic::Code::AlreadyExists {
-                    debug!(session_id = %session_id, "Session already exists, skipping creation");
-                    Ok(())
-                } else {
-                    warn!(
-                        error = %e,
-                        session_id = %session_id,
-                        "Failed to ensure session"
-                    );
-                    Err(anyhow::anyhow!("Failed to ensure session: {}", e))
-                }
-            }
-        }
+        Box::pin(async move {
+            let response = self.client.clone().create_session(request).await?;
+            let _inner = response.into_inner();
+
+            debug!(session_id = %session_id, "Ensured session exists");
+            Ok(())
+        })
     }
 }
-

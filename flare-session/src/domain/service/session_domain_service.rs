@@ -65,6 +65,27 @@ impl SessionDomainService {
 
         let mut summaries = bootstrap.summaries;
         
+        // 优化：按优先级排序（未读会话优先，然后按更新时间降序）
+        summaries.sort_by(|a, b| {
+            // 优先级1：未读数（未读会话优先）
+            let a_unread = a.unread_count;
+            let b_unread = b.unread_count;
+            if a_unread != b_unread {
+                return b_unread.cmp(&a_unread);  // 未读数多的优先
+            }
+            
+            // 优先级2：更新时间（最新的优先）
+            let a_ts = a.server_cursor_ts.unwrap_or(0);
+            let b_ts = b.server_cursor_ts.unwrap_or(0);
+            b_ts.cmp(&a_ts)
+        });
+        
+        // 优化：限制返回的会话数量（默认最多 100 个，避免响应过大）
+        let max_sessions = self.config.max_bootstrap_sessions.unwrap_or(100);
+        if summaries.len() > max_sessions {
+            summaries.truncate(max_sessions);
+        }
+        
         // 如果有消息提供者，补充最后一条消息信息和未读数
         if let Some(provider) = &self.message_provider {
             // 为每个会话获取最后一条消息（如果有）
@@ -127,20 +148,14 @@ impl SessionDomainService {
                                     Some(flare_proto::common::message_content::Content::Typing(_)) => {
                                         Some("typing".to_string())
                                     }
-                                    Some(flare_proto::common::message_content::Content::Vote(_)) => {
-                                        Some("vote".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Task(_)) => {
-                                        Some("task".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Schedule(_)) => {
-                                        Some("schedule".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Announcement(_)) => {
-                                        Some("announcement".to_string())
-                                    }
                                     Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
                                         Some("system_event".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::Quote(_)) => {
+                                        Some("quote".to_string())
+                                    }
+                                    Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
+                                        Some("link_card".to_string())
                                     }
                                     None => None,
                                 };

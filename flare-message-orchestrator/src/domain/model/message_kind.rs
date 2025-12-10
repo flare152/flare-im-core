@@ -44,11 +44,14 @@ impl MessageProfile {
                         }
                         Some(flare_proto::common::message_content::Content::Forward(_)) => Some("forward".to_string()),
                         Some(flare_proto::common::message_content::Content::Typing(_)) => Some("typing".to_string()),
-                        Some(flare_proto::common::message_content::Content::Vote(_)) => Some("vote".to_string()),
-                        Some(flare_proto::common::message_content::Content::Task(_)) => Some("task".to_string()),
-                        Some(flare_proto::common::message_content::Content::Schedule(_)) => Some("schedule".to_string()),
-                        Some(flare_proto::common::message_content::Content::Announcement(_)) => Some("announcement".to_string()),
+                        // 注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除
+                        // Some(flare_proto::common::message_content::Content::Vote(_)) => Some("vote".to_string()),
+                        // Some(flare_proto::common::message_content::Content::Task(_)) => Some("task".to_string()),
+                        // Some(flare_proto::common::message_content::Content::Schedule(_)) => Some("schedule".to_string()),
+                        // Some(flare_proto::common::message_content::Content::Announcement(_)) => Some("announcement".to_string()),
                         Some(flare_proto::common::message_content::Content::SystemEvent(_)) => Some("system_event".to_string()),
+                        Some(flare_proto::common::message_content::Content::Quote(_)) => Some("quote".to_string()),
+                        Some(flare_proto::common::message_content::Content::LinkCard(_)) => Some("link_card".to_string()),
                         None => None,
                     }
                 } else {
@@ -57,8 +60,9 @@ impl MessageProfile {
             })
             .unwrap_or_else(|| "custom".to_string());
 
-        // 根据标签推断 MessageType 枚举值（基于新的枚举定义）
+        // 根据标签推断 MessageType 枚举值（基于新的枚举定义，支持所有22种消息类型）
         let message_type = match message_type_label.as_str() {
+            // 基础消息类型（9种）
             "text" | "text/plain" | "plain_text" => MessageType::Text,
             "image" => MessageType::Image,
             "video" => MessageType::Video,
@@ -66,16 +70,28 @@ impl MessageProfile {
             "file" => MessageType::File,
             "location" => MessageType::Location,
             "card" => MessageType::Card,
+            "custom" | "json" | "sticker" | "command" | "event" | "system" => MessageType::Custom,
             "notification" => MessageType::Notification,
+            
+            // 功能消息类型（8种）
             "typing" => MessageType::Typing,
             "recall" => MessageType::Recall,
             "read" => MessageType::Read,
             "forward" => MessageType::Forward,
-            "vote" => MessageType::Vote,
-            "task" => MessageType::Task,
-            "schedule" => MessageType::Schedule,
-            "announcement" => MessageType::Announcement,
-            "custom" | "json" | "sticker" | "command" | "event" | "system" => MessageType::Custom,
+            // 注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除
+            // "vote" => MessageType::Vote,
+            // "task" => MessageType::Task,
+            // "schedule" => MessageType::Schedule,
+            // "announcement" => MessageType::Announcement,
+            
+            // 扩展消息类型（5种）
+            "mini_program" | "miniprogram" => MessageType::MiniProgram,
+            "link_card" | "linkcard" => MessageType::LinkCard,
+            "quote" => MessageType::Quote,
+            // 注意：Thread 在新版 protobuf 中已移除
+            // "thread" => MessageType::Thread,
+            "merge_forward" | "mergeforward" => MessageType::MergeForward,
+            
             _ => MessageType::Unspecified,
         };
 
@@ -103,6 +119,7 @@ impl MessageProfile {
     /// 规则：
     /// - 如果 extra 中有 `notification_only=true`，则为 Notification
     /// - 如果 message_type_label 为 "notification"，则为 Notification
+    /// - 如果 message_type 为 Typing（正在输入），则为 Notification（不持久化）
     /// - 其他情况为 Normal
     fn determine_processing_type(
         message_type_label: &str,
@@ -116,7 +133,7 @@ impl MessageProfile {
         }
 
         // 检查 message_type_label
-        if message_type_label == "notification" {
+        if message_type_label == "notification" || message_type_label == "typing" {
             return MessageProcessingType::Notification;
         }
 
@@ -151,7 +168,6 @@ impl MessageProfile {
 mod tests {
     use super::*;
     use flare_proto::common::{Message, MessageContent, TextContent};
-    use flare_proto::common::message_content::Content;
 
     fn message_with_extra(message_type_label: &str, message_type: i32) -> Message {
         let mut msg = Message::default();
@@ -161,6 +177,7 @@ mod tests {
             content: Some(flare_proto::common::message_content::Content::Text(
                 TextContent { text: "test".to_string(), mentions: vec![] }
             )),
+            extensions: vec![],
         });
         msg
     }

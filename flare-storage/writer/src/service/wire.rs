@@ -5,22 +5,19 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use flare_server_core::kafka::build_kafka_producer;
-use rdkafka::producer::FutureProducer;
 use tracing::warn;
 
 use crate::application::handlers::MessagePersistenceCommandHandler;
 use crate::config::StorageWriterConfig;
 use crate::domain::repository::{
     AckPublisher, ArchiveStoreRepository, HotCacheRepository, MediaAttachmentVerifier,
-    MessageIdempotencyRepository, RealtimeStoreRepository, SessionStateRepository,
+    MessageIdempotencyRepository, SessionStateRepository,
     UserSyncCursorRepository, WalCleanupRepository,
 };
-use crate::domain::service::MessagePersistenceDomainService;
+use crate::domain::service::{MessagePersistenceDomainService, MessageOperationDomainService};
 use crate::infrastructure::external::media::MediaAttachmentClient;
 use crate::infrastructure::messaging::ack_publisher::KafkaAckPublisher;
 use crate::domain::repository::{SeqGenerator, SessionUpdateRepository};
-use crate::infrastructure::persistence::mongo_store::MongoMessageStore;
 use crate::infrastructure::persistence::postgres_store::PostgresMessageStore;
 use crate::infrastructure::persistence::redis_cache::RedisHotCacheRepository;
 use crate::infrastructure::persistence::redis_idempotency::RedisIdempotencyRepository;
@@ -31,6 +28,7 @@ use crate::infrastructure::persistence::user_cursor::RedisUserCursorRepository;
 use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerator};
 use crate::interface::messaging::consumer::StorageWriterConsumer;
 use flare_im_core::metrics::StorageWriterMetrics;
+use flare_server_core::kafka::build_kafka_producer;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -55,10 +53,7 @@ pub async fn initialize(
             .context("Failed to load storage writer service configuration")?
     );
     
-    // 2. 初始化指标收集
-    let metrics = Arc::new(StorageWriterMetrics::new());
-    
-    // 3. 创建 ACK 发布者（可选）
+    // 2. 创建 ACK 发布者（可选）
     let ack_publisher = build_ack_publisher(&config)?;
     
     // 4. 创建 Redis 客户端（可选）
@@ -91,20 +86,7 @@ pub async fn initialize(
         _ => None,
     };
     
-    // 9. 创建实时存储仓储（MongoDB，可选）
-    let realtime_repo: Option<Arc<dyn RealtimeStoreRepository + Send + Sync>> =
-        match MongoMessageStore::new(&config).await {
-            Ok(Some(store)) => {
-                Some(Arc::new(store) as Arc<dyn RealtimeStoreRepository + Send + Sync>)
-            }
-            Ok(None) => None,
-            Err(err) => {
-                warn!(error = ?err, "Failed to connect to MongoDB, skipping MongoDB storage");
-                None
-            }
-        };
-    
-    // 10. 创建归档存储仓储（PostgreSQL，可选）
+    // 9. 创建归档存储仓储（PostgreSQL，可选）
     let archive_repo: Option<Arc<dyn ArchiveStoreRepository + Send + Sync>> =
         match PostgresMessageStore::new(&config).await {
             Ok(Some(store)) => {
@@ -175,11 +157,12 @@ pub async fn initialize(
     let metrics = Arc::new(StorageWriterMetrics::new());
     
     // 16. 创建领域服务（不包含指标，符合 DDD 原则）
+    // 注意：根据设计文档，只使用 PostgreSQL 作为归档存储，Redis 作为缓存
     let domain_service = Arc::new(MessagePersistenceDomainService::new(
         idempotency_repo,
         hot_cache_repo,
-        realtime_repo,
-        archive_repo,
+        None, // realtime_repo: 已移除 MongoDB 支持
+        archive_repo.clone(),
         wal_cleanup_repo,
         ack_publisher,
         media_verifier,
@@ -189,9 +172,15 @@ pub async fn initialize(
         session_update_repo,
     ));
     
-    // 15. 创建命令处理器（应用层负责指标记录）
+    // 17. 创建操作消息领域服务
+    let operation_service = Arc::new(MessageOperationDomainService::new(
+        archive_repo,
+    ));
+    
+    // 18. 创建命令处理器（应用层负责指标记录）
     let command_handler = Arc::new(MessagePersistenceCommandHandler::new(
         domain_service,
+        operation_service,
         metrics.clone(),
     ));
     

@@ -8,27 +8,68 @@ use tracing::instrument;
 use flare_im_core::tracing::{create_span, set_message_id, set_tenant_id};
 use flare_im_core::metrics::StorageWriterMetrics;
 
-use crate::application::commands::ProcessStoreMessageCommand;
+use crate::application::commands::{ProcessStoreMessageCommand, ProcessMessageOperationCommand};
 use crate::domain::model::{PersistenceResult, PreparedMessage};
-use crate::domain::service::MessagePersistenceDomainService;
+use crate::domain::service::{MessagePersistenceDomainService, MessageOperationDomainService};
 
 /// 消息持久化命令处理器（编排层）
 /// 
 /// 负责编排领域服务，并处理应用层关注点（如指标记录、追踪等）
 pub struct MessagePersistenceCommandHandler {
     domain_service: Arc<MessagePersistenceDomainService>,
+    operation_service: Arc<MessageOperationDomainService>,
     metrics: Arc<StorageWriterMetrics>,
 }
 
 impl MessagePersistenceCommandHandler {
     pub fn new(
         domain_service: Arc<MessagePersistenceDomainService>,
+        operation_service: Arc<MessageOperationDomainService>,
         metrics: Arc<StorageWriterMetrics>,
     ) -> Self {
         Self {
             domain_service,
+            operation_service,
             metrics,
         }
+    }
+    
+    /// 处理消息操作命令（撤回、编辑、删除等）
+    #[instrument(skip(self), fields(operation_type = %command.operation.operation_type))]
+    pub async fn handle_operation_message(
+        &self,
+        command: ProcessMessageOperationCommand,
+    ) -> Result<PersistenceResult> {
+        let start = Instant::now();
+        
+        // 处理操作
+        self.operation_service
+            .process_operation(command.operation.clone(), &command.message)
+            .await?;
+        
+        // 构建结果（操作消息不创建新消息，返回操作的目标消息ID）
+        let result = PersistenceResult {
+            session_id: command.message.session_id.clone(),
+            message_id: command.operation.target_message_id.clone(),
+            timeline: Default::default(),
+            deduplicated: false,
+        };
+        
+        // 记录指标
+        let duration = start.elapsed();
+        self.metrics.messages_persisted_duration_seconds.observe(duration.as_secs_f64());
+        self.metrics.messages_persisted_total
+            .with_label_values(&["operation"])
+            .inc();
+        
+        tracing::info!(
+            message_id = %result.message_id,
+            operation_type = %command.operation.operation_type,
+            duration_ms = duration.as_millis(),
+            "Message operation processed successfully"
+        );
+        
+        Ok(result)
     }
 
     /// 处理存储消息命令

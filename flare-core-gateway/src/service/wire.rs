@@ -7,12 +7,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::config::GatewayConfig;
-use crate::interface::grpc::handler::AccessGatewayHandler;
-use crate::infrastructure::{GrpcPushClient, GrpcSignalingClient, GrpcStorageClient, RouteServiceClient};
+// use crate::interface::grpc::handler::{SimpleGatewayHandler, LightweightGatewayHandler};
+use crate::infrastructure::{
+    GrpcMediaClient, GrpcHookClient, GrpcMessageClient, GrpcOnlineClient, GrpcSessionClient
+};
+use crate::interface::grpc::handler::{SimpleGatewayHandler, LightweightGatewayHandler};
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
-    pub handler: AccessGatewayHandler,
+    pub simple_handler: SimpleGatewayHandler,
+    pub lightweight_handler: LightweightGatewayHandler,
 }
 
 /// 构建应用上下文
@@ -32,100 +36,119 @@ pub async fn initialize(
         .context("Failed to load gateway config")?;
     
     // 2. 创建服务发现（使用常量，支持环境变量覆盖）
-    use flare_im_core::service_names::{SIGNALING_ONLINE, PUSH_SERVER, MESSAGE_ORCHESTRATOR, SIGNALING_ROUTE, ACCESS_GATEWAY, get_service_name};
+    use flare_im_core::service_names::{
+        MEDIA, HOOK_ENGINE, MESSAGE_ORCHESTRATOR, SIGNALING_ONLINE, SESSION,
+        get_service_name
+    };
     
-    // 2.1 Signaling 服务发现
-    let signaling_service = get_service_name(SIGNALING_ONLINE);
-    let signaling_discover = flare_im_core::discovery::create_discover(&signaling_service)
+    // 2.1 Media 服务发现
+    let media_service = get_service_name("MEDIA");
+    let media_discover = flare_im_core::discovery::create_discover(&media_service)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create signaling service discover for {}: {}", signaling_service, e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create media service discover for {}: {}", media_service, e))?;
     
-    let signaling_service_client = if let Some(discover) = signaling_discover {
+    let media_service_client = if let Some(discover) = media_discover {
         Some(flare_server_core::discovery::ServiceClient::new(discover))
     } else {
         None
     };
     
-    // 2.2 Push 服务发现
-    let push_service = get_service_name(PUSH_SERVER);
-    let push_discover = flare_im_core::discovery::create_discover(&push_service)
+    // 2.2 Hook 服务发现
+    let hook_service = get_service_name("HOOK_ENGINE");
+    let hook_discover = flare_im_core::discovery::create_discover(&hook_service)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create push service discover for {}: {}", push_service, e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create hook service discover for {}: {}", hook_service, e))?;
     
-    let push_service_client = if let Some(discover) = push_discover {
+    let hook_service_client = if let Some(discover) = hook_discover {
         Some(flare_server_core::discovery::ServiceClient::new(discover))
     } else {
         None
     };
     
-    // 2.3 Route 服务发现（如果启用）
-    let route_service_client: Option<RouteServiceClient> = if gateway_config.use_route_service {
-        let route_service = get_service_name(SIGNALING_ROUTE);
-        let route_discover = flare_im_core::discovery::create_discover(&route_service)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create route service discover for {}: {}", route_service, e))?;
-        
-        if let Some(discover) = route_discover {
-            let service_client = flare_server_core::discovery::ServiceClient::new(discover);
-            Some(RouteServiceClient::with_service_client(service_client, "default".to_string()))
-        } else {
-            tracing::warn!("Route service is enabled but service discovery failed, falling back to direct routing");
-            None
-        }
+    // 2.3 Message 服务发现
+    let message_service = get_service_name("MESSAGE_ORCHESTRATOR");
+    let message_discover = flare_im_core::discovery::create_discover(&message_service)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create message service discover for {}: {}", message_service, e))?;
+    
+    let message_service_client = if let Some(discover) = message_discover {
+        Some(flare_server_core::discovery::ServiceClient::new(discover))
+    } else {
+        None
+    };
+    
+    // 2.4 Online 服务发现
+    let online_service = get_service_name("SIGNALING_ONLINE");
+    let online_discover = flare_im_core::discovery::create_discover(&online_service)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create online service discover for {}: {}", online_service, e))?;
+    
+    let online_service_client = if let Some(discover) = online_discover {
+        Some(flare_server_core::discovery::ServiceClient::new(discover))
+    } else {
+        None
+    };
+    
+    // 2.5 Session 服务发现
+    let session_service = get_service_name("SESSION");
+    let session_discover = flare_im_core::discovery::create_discover(&session_service)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create session service discover for {}: {}", session_service, e))?;
+    
+    let session_service_client = if let Some(discover) = session_discover {
+        Some(flare_server_core::discovery::ServiceClient::new(discover))
     } else {
         None
     };
     
     // 3. 创建基础设施客户端
-    let signaling_client = if let Some(service_client) = signaling_service_client {
-        GrpcSignalingClient::with_service_client(service_client)
+    let media_client = if let Some(service_client) = media_service_client {
+        Arc::new(GrpcMediaClient::with_service_client(service_client, media_service.clone()))
     } else {
-        // 降级：使用服务名称（如果没有配置服务发现）
-        GrpcSignalingClient::new(signaling_service.clone())
+        Arc::new(GrpcMediaClient::new(media_service.clone()))
     };
     
-    let message_service = get_service_name(MESSAGE_ORCHESTRATOR);
-    let _storage_client = Arc::new(GrpcStorageClient::new(message_service.clone()));
-    
-    let _push_client = if let Some(service_client) = push_service_client {
-        GrpcPushClient::with_service_client(service_client)
+    let hook_client = if let Some(service_client) = hook_service_client {
+        Arc::new(GrpcHookClient::with_service_client(service_client, hook_service.clone()))
     } else {
-        // 降级：使用服务名称（如果没有配置服务发现）
-        GrpcPushClient::new(push_service.clone())
+        Arc::new(GrpcHookClient::new(hook_service.clone()))
     };
     
-    // 4. 创建 Access Gateway 服务发现
-    let access_gateway_service = get_service_name(ACCESS_GATEWAY);
-    let access_gateway_discover = flare_im_core::discovery::create_discover(&access_gateway_service)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create access gateway service discover for {}: {}", access_gateway_service, e))?;
-    
-    // 5. 创建 Gateway Router（跨地区路由）
-    use flare_im_core::gateway::{GatewayRouter, GatewayRouterConfig};
-    let gateway_router_config = GatewayRouterConfig {
-        connection_pool_size: 10,
-        connection_timeout_ms: 5000,
-        connection_idle_timeout_ms: 300_000, // 5分钟空闲超时
-        deployment_mode: std::env::var("GATEWAY_DEPLOYMENT_MODE")
-            .unwrap_or_else(|_| "single_region".to_string()),
-        local_gateway_id: std::env::var("LOCAL_GATEWAY_ID").ok(),
-        access_gateway_service: access_gateway_service.clone(),
-    };
-    
-    let gateway_router = if let Some(discover) = access_gateway_discover {
-        let service_client = flare_server_core::discovery::ServiceClient::new(discover);
-        GatewayRouter::with_service_client(gateway_router_config, service_client)
+    let message_client = if let Some(service_client) = message_service_client {
+        Arc::new(GrpcMessageClient::with_service_client(service_client, message_service.clone()))
     } else {
-        // 降级：使用服务名称（如果没有配置服务发现）
-        GatewayRouter::new(gateway_router_config)
+        Arc::new(GrpcMessageClient::new(message_service.clone()))
     };
     
-    // 6. 构建 AccessGateway Handler
-    let handler = AccessGatewayHandler::new(
-        signaling_client.clone(),
-        gateway_router.clone(),
+    let online_client = if let Some(service_client) = online_service_client {
+        Arc::new(GrpcOnlineClient::with_service_client(service_client, online_service.clone()))
+    } else {
+        Arc::new(GrpcOnlineClient::new(online_service.clone()))
+    };
+    
+    let session_client = if let Some(service_client) = session_service_client {
+        Arc::new(GrpcSessionClient::with_service_client(service_client, session_service.clone()))
+    } else {
+        Arc::new(GrpcSessionClient::new(session_service.clone()))
+    };
+    
+    // 4. 构建简单网关处理器
+    let simple_handler = SimpleGatewayHandler::new(
+        media_client.clone(),
+        hook_client.clone(),
+        message_client.clone(),
+        online_client.clone(),
+        session_client.clone(),
     );
     
-    Ok(ApplicationContext { handler })
+    // 5. 构建轻量级网关处理器
+    let lightweight_handler = LightweightGatewayHandler::new(
+        media_client,
+        hook_client,
+        message_client,
+        online_client,
+        session_client,
+    );
+    
+    Ok(ApplicationContext { simple_handler, lightweight_handler })
 }
-

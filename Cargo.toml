@@ -5,6 +5,7 @@ members = [
     "flare-core-gateway",
     
     # 通信核心层 - 信令系统
+    "flare-signaling/common",
     "flare-signaling/gateway",
     "flare-signaling/online",
     "flare-signaling/route",

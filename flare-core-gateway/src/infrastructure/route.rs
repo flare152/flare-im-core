@@ -5,19 +5,19 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
-use flare_proto::signaling::{RouteMessageRequest, RouteMessageResponse};
+use flare_proto::signaling::router::router_service_client::RouterServiceClient;
+use flare_proto::signaling::router::{SelectPushTargetsRequest, SelectPushTargetsResponse};
 use flare_proto::common::{RequestContext, TenantContext};
 use prost::Message as ProstMessage;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use flare_server_core::discovery::ServiceClient;
 
 /// Route 服务客户端
 pub struct RouteServiceClient {
-    client: Arc<Mutex<Option<SignalingServiceClient<Channel>>>>,
+    client: Arc<Mutex<Option<RouterServiceClient<Channel>>>>,
     service_name: String,
     default_tenant_id: String,
     service_client: Arc<Mutex<Option<ServiceClient>>>,
@@ -94,7 +94,7 @@ impl RouteServiceClient {
             "Successfully got channel from service discovery"
         );
 
-        let client = SignalingServiceClient::new(channel);
+        let client = RouterServiceClient::new(channel);
         *client_guard = Some(client);
         
         info!(
@@ -104,33 +104,28 @@ impl RouteServiceClient {
         Ok(())
     }
 
-    /// 路由消息到业务系统
-    #[tracing::instrument(skip(self, payload, context, tenant))]
-    pub async fn route_message(
+    /// 选择推送目标设备
+    #[tracing::instrument(skip(self))]
+    pub async fn select_push_targets(
         &self,
         user_id: &str,
-        svid: &str,
-        payload: Vec<u8>,
-        context: Option<RequestContext>,
+        strategy: flare_proto::signaling::router::PushStrategy,
         tenant: Option<TenantContext>,
-    ) -> Result<RouteMessageResponse> {
+    ) -> Result<SelectPushTargetsResponse> {
         self.initialize().await.context("Failed to initialize Route Service client")?;
 
         let mut client_guard = self.client.lock().await;
         let client = client_guard.as_mut().ok_or_else(|| anyhow::anyhow!("Route Service client not available"))?;
 
-        let request = RouteMessageRequest {
+        let request = SelectPushTargetsRequest {
             user_id: user_id.to_string(),
-            svid: svid.to_string(),
-            payload,
-            context,
+            strategy: strategy as i32,
             tenant,
         };
 
-        let response = client.route_message(tonic::Request::new(request)).await
-            .context("Failed to call RouteMessage RPC")?;
+        let response = client.select_push_targets(tonic::Request::new(request)).await
+            .context("Failed to call SelectPushTargets RPC")?;
         
         Ok(response.into_inner())
     }
 }
-

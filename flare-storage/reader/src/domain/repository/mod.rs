@@ -123,3 +123,22 @@ pub trait VisibilityStorage: Send + Sync {
     ) -> Result<Vec<String>>;
 }
 
+/// 消息状态仓储接口 - 用于存储和查询用户对消息的私有行为
+#[async_trait::async_trait]
+pub trait MessageStateRepository: Send + Sync {
+    /// 标记消息为已读
+    async fn mark_as_read(&self, message_id: &str, user_id: &str) -> anyhow::Result<()>;
+
+    /// 标记消息为已删除（仅我删除）
+    async fn mark_as_deleted(&self, message_id: &str, user_id: &str) -> anyhow::Result<()>;
+
+    /// 标记消息为已焚毁（阅后即焚）
+    async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> anyhow::Result<()>;
+
+    /// 批量标记消息为已读
+    async fn batch_mark_as_read(&self, user_id: &str, message_ids: &[String]) -> anyhow::Result<()>;
+
+    /// 批量标记消息为已删除
+    async fn batch_mark_as_deleted(&self, user_id: &str, message_ids: &[String]) -> anyhow::Result<()>;
+}
+

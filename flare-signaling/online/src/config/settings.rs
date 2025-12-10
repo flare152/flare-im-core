@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use flare_im_core::config::FlareAppConfig;
 use std::env;
 

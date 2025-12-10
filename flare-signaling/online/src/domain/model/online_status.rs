@@ -11,14 +11,3 @@ pub struct OnlineStatusRecord {
     pub device_id: Option<String>,
     pub device_platform: Option<String>,
 }
-
-/// 在线状态变化事件
-#[derive(Debug, Clone)]
-pub struct PresenceChangeEvent {
-    pub user_id: String,
-    pub status: OnlineStatusRecord,
-    pub occurred_at: DateTime<Utc>,
-    pub conflict_action: Option<i32>, // ConflictAction enum value
-    pub reason: Option<String>,
-}
-

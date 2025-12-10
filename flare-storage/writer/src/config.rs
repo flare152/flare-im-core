@@ -19,9 +19,12 @@ pub struct StorageWriterConfig {
     pub redis_idempotency_ttl_seconds: u64,
     pub wal_hash_key: Option<String>,
     pub postgres_url: Option<String>,
-    pub mongo_url: Option<String>,
-    pub mongo_database: String,
-    pub mongo_collection: String,
+    // PostgreSQL 连接池配置
+    pub postgres_max_connections: u32,
+    pub postgres_min_connections: u32,
+    pub postgres_acquire_timeout_seconds: u64,
+    pub postgres_idle_timeout_seconds: u64,
+    pub postgres_max_lifetime_seconds: u64,
     pub media_service_endpoint: Option<String>,
 }
 
@@ -120,33 +123,31 @@ impl StorageWriterConfig {
                 }
             });
 
-        // 解析 MongoDB 配置引用
-        let mongo_url = env::var("STORAGE_MONGO_URL")
+        // PostgreSQL 连接池配置（优化性能）
+        let postgres_max_connections = env::var("STORAGE_POSTGRES_MAX_CONNECTIONS")
             .ok()
-            .or_else(|| {
-                if let Some(mongo_name) = &service_config.mongo {
-                    app.mongodb_profile(mongo_name)
-                        .map(|profile| profile.url.clone())
-                } else {
-                    None
-                }
-            });
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(50); // 默认 50 个连接（适合高并发写入）
 
-        let mongo_database = mongo_url
-            .as_ref()
-            .and_then(|_| {
-                if let Some(mongo_name) = &service_config.mongo {
-                    app.mongodb_profile(mongo_name)
-                        .and_then(|profile| profile.database.clone())
-                } else {
-                    None
-                }
-            })
-            .or_else(|| env::var("STORAGE_MONGO_DATABASE").ok())
-            .unwrap_or_else(|| "flare_im".to_string());
+        let postgres_min_connections = env::var("STORAGE_POSTGRES_MIN_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(10); // 默认保持 10 个最小连接
 
-        let mongo_collection = env::var("STORAGE_MONGO_MESSAGE_COLLECTION")
-            .unwrap_or_else(|_| "messages".to_string());
+        let postgres_acquire_timeout_seconds = env::var("STORAGE_POSTGRES_ACQUIRE_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30); // 默认 30 秒获取连接超时
+
+        let postgres_idle_timeout_seconds = env::var("STORAGE_POSTGRES_IDLE_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600); // 默认 10 分钟空闲超时
+
+        let postgres_max_lifetime_seconds = env::var("STORAGE_POSTGRES_MAX_LIFETIME_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(3600); // 默认 1 小时连接最大生命周期
 
         let media_service_endpoint = env::var("MEDIA_SERVICE_ENDPOINT").ok();
 
@@ -164,9 +165,11 @@ impl StorageWriterConfig {
             redis_idempotency_ttl_seconds,
             wal_hash_key,
             postgres_url,
-            mongo_url,
-            mongo_database,
-            mongo_collection,
+            postgres_max_connections,
+            postgres_min_connections,
+            postgres_acquire_timeout_seconds,
+            postgres_idle_timeout_seconds,
+            postgres_max_lifetime_seconds,
             media_service_endpoint,
         })
     }
@@ -216,11 +219,29 @@ impl StorageWriterConfig {
             .or_else(|| redis_url.as_ref().map(|_| "storage:wal:buffer".to_string()));
 
         let postgres_url = env::var("STORAGE_POSTGRES_URL").ok();
-        let mongo_url = env::var("STORAGE_MONGO_URL").ok();
-        let mongo_database =
-            env::var("STORAGE_MONGO_DATABASE").unwrap_or_else(|_| "flare_im".to_string());
-        let mongo_collection =
-            env::var("STORAGE_MONGO_MESSAGE_COLLECTION").unwrap_or_else(|_| "messages".to_string());
+        
+        // PostgreSQL 连接池配置（向后兼容，使用默认值）
+        let postgres_max_connections = env::var("STORAGE_POSTGRES_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(50);
+        let postgres_min_connections = env::var("STORAGE_POSTGRES_MIN_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(10);
+        let postgres_acquire_timeout_seconds = env::var("STORAGE_POSTGRES_ACQUIRE_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
+        let postgres_idle_timeout_seconds = env::var("STORAGE_POSTGRES_IDLE_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600);
+        let postgres_max_lifetime_seconds = env::var("STORAGE_POSTGRES_MAX_LIFETIME_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(3600);
+        
         let media_service_endpoint = env::var("MEDIA_SERVICE_ENDPOINT").ok();
 
         Self {
@@ -237,9 +258,11 @@ impl StorageWriterConfig {
             redis_idempotency_ttl_seconds,
             wal_hash_key,
             postgres_url,
-            mongo_url,
-            mongo_database,
-            mongo_collection,
+            postgres_max_connections,
+            postgres_min_connections,
+            postgres_acquire_timeout_seconds,
+            postgres_idle_timeout_seconds,
+            postgres_max_lifetime_seconds,
             media_service_endpoint,
         }
     }

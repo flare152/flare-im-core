@@ -33,6 +33,7 @@ base64 = { workspace = true }
 jsonwebtoken = { workspace = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "postgres", "chrono"] }
 chrono = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 futures = { workspace = true }
+tokio-stream = { version = "0.1" }
 

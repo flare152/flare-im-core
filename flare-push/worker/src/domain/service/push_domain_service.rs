@@ -2,13 +2,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use chrono::Utc;
 
 use flare_im_core::gateway::GatewayRouterTrait;
 use flare_im_core::hooks::HookDispatcher;
 use flare_im_core::metrics::PushWorkerMetrics;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
-use prost_types::Timestamp;
 use tracing::{error, info, instrument, warn};
 
 use crate::config::PushWorkerConfig;
@@ -329,8 +327,10 @@ impl PushDomainService {
                         payload: task.message.clone(),
                         description: String::new(),
                         metadata: std::collections::HashMap::new(),
+                        extensions: Vec::new(), // 添加缺失的 extensions 字段
                     }
                 )),
+                extensions: Vec::new(), // 添加缺失的 extensions 字段
             })
         } else {
             None
@@ -344,23 +344,16 @@ impl PushDomainService {
                 client_msg_id: String::new(),
                 sender_id: String::new(),
                 source: 1, // MessageSource::User
-                sender_nickname: String::new(),
-                sender_avatar_url: String::new(),
-                sender_platform_id: String::new(),
-                receiver_ids: vec![task.user_id.clone()],
-                receiver_id: task.user_id.clone(),
-                group_id: String::new(),
-                content: message_content,
-                content_type: 1, // ContentType::PlainText
-                timestamp: Some(Timestamp {
+                seq: 0,
+                timestamp: Some(prost_types::Timestamp {
                     seconds: chrono::Utc::now().timestamp(),
                     nanos: 0,
                 }),
-                created_at: None,
-                seq: 0,
+                session_type: 1, // SessionType::Single = 1
                 message_type: 0, // MessageType::Unspecified = 0
                 business_type: String::new(),
-                session_type: String::new(),
+                content: message_content,
+                content_type: 1, // ContentType::PlainText
                 status: 1, // MessageStatus::Created = 1
                 extra: HashMap::new(),
                 attributes: HashMap::new(),
@@ -375,15 +368,17 @@ impl PushDomainService {
                 tags: Vec::new(),
                 visibility: HashMap::new(),
                 read_by: Vec::new(),
-                operations: Vec::new(),
                 timeline: None,
-                forward_info: None,
                 offline_push_info: None,
+                edit_history: Vec::new(),
+                reactions: Vec::new(),
+                extensions: Vec::new(), // 添加缺失的 extensions 字段
             }),
             options: None,
             context: None,
             tenant: None,
             metadata: HashMap::new(),
+            request_id: uuid::Uuid::new_v4().to_string(), // 添加缺失的 request_id 字段
         })
     }
 

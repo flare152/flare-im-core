@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Context;
-use flare_proto::signaling::signaling_service_server::SignalingService;
-use flare_proto::signaling::*;
-use flare_server_core::error::ErrorCode;
+use flare_proto::signaling::online::signaling_service_server::SignalingService;
+use flare_proto::signaling::online::*;
 use prost_types::Timestamp;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -11,13 +9,11 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::application::commands::{
-    HeartbeatCommand, LoginCommand, LogoutCommand, PublishSignalCommand, SubscribeCommand,
-    UnsubscribeCommand,
+    HeartbeatCommand, LoginCommand, LogoutCommand,
 };
 use crate::application::handlers::{OnlineCommandHandler, OnlineQueryHandler};
 use crate::application::queries::GetOnlineStatusQuery;
 use crate::domain::repository::PresenceWatcher;
-use crate::util;
 
 #[derive(Clone)]
 pub struct OnlineHandler {
@@ -103,66 +99,6 @@ impl OnlineHandler {
         }
     }
 
-    pub async fn handle_route_message(
-        &self,
-        _request: Request<RouteMessageRequest>,
-    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
-        Ok(Response::new(RouteMessageResponse {
-            success: false,
-            response: vec![],
-            error_message: "Route not supported in Online service".to_string(),
-            status: util::rpc_status_error(ErrorCode::InvalidParameter, "route not supported"),
-        }))
-    }
-
-    pub async fn handle_subscribe(
-        &self,
-        request: Request<SubscribeRequest>,
-    ) -> std::result::Result<Response<SubscribeResponse>, Status> {
-        let command = SubscribeCommand {
-            request: request.into_inner(),
-        };
-        match self.command_handler.handle_subscribe(command).await {
-            Ok(response) => Ok(Response::new(response)),
-            Err(err) => {
-                error!(?err, "subscribe failed");
-                Err(Status::internal(err.to_string()))
-            }
-        }
-    }
-
-    pub async fn handle_unsubscribe(
-        &self,
-        request: Request<UnsubscribeRequest>,
-    ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
-        let command = UnsubscribeCommand {
-            request: request.into_inner(),
-        };
-        match self.command_handler.handle_unsubscribe(command).await {
-            Ok(response) => Ok(Response::new(response)),
-            Err(err) => {
-                error!(?err, "unsubscribe failed");
-                Err(Status::internal(err.to_string()))
-            }
-        }
-    }
-
-    pub async fn handle_publish_signal(
-        &self,
-        request: Request<PublishSignalRequest>,
-    ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
-        let command = PublishSignalCommand {
-            request: request.into_inner(),
-        };
-        match self.command_handler.handle_publish_signal(command).await {
-            Ok(response) => Ok(Response::new(response)),
-            Err(err) => {
-                error!(?err, "publish_signal failed");
-                Err(Status::internal(err.to_string()))
-            }
-        }
-    }
-
     pub async fn handle_watch_presence(
         &self,
         request: Request<WatchPresenceRequest>,
@@ -184,7 +120,7 @@ impl OnlineHandler {
         };
 
         // 创建发送器用于流式响应
-        let (stream_tx, mut stream_rx) = mpsc::channel(100);
+        let (stream_tx, stream_rx) = mpsc::channel(100);
         
         // 启动后台任务转发事件
         tokio::spawn(async move {
@@ -255,34 +191,6 @@ impl SignalingService for OnlineHandler {
         request: Request<GetOnlineStatusRequest>,
     ) -> std::result::Result<Response<GetOnlineStatusResponse>, Status> {
         self.handle_get_online_status(request).await
-    }
-
-    async fn route_message(
-        &self,
-        request: Request<RouteMessageRequest>,
-    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
-        self.handle_route_message(request).await
-    }
-
-    async fn subscribe(
-        &self,
-        request: Request<SubscribeRequest>,
-    ) -> std::result::Result<Response<SubscribeResponse>, Status> {
-        self.handle_subscribe(request).await
-    }
-
-    async fn unsubscribe(
-        &self,
-        request: Request<UnsubscribeRequest>,
-    ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
-        self.handle_unsubscribe(request).await
-    }
-
-    async fn publish_signal(
-        &self,
-        request: Request<PublishSignalRequest>,
-    ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
-        self.handle_publish_signal(request).await
     }
 
     type WatchPresenceStream = ReceiverStream<std::result::Result<PresenceEvent, Status>>;

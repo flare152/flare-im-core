@@ -1,6 +1,5 @@
 //! 命令处理器（编排层）- 轻量级，只负责编排领域服务
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use anyhow::Result;
 use tracing::instrument;
@@ -90,6 +89,25 @@ impl MessageStorageCommandHandler {
         self.domain_service
             .append_operation_and_attributes(&command.message_id, operation, command.attributes, command.tags)
             .await
+    }
+
+    /// 添加或移除反应
+    #[instrument(skip(self), fields(message_id = %message_id, emoji = %emoji, user_id = %user_id))]
+    pub async fn handle_add_or_remove_reaction(
+        &self,
+        message_id: &str,
+        emoji: &str,
+        user_id: &str,
+        is_add: bool,
+    ) -> Result<Vec<flare_proto::common::Reaction>> {
+        self.domain_service
+            .add_or_remove_reaction(message_id, emoji, user_id, is_add)
+            .await
+    }
+
+    /// 获取 domain_service（用于直接访问领域服务）
+    pub fn domain_service(&self) -> &Arc<MessageStorageDomainService> {
+        &self.domain_service
     }
 
     /// 清理会话

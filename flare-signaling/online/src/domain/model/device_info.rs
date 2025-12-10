@@ -11,3 +11,11 @@ pub struct DeviceInfo {
     pub last_active_time: DateTime<Utc>,
 }
 
+/// 用户在线状态
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPresence {
+    pub user_id: String,
+    pub is_online: bool,
+    pub devices: Vec<DeviceInfo>,
+    pub last_seen: DateTime<Utc>,
+}

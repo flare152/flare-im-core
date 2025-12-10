@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
-use flare_proto::storage::StoreMessageRequest;
-use flare_proto::push::PushMessageRequest;
+use flare_proto::storage::StoreMessageRequest as StorageStoreMessageRequest;
+use flare_proto::push::PushMessageRequest as PushPushMessageRequest;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio::sync::Mutex;
@@ -18,8 +19,8 @@ pub struct KafkaMessagePublisher {
     producer: Arc<FutureProducer>,
     config: Arc<MessageOrchestratorConfig>,
     // 批量发送缓冲区
-    storage_buffer: Arc<Mutex<Vec<StoreMessageRequest>>>,
-    push_buffer: Arc<Mutex<Vec<PushMessageRequest>>>,
+    storage_buffer: Arc<Mutex<Vec<StorageStoreMessageRequest>>>,
+    push_buffer: Arc<Mutex<Vec<PushPushMessageRequest>>>,
     // 最后刷新时间
     last_flush_time: Arc<Mutex<std::time::Instant>>,
 }
@@ -98,7 +99,7 @@ impl KafkaMessagePublisher {
     }
     
     /// 批量发布存储消息
-    async fn publish_storage_batch(&self, payloads: Vec<StoreMessageRequest>) -> Result<()> {
+    async fn publish_storage_batch(&self, payloads: Vec<StorageStoreMessageRequest>) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());
         }
@@ -163,7 +164,7 @@ impl KafkaMessagePublisher {
             }
     
     /// 批量发布推送消息
-    async fn publish_push_batch(&self, payloads: Vec<PushMessageRequest>) -> Result<()> {
+    async fn publish_push_batch(&self, payloads: Vec<PushPushMessageRequest>) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());
         }
@@ -269,71 +270,77 @@ impl KafkaMessagePublisher {
 }
 
 impl MessageEventPublisher for KafkaMessagePublisher {
-    async fn publish_storage(&self, payload: StoreMessageRequest) -> Result<()> {
-        // 添加到缓冲区
-        let should_flush = {
-            let mut buffer = self.storage_buffer.lock().await;
-            buffer.push(payload);
-            buffer.len() >= self.config.kafka_batch_size
-        };
-        
-        // 如果缓冲区已满，立即刷新
-        if should_flush {
-            let messages = {
+    fn publish_storage(&self, payload: StorageStoreMessageRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            // 添加到缓冲区
+            let should_flush = {
                 let mut buffer = self.storage_buffer.lock().await;
-                buffer.drain(..).collect()
+                buffer.push(payload);
+                buffer.len() >= self.config.kafka_batch_size
             };
-            self.publish_storage_batch(messages).await?;
-            *self.last_flush_time.lock().await = std::time::Instant::now();
-        }
-        
-        Ok(())
+            
+            // 如果缓冲区已满，立即刷新
+            if should_flush {
+                let messages: Vec<StorageStoreMessageRequest> = {
+                    let mut buffer = self.storage_buffer.lock().await;
+                    buffer.drain(..).collect()
+                };
+                self.publish_storage_batch(messages).await?;
+                *self.last_flush_time.lock().await = std::time::Instant::now();
+            }
+            
+            Ok(())
+        })
     }
 
-    async fn publish_push(&self, payload: PushMessageRequest) -> Result<()> {
-        // 添加到缓冲区
-        let should_flush = {
-            let mut buffer = self.push_buffer.lock().await;
-            buffer.push(payload);
-            buffer.len() >= self.config.kafka_batch_size
-        };
-        
-        // 如果缓冲区已满，立即刷新
-        if should_flush {
-            let messages = {
+    fn publish_push(&self, payload: PushPushMessageRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            // 添加到缓冲区
+            let should_flush = {
                 let mut buffer = self.push_buffer.lock().await;
-                buffer.drain(..).collect()
+                buffer.push(payload);
+                buffer.len() >= self.config.kafka_batch_size
             };
-            self.publish_push_batch(messages).await?;
-        }
-        
-        Ok(())
+            
+            // 如果缓冲区已满，立即刷新
+            if should_flush {
+                let messages: Vec<PushPushMessageRequest> = {
+                    let mut buffer = self.push_buffer.lock().await;
+                    buffer.drain(..).collect()
+                };
+                self.publish_push_batch(messages).await?;
+            }
+            
+            Ok(())
+        })
     }
 
-    async fn publish_both(
+    fn publish_both(
         &self,
-        storage_payload: StoreMessageRequest,
-        push_payload: PushMessageRequest,
-    ) -> Result<()> {
-        // 并行添加到缓冲区
-        let (storage_should_flush, push_should_flush) = {
-            let mut storage_buffer = self.storage_buffer.lock().await;
-            let mut push_buffer = self.push_buffer.lock().await;
+        storage_payload: StorageStoreMessageRequest,
+        push_payload: PushPushMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            // 并行添加到缓冲区
+            let (storage_should_flush, push_should_flush) = {
+                let mut storage_buffer = self.storage_buffer.lock().await;
+                let mut push_buffer = self.push_buffer.lock().await;
+                
+                storage_buffer.push(storage_payload);
+                push_buffer.push(push_payload);
+                
+                (
+                    storage_buffer.len() >= self.config.kafka_batch_size,
+                    push_buffer.len() >= self.config.kafka_batch_size,
+                )
+            };
             
-            storage_buffer.push(storage_payload);
-            push_buffer.push(push_payload);
+            // 如果任一缓冲区已满，刷新所有缓冲区
+            if storage_should_flush || push_should_flush {
+                self.flush().await?;
+            }
             
-            (
-                storage_buffer.len() >= self.config.kafka_batch_size,
-                push_buffer.len() >= self.config.kafka_batch_size,
-            )
-        };
-        
-        // 如果任一缓冲区已满，刷新所有缓冲区
-        if storage_should_flush || push_should_flush {
-            self.flush().await?;
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 }

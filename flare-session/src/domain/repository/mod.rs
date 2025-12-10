@@ -122,3 +122,60 @@ pub trait MessageProvider: Send + Sync {
         Err(anyhow::anyhow!("sync_messages_by_seq not implemented, use sync_messages instead"))
     }
 }
+
+/// Thread 仓储接口（话题管理）
+#[async_trait]
+pub trait ThreadRepository: Send + Sync {
+    /// 创建话题
+    async fn create_thread(
+        &self,
+        session_id: &str,
+        root_message_id: &str,
+        title: Option<&str>,
+        creator_id: &str,
+    ) -> Result<String>;
+    
+    /// 获取话题列表
+    async fn list_threads(
+        &self,
+        session_id: &str,
+        limit: i32,
+        offset: i32,
+        include_archived: bool,
+        sort_order: crate::domain::model::ThreadSortOrder,
+    ) -> Result<(Vec<crate::domain::model::Thread>, i32)>;
+    
+    /// 获取话题详情
+    async fn get_thread(&self, thread_id: &str) -> Result<Option<crate::domain::model::Thread>>;
+    
+    /// 更新话题
+    async fn update_thread(
+        &self,
+        thread_id: &str,
+        title: Option<&str>,
+        is_pinned: Option<bool>,
+        is_locked: Option<bool>,
+        is_archived: Option<bool>,
+    ) -> Result<()>;
+    
+    /// 删除话题
+    async fn delete_thread(&self, thread_id: &str) -> Result<()>;
+    
+    /// 增加话题回复计数
+    async fn increment_reply_count(
+        &self,
+        thread_id: &str,
+        reply_message_id: &str,
+        reply_user_id: &str,
+    ) -> Result<()>;
+    
+    /// 添加话题参与者
+    async fn add_participant(
+        &self,
+        thread_id: &str,
+        user_id: &str,
+    ) -> Result<()>;
+    
+    /// 获取话题参与者列表
+    async fn get_participants(&self, thread_id: &str) -> Result<Vec<String>>;
+}

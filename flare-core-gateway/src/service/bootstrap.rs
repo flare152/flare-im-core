@@ -18,7 +18,7 @@ impl ApplicationBootstrap {
         use flare_im_core::{load_config, ServiceHelper};
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         let gateway_config_service = app_config.core_gateway_service();
         let runtime_config = app_config.compose_service_config(
             &gateway_config_service.runtime,
@@ -48,10 +48,15 @@ impl ApplicationBootstrap {
         context: wire::ApplicationContext,
         address: SocketAddr,
     ) -> Result<()> {
-        use flare_proto::access_gateway::access_gateway_server::AccessGatewayServer;
+        use flare_proto::media::media_service_server::MediaServiceServer;
+        use flare_proto::hooks::hook_service_server::HookServiceServer;
+        use flare_proto::message::message_service_server::MessageServiceServer;
+        use flare_proto::signaling::online::{signaling_service_server::SignalingServiceServer, user_service_server::UserServiceServer};
+        use flare_proto::session::session_service_server::SessionServiceServer;
         use tonic::transport::Server;
 
-        let handler = context.handler;
+        let simple_handler = context.simple_handler;
+        let lightweight_handler = context.lightweight_handler;
 
         info!(
             address = %address,
@@ -64,7 +69,12 @@ impl ApplicationBootstrap {
         let runtime = ServiceRuntime::new("core-gateway", address)
             .add_spawn_with_shutdown("core-gateway-grpc", move |shutdown_rx| async move {
                 Server::builder()
-                    .add_service(AccessGatewayServer::new(handler))
+                    .add_service(MediaServiceServer::new(simple_handler.clone()))
+                    .add_service(HookServiceServer::new(simple_handler.clone()))
+                    .add_service(MessageServiceServer::new(simple_handler.clone()))
+                    .add_service(SignalingServiceServer::new(simple_handler.clone()))
+                    .add_service(UserServiceServer::new(simple_handler.clone()))
+                    .add_service(SessionServiceServer::new(simple_handler.clone()))
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

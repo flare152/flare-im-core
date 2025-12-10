@@ -1,0 +1,41 @@
+//! Online 服务 gRPC 客户端
+//!
+//! Router 通过此客户端调用 Online 服务的 UserService 接口查询设备信息
+
+use anyhow::Result;
+use tonic::transport::Channel;
+use flare_proto::signaling::online::{
+    user_service_client::UserServiceClient,
+    ListUserDevicesRequest, ListUserDevicesResponse,
+};
+use flare_proto::{RequestContext, TenantContext};
+
+pub struct OnlineServiceClient {
+    client: UserServiceClient<Channel>,
+}
+
+impl OnlineServiceClient {
+    pub async fn new(endpoint: String) -> Result<Self> {
+        let channel = Channel::from_shared(endpoint)?
+            .connect()
+            .await?;
+        
+        let client = UserServiceClient::new(channel);
+        
+        Ok(Self { client })
+    }
+
+    /// 查询用户的所有在线设备
+    pub async fn list_user_devices(&self, user_id: &str) -> Result<ListUserDevicesResponse> {
+        let mut client = self.client.clone();
+        
+        let request = tonic::Request::new(ListUserDevicesRequest {
+            user_id: user_id.to_string(),
+            context: Some(RequestContext::default()),
+            tenant: Some(TenantContext::default()),
+        });
+        
+        let response = client.list_user_devices(request).await?;
+        Ok(response.into_inner())
+    }
+}

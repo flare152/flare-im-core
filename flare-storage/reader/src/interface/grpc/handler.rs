@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use flare_proto::storage::*;
 use flare_proto::storage::storage_reader_service_server::StorageReaderService;
+use flare_proto::common::OperationType;
 use tonic::{Request, Response, Status};
-use tracing::{error, info};
-use chrono::{DateTime, TimeZone, Utc};
+use tracing::error;
+use chrono::{TimeZone, Utc};
 
 use crate::application::commands::{
     ClearSessionCommand, DeleteMessageCommand, DeleteMessageForUserCommand,
@@ -405,20 +406,45 @@ impl StorageReaderService for StorageReaderGrpcHandler {
 
         // 构造操作记录
         let now = chrono::Utc::now();
+        // 将操作类型字符串转换为 OperationType 枚举
+        let operation_type_enum = match operation_type {
+            "recall" => OperationType::Recall as i32,
+            "edit" => OperationType::Edit as i32,
+            "delete" => OperationType::Delete as i32,
+            "read" => OperationType::Read as i32,
+            "reply" => OperationType::Reply as i32,
+            "forward" => OperationType::Forward as i32,
+            "reaction_add" | "reaction" => OperationType::ReactionAdd as i32,
+            "reaction_remove" => OperationType::ReactionRemove as i32,
+            "quote" => OperationType::Quote as i32,
+            "pin" => OperationType::Pin as i32,
+            "unpin" => OperationType::Unpin as i32,
+            "favorite" => OperationType::Favorite as i32,
+            "unfavorite" => OperationType::Unfavorite as i32,
+            "mark" => OperationType::Mark as i32,
+            "thread" | "thread_reply" => OperationType::ThreadReply as i32,
+            _ => OperationType::Unspecified as i32,
+        };
+        
         let operation = flare_proto::common::MessageOperation {
-            operation_type: operation_type.to_string(),
+            operation_type: operation_type_enum,
+            target_message_id: req.message_id.clone(),
             operator_id,
-            operated_at: Some(prost_types::Timestamp {
+            timestamp: Some(prost_types::Timestamp {
                 seconds: now.timestamp(),
                 nanos: now.timestamp_subsec_nanos() as i32,
             }),
+            show_notice: false,
+            notice_text: String::new(),
             target_user_id: String::new(),
+            operation_data: None,
             metadata: {
                 let mut meta = std::collections::HashMap::new();
                 // 记录变更的属性键列表
                 meta.insert("keys".to_string(), attributes_map.keys().cloned().collect::<Vec<_>>().join(","));
                 meta
             },
+            extensions: Vec::new(), // 添加必填字段
         };
 
         match self
@@ -484,5 +510,34 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 Err(Status::internal(err.to_string()))
             }
         }
+    }
+
+    async fn add_or_remove_reaction(
+        &self,
+        request: Request<AddOrRemoveReactionRequest>,
+    ) -> Result<Response<AddOrRemoveReactionResponse>, Status> {
+        use flare_proto::storage::AddOrRemoveReactionResponse;
+        
+        let req = request.into_inner();
+        
+        // 通过 command_handler 处理反应操作
+        let reactions = self.command_handler
+            .handle_add_or_remove_reaction(
+                &req.message_id,
+                &req.emoji,
+                &req.user_id,
+                req.is_add,
+            )
+            .await
+            .map_err(|e| {
+                error!(error = ?e, message_id = %req.message_id, "Failed to add or remove reaction");
+                Status::internal(format!("Failed to add or remove reaction: {}", e))
+            })?;
+        
+        Ok(Response::new(AddOrRemoveReactionResponse {
+            success: true,
+            reactions,
+            status: Some(flare_server_core::error::ok_status()),
+        }))
     }
 }

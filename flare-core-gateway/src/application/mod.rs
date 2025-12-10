@@ -2,9 +2,5 @@
 //!
 //! 提供Gateway的应用服务接口
 
-pub mod commands;
-pub mod handlers;
-pub mod queries;
-
-pub use handlers::*;
+// 轻量级网关不包含复杂的应用层逻辑
 

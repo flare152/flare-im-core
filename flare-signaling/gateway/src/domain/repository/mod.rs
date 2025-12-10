@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use flare_proto::signaling::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, HeartbeatRequest, HeartbeatResponse,
     LoginRequest, LoginResponse, LogoutRequest, LogoutResponse,
@@ -7,24 +5,11 @@ use flare_proto::signaling::{
 use async_trait::async_trait;
 use flare_server_core::error::Result;
 
-use super::model::{ConnectionInfo, Session};
+use super::model::ConnectionInfo;
 
-
-#[async_trait]
-pub trait SessionStore: Send + Sync {
-    async fn insert(&self, session: Session) -> Result<()>;
-    async fn remove(&self, session_id: &str) -> Result<Option<Session>>;
-    async fn update_connection(
-        &self,
-        session_id: &str,
-        connection_id: Option<String>,
-    ) -> Result<()>;
-    async fn touch(&self, session_id: &str) -> Result<Option<Session>>;
-    async fn find_by_user(&self, user_id: &str) -> Result<Vec<Session>>;
-    async fn all(&self) -> Result<HashMap<String, Session>>;
-}
-
-
+/// Signaling Gateway 接口
+/// 
+/// Gateway 通过此接口与 Signaling Online 服务交互
 #[async_trait]
 pub trait SignalingGateway: Send + Sync {
     async fn login(&self, request: LoginRequest) -> Result<LoginResponse>;
@@ -37,7 +22,8 @@ pub trait SignalingGateway: Send + Sync {
 }
 
 /// 连接查询接口
-
+/// 
+/// Gateway 通过此接口查询本地连接状态
 #[async_trait]
 pub trait ConnectionQuery: Send + Sync {
     /// 查询用户的所有连接

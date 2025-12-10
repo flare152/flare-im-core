@@ -18,7 +18,7 @@ use crate::domain::model::PushDispatchTask;
 use crate::domain::repository::{OnlineStatusRepository, PushTaskPublisher};
 use crate::infrastructure::ack_tracker::{AckTracker, AckType};
 use crate::infrastructure::message_state::{MessageStateTracker, MessageStatus};
-use crate::infrastructure::retry::{RetryPolicy, execute_with_retry};
+use crate::infrastructure::retry::RetryPolicy;
 
 /// 推送领域服务 - 包含所有业务逻辑
 pub struct PushDomainService {
@@ -72,12 +72,11 @@ impl PushDomainService {
         if request.user_ids.is_empty() {
             if let Some(ref message) = request.message {
                 // 判断是否是聊天室消息
-                // 注意：聊天室消息的 session_type 可能是 "group"，但 business_type 是 "chatroom"
-                // 或者 session_id 是 "chatroom"
-                let is_chatroom = message.session_type == "chatroom" 
+                // 注意：session_type 是 i32 枚举类型
+                // SessionType: 0=Unspecified, 1=Single, 2=Group, 3=Channel
+                let is_chatroom = message.session_type == 3 // Channel 类型
                     || message.business_type == "chatroom"
-                    || message.session_type == "channel" // channel 也是聊天室类型
-                    || message.session_type == "group" && message.business_type == "chatroom" // 群聊但业务类型是聊天室
+                    || (message.session_type == 2 && message.business_type == "chatroom") // 群聊但业务类型是聊天室
                     || (!message.session_id.is_empty() && message.session_id == "chatroom"); // session_id 是 "chatroom"
                 
                 if is_chatroom && !message.session_id.is_empty() {
@@ -425,6 +424,7 @@ impl PushDomainService {
                 .collect();
 
             flare_proto::access_gateway::PushMessageRequest {
+                request_id: ulid::Ulid::new().to_string(), // 添加必填字段
                 target_user_ids,
                 message: first_message,
                 options: None,

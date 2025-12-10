@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
 use flare_proto::signaling::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, LoginRequest, LoginResponse, LogoutRequest,
-    LogoutResponse, RouteMessageRequest, RouteMessageResponse,
+    LogoutResponse,
 };
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::discovery::ServiceClient;
@@ -21,7 +21,6 @@ pub trait SignalingClient: Send + Sync {
         &self,
         request: GetOnlineStatusRequest,
     ) -> Result<GetOnlineStatusResponse>;
-    async fn route_message(&self, request: RouteMessageRequest) -> Result<RouteMessageResponse>;
 }
 
 pub struct GrpcSignalingClient {
@@ -139,19 +138,6 @@ impl SignalingClient for GrpcSignalingClient {
                 )
                 .details(status.to_string())
                 .build_error()
-            })
-    }
-
-    async fn route_message(&self, request: RouteMessageRequest) -> Result<RouteMessageResponse> {
-        let mut client = self.ensure_client().await?;
-        client
-            .route_message(request)
-            .await
-            .map(|resp| resp.into_inner())
-            .map_err(|status| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling route failed")
-                    .details(status.to_string())
-                    .build_error()
             })
     }
 }

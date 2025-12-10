@@ -29,7 +29,7 @@ impl ApplicationBootstrap {
         }
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         
         // 使用 Wire 风格的依赖注入构建应用上下文
         let context = wire::initialize(app_config).await?;

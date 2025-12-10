@@ -1,284 +1,253 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use flare_proto::signaling::signaling_service_server::SignalingService;
-use flare_proto::signaling::*;
+use flare_proto::signaling::router::router_service_server::RouterService;
+use flare_proto::signaling::router::*;
 use flare_server_core::error::ErrorCode;
-use serde::{Deserialize, Serialize};
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
-use crate::application::handlers::{RouteCommandHandler, RouteQueryHandler};
-use crate::application::commands::RegisterRouteCommand;
-use crate::application::queries::ResolveRouteQuery;
-use crate::infrastructure::forwarder::MessageForwarder;
-use crate::domain::repository::RouteRepository;
+use crate::infrastructure::OnlineServiceClient;
 use crate::util;
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum RouteCommand {
-    Lookup,
-    Register { endpoint: String },
-}
-
-#[derive(Debug, Serialize)]
-struct RouteLookupResponse {
-    svid: String,
-    endpoint: String,
-}
-
+/// Router 服务 gRPC 处理器
+///
+/// 职责：
+/// - 根据推送策略选择最优设备
+/// - 提供设备路由查询能力
+/// - 无状态服务，所有数据实时从 Online 服务查询
 #[derive(Clone)]
 pub struct RouteHandler {
-    command_handler: Arc<RouteCommandHandler>,
-    query_handler: Arc<RouteQueryHandler>,
-    forwarder: Arc<MessageForwarder>,
-    repository: Arc<dyn RouteRepository + Send + Sync>,
+    online_client: Arc<OnlineServiceClient>,
 }
 
 impl RouteHandler {
-    pub fn new(
-        command_handler: Arc<RouteCommandHandler>,
-        query_handler: Arc<RouteQueryHandler>,
-        forwarder: Arc<MessageForwarder>,
-        repository: Arc<dyn RouteRepository + Send + Sync>,
-    ) -> Self {
-        Self {
-            command_handler,
-            query_handler,
-            forwarder,
-            repository,
-        }
+    pub fn new(online_client: Arc<OnlineServiceClient>) -> Self {
+        Self { online_client }
     }
 
-    pub async fn handle_route_message(
+    /// 根据策略选择推送目标设备
+    fn select_targets_by_strategy(
         &self,
-        request: Request<RouteMessageRequest>,
-    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
-        let req = request.into_inner();
-        let RouteMessageRequest {
-            user_id,
-            svid,
-            payload,
-            context: _,
-            tenant: _,
-        } = req.clone();
+        devices: Vec<flare_proto::signaling::online::DeviceInfo>,
+        strategy: PushStrategy,
+        user_id: &str,
+    ) -> Vec<RouteTarget> {
+        if devices.is_empty() {
+            return vec![];
+        }
 
-        // 解析指令
-        let instruction = Self::parse_instruction(payload);
+        let mut targets: Vec<RouteTarget> = devices
+            .into_iter()
+            .map(|d| RouteTarget {
+                user_id: user_id.to_string(),
+                device_id: d.device_id,
+                device_platform: d.platform,
+                gateway_id: d.gateway_id,
+                server_id: d.server_id,
+                priority: d.priority,
+                quality_score: calculate_quality_score(&d.connection_quality),
+            })
+            .collect();
 
-        match instruction {
-            RouteInstruction::Lookup => {
-                let query = ResolveRouteQuery { svid: svid.clone() };
-                match self.query_handler.handle_resolve_route(query).await {
-                    Ok(Some(endpoint)) => {
-                        debug!(%svid, %user_id, %endpoint, "resolved business route endpoint");
-                        let body = serde_json::to_vec(&RouteLookupResponse {
-                            svid: svid.clone(),
-                            endpoint: endpoint.clone(),
-                        })
-                        .map_err(|err| {
-                            Status::internal(format!("failed to encode route response: {}", err))
-                        })?;
-
-                        Ok(Response::new(RouteMessageResponse {
-                            success: true,
-                            response: body,
-                            error_message: String::new(),
-                            status: util::rpc_status_ok(),
-                        }))
-                    }
-                    Ok(None) => {
-                        let message = format!("business service not found for svid={}", svid);
-                        warn!(%svid, %user_id, "{}", message);
-                        Ok(Response::new(RouteMessageResponse {
-                            success: false,
-                            response: vec![],
-                            error_message: message.clone(),
-                            status: util::rpc_status_error(ErrorCode::ServiceUnavailable, &message),
-                        }))
-                    }
-                    Err(err) => {
-                        error!(error = ?err, "failed to resolve route");
-                        Err(Status::internal(err.to_string()))
-                    }
-                }
+        match strategy {
+            PushStrategy::AllDevices => targets,
+            PushStrategy::BestDevice => {
+                // 选择单个最优设备（优先级最高 + 质量最好）
+                targets.sort_by(|a, b| {
+                    b.priority.cmp(&a.priority)
+                        .then_with(|| b.quality_score.partial_cmp(&a.quality_score).unwrap_or(std::cmp::Ordering::Equal))
+                });
+                targets.into_iter().take(1).collect()
             }
-            RouteInstruction::Register { endpoint } => {
-                let command = RegisterRouteCommand {
-                    svid: svid.clone(),
-                    endpoint: endpoint.clone(),
-                };
-                match self.command_handler.handle_register_route(command).await {
-                    Ok(()) => {
-                        info!(%svid, %user_id, "route registration completed");
-                        Ok(Response::new(RouteMessageResponse {
-                            success: true,
-                            response: vec![],
-                            error_message: String::new(),
-                            status: util::rpc_status_ok(),
-                        }))
-                    }
-                    Err(err) => {
-                        error!(error = ?err, "failed to register route");
-                        Err(Status::internal(err.to_string()))
-                    }
-                }
+            PushStrategy::ActiveDevices => {
+                // 排除 Low 优先级设备 (priority = 0)
+                targets.retain(|t| t.priority > 0);
+                targets
             }
-            RouteInstruction::Forward { payload: forward_payload } => {
-                info!(%svid, %user_id, payload_len = forward_payload.len(), "Forwarding message to business system");
-                
-                // 转发消息到业务系统
-                match self.forwarder.forward_message(
-                    &svid,
-                    forward_payload,
-                    req.context.clone(),
-                    req.tenant.clone(),
-                    Some(self.repository.clone()),
-                ).await {
-                    Ok(response_bytes) => {
-                        info!(%svid, %user_id, "Message forwarded successfully");
-                        Ok(Response::new(RouteMessageResponse {
-                            success: true,
-                            response: response_bytes,
-                            error_message: String::new(),
-                            status: util::rpc_status_ok(),
-                        }))
-                    }
-                    Err(err) => {
-                        error!(error = ?err, %svid, %user_id, "Failed to forward message");
-                        Ok(Response::new(RouteMessageResponse {
-                            success: false,
-                            response: vec![],
-                            error_message: format!("Failed to forward message: {}", err),
-                            status: util::rpc_status_error(ErrorCode::InternalError, &format!("{}", err)),
-                        }))
-                    }
+            PushStrategy::PrimaryDevice => {
+                // 只选择优先级最高的设备
+                if let Some(max_priority) = targets.iter().map(|t| t.priority).max() {
+                    targets.retain(|t| t.priority == max_priority);
                 }
+                targets.into_iter().take(1).collect()
             }
+            _ => targets, // 默认返回所有设备
         }
     }
+}
 
-    fn parse_instruction(payload: Vec<u8>) -> RouteInstruction {
-        if payload.is_empty() {
-            return RouteInstruction::Lookup;
+/// 计算链接质量评分 (0-100)
+fn calculate_quality_score(quality: &Option<flare_proto::ConnectionQuality>) -> f64 {
+    match quality {
+        Some(q) => {
+            // 综合考虑 RTT 和丢包率
+            let rtt_score = if q.rtt_ms > 0 {
+                (1000.0_f64 / q.rtt_ms as f64).min(100.0_f64)
+            } else {
+                100.0
+            };
+            
+            let loss_score = (1.0 - q.packet_loss_rate) * 100.0;
+            
+            // RTT 权重 60%，丢包率权重 40%
+            rtt_score * 0.6 + loss_score * 0.4
         }
-
-        if payload.starts_with(b"{") {
-            match serde_json::from_slice::<RouteCommand>(&payload) {
-                Ok(RouteCommand::Lookup) => return RouteInstruction::Lookup,
-                Ok(RouteCommand::Register { endpoint }) => {
-                    return RouteInstruction::Register { endpoint };
-                }
-                Err(err) => {
-                    debug!(error = %err, "failed to parse route command JSON, falling back to forward");
-                }
-            }
-        }
-
-        // 如果不是 JSON 命令，则作为消息转发处理
-        RouteInstruction::Forward { payload }
+        None => 50.0, // 默认中等质量
     }
 }
 
 #[tonic::async_trait]
-impl SignalingService for RouteHandler {
-    async fn login(
+impl RouterService for RouteHandler {
+    async fn select_push_targets(
         &self,
-        _request: Request<LoginRequest>,
-    ) -> std::result::Result<Response<LoginResponse>, Status> {
-        Ok(Response::new(LoginResponse {
-            success: false,
-            session_id: String::new(),
-            route_server: String::new(),
-            error_message: "login not supported".to_string(),
-            status: util::rpc_status_error(ErrorCode::OperationNotSupported, "login not supported"),
-            applied_conflict_strategy: 0,
+        request: Request<SelectPushTargetsRequest>,
+    ) -> std::result::Result<Response<SelectPushTargetsResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = &req.user_id;
+        let strategy = PushStrategy::try_from(req.strategy).unwrap_or(PushStrategy::AllDevices);
+        
+        info!(user_id = %user_id, strategy = ?strategy, "Selecting push targets");
+        
+        // 从 Online 服务查询用户的所有在线设备
+        let devices_resp = match self.online_client.list_user_devices(user_id).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!(error = %e, user_id = %user_id, "Failed to query user devices from Online service");
+                return Ok(Response::new(SelectPushTargetsResponse {
+                    targets: vec![],
+                    status: util::rpc_status_error(
+                        ErrorCode::InternalError,
+                        &format!("Failed to query devices: {}", e),
+                    ),
+                }));
+            }
+        };
+        
+        // 根据策略选择目标设备
+        let targets = self.select_targets_by_strategy(devices_resp.devices, strategy, user_id);
+        
+        info!(
+            user_id = %user_id,
+            strategy = ?strategy,
+            selected_count = targets.len(),
+            "Push targets selected"
+        );
+        
+        Ok(Response::new(SelectPushTargetsResponse {
+            targets,
+            status: util::rpc_status_ok(),
         }))
     }
 
-    async fn logout(
+    async fn get_device_route(
         &self,
-        _request: Request<LogoutRequest>,
-    ) -> std::result::Result<Response<LogoutResponse>, Status> {
-        Ok(Response::new(LogoutResponse {
-            success: false,
-            status: util::rpc_status_error(
-                ErrorCode::OperationNotSupported,
-                "logout not supported",
-            ),
+        request: Request<GetDeviceRouteRequest>,
+    ) -> std::result::Result<Response<GetDeviceRouteResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = &req.user_id;
+        let device_id = &req.device_id;
+        
+        info!(user_id = %user_id, device_id = %device_id, "Getting device route");
+        
+        // 从 Online 服务查询设备信息
+        let devices_resp = match self.online_client.list_user_devices(user_id).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                error!(error = %e, user_id = %user_id, "Failed to query user devices");
+                return Ok(Response::new(GetDeviceRouteResponse {
+                    route: None,
+                    status: util::rpc_status_error(
+                        ErrorCode::InternalError,
+                        &format!("Failed to query devices: {}", e),
+                    ),
+                }));
+            }
+        };
+        
+        // 查找指定设备
+        let device = devices_resp.devices.into_iter()
+            .find(|d| d.device_id == *device_id);
+        
+        match device {
+            Some(d) => {
+                let route = RouteTarget {
+                    user_id: user_id.to_string(),
+                    device_id: d.device_id,
+                    device_platform: d.platform,
+                    gateway_id: d.gateway_id,
+                    server_id: d.server_id,
+                    priority: d.priority,
+                    quality_score: calculate_quality_score(&d.connection_quality),
+                };
+                
+                Ok(Response::new(GetDeviceRouteResponse {
+                    route: Some(route),
+                    status: util::rpc_status_ok(),
+                }))
+            }
+            None => {
+                warn!(user_id = %user_id, device_id = %device_id, "Device not found");
+                Ok(Response::new(GetDeviceRouteResponse {
+                    route: None,
+                    status: util::rpc_status_error(
+                        ErrorCode::UserNotFound,
+                        "Device not found or offline",
+                    ),
+                }))
+            }
+        }
+    }
+
+    async fn batch_get_device_routes(
+        &self,
+        request: Request<BatchGetDeviceRoutesRequest>,
+    ) -> std::result::Result<Response<BatchGetDeviceRoutesResponse>, Status> {
+        let req = request.into_inner();
+        let device_count = req.devices.len();
+        
+        info!(device_count = device_count, "Batch getting device routes");
+        
+        let mut routes = HashMap::new();
+        
+        // 按用户分组查询（减少 RPC 调用次数）
+        let mut user_devices: HashMap<String, Vec<String>> = HashMap::new();
+        for dev in req.devices {
+            user_devices.entry(dev.user_id).or_insert_with(Vec::new).push(dev.device_id);
+        }
+        
+        // 为每个用户查询设备
+        for (user_id, device_ids) in user_devices {
+            match self.online_client.list_user_devices(&user_id).await {
+                Ok(devices_resp) => {
+                    for device in devices_resp.devices {
+                        if device_ids.contains(&device.device_id) {
+                            let key = format!("{}:{}", user_id, device.device_id);
+                            let route = RouteTarget {
+                                user_id: user_id.clone(),
+                                device_id: device.device_id,
+                                device_platform: device.platform,
+                                gateway_id: device.gateway_id,
+                                server_id: device.server_id,
+                                priority: device.priority,
+                                quality_score: calculate_quality_score(&device.connection_quality),
+                            };
+                            routes.insert(key, route);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, user_id = %user_id, "Failed to query devices for user");
+                    continue;
+                }
+            }
+        }
+        
+        info!(found_routes = routes.len(), "Batch device routes retrieved");
+        
+        Ok(Response::new(BatchGetDeviceRoutesResponse {
+            routes,
+            status: util::rpc_status_ok(),
         }))
     }
-
-    async fn heartbeat(
-        &self,
-        _request: Request<HeartbeatRequest>,
-    ) -> std::result::Result<Response<HeartbeatResponse>, Status> {
-        Ok(Response::new(HeartbeatResponse {
-            success: false,
-            status: util::rpc_status_error(
-                ErrorCode::OperationNotSupported,
-                "heartbeat not supported",
-            ),
-        }))
-    }
-
-    async fn get_online_status(
-        &self,
-        _request: Request<GetOnlineStatusRequest>,
-    ) -> std::result::Result<Response<GetOnlineStatusResponse>, Status> {
-        Ok(Response::new(GetOnlineStatusResponse {
-            statuses: HashMap::new(),
-            status: util::rpc_status_error(
-                ErrorCode::OperationNotSupported,
-                "online status not supported",
-            ),
-        }))
-    }
-
-    async fn route_message(
-        &self,
-        request: Request<RouteMessageRequest>,
-    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
-        info!(user_id = %request.get_ref().user_id, svid = %request.get_ref().svid, "Route message request");
-        self.handle_route_message(request).await
-    }
-
-    async fn subscribe(
-        &self,
-        _request: Request<SubscribeRequest>,
-    ) -> std::result::Result<Response<SubscribeResponse>, Status> {
-        Err(Status::unimplemented("subscribe not supported by route service"))
-    }
-
-    async fn unsubscribe(
-        &self,
-        _request: Request<UnsubscribeRequest>,
-    ) -> std::result::Result<Response<UnsubscribeResponse>, Status> {
-        Err(Status::unimplemented("unsubscribe not supported by route service"))
-    }
-
-    async fn publish_signal(
-        &self,
-        _request: Request<PublishSignalRequest>,
-    ) -> std::result::Result<Response<PublishSignalResponse>, Status> {
-        Err(Status::unimplemented("publish_signal not supported by route service"))
-    }
-
-    type WatchPresenceStream = ReceiverStream<std::result::Result<PresenceEvent, Status>>;
-
-    async fn watch_presence(
-        &self,
-        _request: Request<WatchPresenceRequest>,
-    ) -> std::result::Result<Response<Self::WatchPresenceStream>, Status> {
-        Err(Status::unimplemented("watch_presence not supported by route service"))
-    }
-}
-
-#[derive(Debug)]
-enum RouteInstruction {
-    Lookup,
-    Register { endpoint: String },
-    Forward { payload: Vec<u8> },
 }

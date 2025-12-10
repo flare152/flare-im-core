@@ -1,13 +1,91 @@
 -- ============================================================================
 -- Flare IM 数据库初始化脚本
 -- ============================================================================
--- 版本: v1.0.0
--- 说明: 按模块组织数据库表结构（媒体、消息、会话、Hook引擎）
+-- 版本: v2.0.0
+-- 说明: 按模块组织数据库表结构（租户、媒体、消息、会话、话题、收藏、Hook引擎）
 -- 数据库: PostgreSQL + TimescaleDB
+-- 更新日期: 2025-01-XX
+-- 
+-- 整合内容：
+-- - 001_create_admin_tables.sql: 租户表、告警规则表、告警历史表
+-- - 002_create_gateway_tables.sql: Hook执行记录表优化
+-- - 003_message_relation_model_optimization.sql: 消息关系模型优化（seq、message_state等）
+-- - 004_add_edit_history.sql: 编辑历史字段（已整合到messages表）
+-- - 005_create_threads_table.sql: 话题表和话题参与者表
 -- ============================================================================
 
 -- 启用 TimescaleDB 扩展
 CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- ============================================================================
+-- 0. 租户和管理模块 (Tenant & Admin Module)
+-- ============================================================================
+-- 职责: 租户管理、Hook配置、告警规则
+
+-- 租户表
+-- COMMENT: 租户信息表，支持多租户隔离
+DROP TABLE IF EXISTS tenants CASCADE;
+CREATE TABLE tenants (
+    tenant_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    config JSONB DEFAULT '{}'::jsonb,
+    quota JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE tenants IS '租户表，存储租户基本信息、配置和配额';
+COMMENT ON COLUMN tenants.tenant_id IS '租户ID（主键）';
+COMMENT ON COLUMN tenants.name IS '租户名称';
+COMMENT ON COLUMN tenants.description IS '租户描述';
+COMMENT ON COLUMN tenants.status IS '租户状态（active, suspended, deleted）';
+COMMENT ON COLUMN tenants.config IS '租户配置（JSON格式）';
+COMMENT ON COLUMN tenants.quota IS '租户配额（JSON格式）';
+
+CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_created_at ON tenants(created_at);
+
+-- 告警规则表
+DROP TABLE IF EXISTS alert_rules CASCADE;
+CREATE TABLE alert_rules (
+    rule_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    threshold TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL DEFAULT 300,
+    notification_channels TEXT[],
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE alert_rules IS '告警规则表';
+CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_metric_name ON alert_rules(metric_name);
+
+-- 告警历史表（TimescaleDB Hypertable）
+DROP TABLE IF EXISTS alert_history CASCADE;
+CREATE TABLE alert_history (
+    alert_id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    current_value DOUBLE PRECISION NOT NULL,
+    threshold TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP WITH TIME ZONE
+);
+
+-- SELECT create_hypertable('alert_history', 'triggered_at', 
+--     chunk_time_interval => INTERVAL '1 day',
+--     if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_alert_history_rule_id ON alert_history(rule_id);
+CREATE INDEX IF NOT EXISTS idx_alert_history_triggered_at ON alert_history(triggered_at);
+CREATE INDEX IF NOT EXISTS idx_alert_history_resolved_at ON alert_history(resolved_at);
 
 -- ============================================================================
 -- 1. 媒体模块 (Media Module)
@@ -118,6 +196,14 @@ CREATE TABLE messages (
     visibility JSONB,                      -- 用户级别可见性 {user_id: status}
     read_by JSONB,                         -- 已阅读记录 [{user_id, read_at}]
     operations JSONB,                      -- 操作历史
+    edit_history JSONB DEFAULT '[]'::jsonb, -- 编辑历史记录 [{edit_version, content_encoded, edited_at, editor_id, reason}]
+    reactions JSONB DEFAULT '[]'::jsonb,   -- 反应列表 [{emoji, user_ids, count, last_updated, created_at}]
+    
+    -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
+    seq BIGINT,                            -- 会话内递增序号（用于消息顺序和未读数计算）
+    expire_at TIMESTAMP WITH TIME ZONE,    -- 阅后即焚过期时间
+    deleted_by_sender BOOLEAN DEFAULT FALSE, -- 是否被发送方删除（用于审计）
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, -- 更新时间（用于消息编辑、撤回等）
     
     -- 复合主键：TimescaleDB要求分区列必须包含在主键中
     -- 使用 (timestamp, id) 顺序以优化时序查询性能
@@ -143,6 +229,12 @@ COMMENT ON COLUMN messages.burn_after_seconds IS '阅后即焚秒数';
 COMMENT ON COLUMN messages.visibility IS '用户级别可见性（JSON格式）';
 COMMENT ON COLUMN messages.read_by IS '已阅读记录（JSON格式）';
 COMMENT ON COLUMN messages.operations IS '操作历史（JSON格式）';
+COMMENT ON COLUMN messages.edit_history IS '编辑历史记录（JSONB数组），包含每次编辑的版本、内容、时间等信息';
+COMMENT ON COLUMN messages.reactions IS '反应列表（JSONB数组），包含每个反应的emoji、用户列表、计数等信息';
+COMMENT ON COLUMN messages.seq IS '会话内递增序号（用于消息顺序和未读数计算）';
+COMMENT ON COLUMN messages.expire_at IS '阅后即焚过期时间';
+COMMENT ON COLUMN messages.deleted_by_sender IS '是否被发送方删除（用于审计）';
+COMMENT ON COLUMN messages.updated_at IS '更新时间（用于消息编辑、撤回等）';
 
 -- 消息表索引
 -- 注意：主键已包含 (timestamp, id)，无需单独创建 timestamp 和 id 索引
@@ -154,6 +246,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type)
 CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_is_recalled ON messages(is_recalled);
+CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq) WHERE seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(seq) WHERE seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_expire_at ON messages(expire_at) WHERE expire_at IS NOT NULL;
 
 -- 将消息表转换为 TimescaleDB 超表（Hypertable）
 -- COMMENT: 按时间分区，每个分区默认 1 天，用于高效存储和查询时序消息数据
@@ -206,7 +301,12 @@ CREATE TABLE sessions (
     lifecycle_state TEXT DEFAULT 'active', -- 生命周期状态（active, archived, deleted）
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    metadata JSONB                        -- 扩展元数据（JSON格式）
+    metadata JSONB,                        -- 扩展元数据（JSON格式）
+    
+    -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
+    last_message_id TEXT,                  -- 最后一条消息ID
+    last_message_seq BIGINT,               -- 最后一条消息的seq（用于未读数计算）
+    is_destroyed BOOLEAN DEFAULT FALSE     -- 会话是否被解散（群聊）
 );
 
 COMMENT ON TABLE sessions IS '会话表';
@@ -220,6 +320,9 @@ COMMENT ON COLUMN sessions.lifecycle_state IS '生命周期状态（active: 活�
 COMMENT ON COLUMN sessions.created_at IS '创建时间';
 COMMENT ON COLUMN sessions.updated_at IS '更新时间';
 COMMENT ON COLUMN sessions.metadata IS '扩展元数据（JSON格式）';
+COMMENT ON COLUMN sessions.last_message_id IS '最后一条消息ID';
+COMMENT ON COLUMN sessions.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
+COMMENT ON COLUMN sessions.is_destroyed IS '会话是否被解散（群聊）';
 
 -- 会话参与者表
 -- COMMENT: 会话参与者关系表，存储会话成员信息
@@ -228,11 +331,19 @@ CREATE TABLE session_participants (
     session_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     roles TEXT[],                         -- 角色列表（owner, admin, member等）
-    muted BOOLEAN DEFAULT FALSE,          -- 是否静音
+    muted BOOLEAN DEFAULT FALSE,          -- 是否静音（向后兼容，建议使用 mute_until）
     pinned BOOLEAN DEFAULT FALSE,         -- 是否置顶
     attributes JSONB,                     -- 参与者属性（JSON格式）
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
+    last_read_msg_seq BIGINT DEFAULT 0,   -- 已读消息的seq（用于未读数计算）
+    last_sync_msg_seq BIGINT DEFAULT 0,   -- 多端同步游标（最后同步的seq）
+    unread_count INTEGER DEFAULT 0,        -- 未读数（冗余字段，用于快速查询）
+    is_deleted BOOLEAN DEFAULT FALSE,      -- 用户侧"删除会话"（软删除）
+    mute_until TIMESTAMP WITH TIME ZONE,   -- 静音截止时间（NULL表示未静音）
+    quit_at TIMESTAMP WITH TIME ZONE,      -- 退出时间（NULL表示仍在会话中）
     
     PRIMARY KEY (session_id, user_id),
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
@@ -247,6 +358,12 @@ COMMENT ON COLUMN session_participants.pinned IS '是否置顶';
 COMMENT ON COLUMN session_participants.attributes IS '参与者属性（JSON格式）';
 COMMENT ON COLUMN session_participants.created_at IS '加入时间';
 COMMENT ON COLUMN session_participants.updated_at IS '更新时间';
+COMMENT ON COLUMN session_participants.last_read_msg_seq IS '已读消息的seq（用于未读数计算）';
+COMMENT ON COLUMN session_participants.last_sync_msg_seq IS '多端同步游标（最后同步的seq）';
+COMMENT ON COLUMN session_participants.unread_count IS '未读数（冗余字段，用于快速查询）';
+COMMENT ON COLUMN session_participants.is_deleted IS '用户侧"删除会话"（软删除）';
+COMMENT ON COLUMN session_participants.mute_until IS '静音截止时间（NULL表示未静音）';
+COMMENT ON COLUMN session_participants.quit_at IS '退出时间（NULL表示仍在会话中）';
 
 -- 用户同步光标表
 -- COMMENT: 用户同步光标表，记录用户在各会话中的同步位置（用于多端同步）
@@ -260,6 +377,9 @@ CREATE TABLE user_sync_cursor (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     
+    -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
+    last_synced_seq BIGINT DEFAULT 0,     -- 最后同步的seq（替代时间戳，更精确）
+    
     PRIMARY KEY (user_id, session_id)
 );
 
@@ -271,6 +391,39 @@ COMMENT ON COLUMN user_sync_cursor.device_id IS '设备ID（可选，用于设�
 COMMENT ON COLUMN user_sync_cursor.version IS '版本号（用于乐观锁）';
 COMMENT ON COLUMN user_sync_cursor.created_at IS '创建时间';
 COMMENT ON COLUMN user_sync_cursor.updated_at IS '更新时间';
+COMMENT ON COLUMN user_sync_cursor.last_synced_seq IS '最后同步的seq（替代时间戳，更精确）';
+
+-- 消息状态表（MessageState）
+-- COMMENT: 消息状态表，记录用户对消息的私有行为（已读、删除、阅后即焚等）
+-- 注意：Flare IM Core 不提供 users 表，所有用户信息由业务系统管理
+DROP TABLE IF EXISTS message_state CASCADE;
+CREATE TABLE message_state (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    read_at TIMESTAMP WITH TIME ZONE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    burn_after_read BOOLEAN DEFAULT FALSE,
+    burned_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 唯一约束：同一用户对同一消息只能有一条状态记录
+    UNIQUE(message_id, user_id)
+);
+
+COMMENT ON TABLE message_state IS '消息状态表（用户对消息的私有行为）';
+COMMENT ON COLUMN message_state.id IS '状态记录ID（自增主键）';
+COMMENT ON COLUMN message_state.message_id IS '消息ID';
+COMMENT ON COLUMN message_state.user_id IS '用户ID（由业务系统提供）';
+COMMENT ON COLUMN message_state.is_read IS '是否已读';
+COMMENT ON COLUMN message_state.read_at IS '已读时间';
+COMMENT ON COLUMN message_state.is_deleted IS '是否被用户删除（仅我删除）';
+COMMENT ON COLUMN message_state.deleted_at IS '删除时间';
+COMMENT ON COLUMN message_state.burn_after_read IS '是否阅后即焚';
+COMMENT ON COLUMN message_state.burned_at IS '焚毁时间';
 
 -- 会话模块索引
 CREATE INDEX IF NOT EXISTS idx_sessions_business_type ON sessions(business_type, updated_at DESC);
@@ -279,11 +432,140 @@ CREATE INDEX IF NOT EXISTS idx_sessions_session_type ON sessions(session_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_participants_user_id ON session_participants(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_participants_session_id ON session_participants(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_participants_last_read_seq ON session_participants(last_read_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_session_participants_last_sync_seq ON session_participants(last_sync_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_session_participants_unread_count ON session_participants(unread_count);
+CREATE INDEX IF NOT EXISTS idx_session_participants_is_deleted ON session_participants(is_deleted) WHERE is_deleted = true;
+CREATE INDEX IF NOT EXISTS idx_sessions_last_message_id ON sessions(last_message_id) WHERE last_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_last_message_seq ON sessions(last_message_seq) WHERE last_message_seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_id ON user_sync_cursor(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_session_id ON user_sync_cursor(session_id);
+CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_device ON user_sync_cursor(user_id, device_id, session_id) WHERE device_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_last_synced_seq ON user_sync_cursor(last_synced_seq) WHERE last_synced_seq > 0;
+CREATE INDEX IF NOT EXISTS idx_message_state_message_id ON message_state(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_state_user_id ON message_state(user_id);
+CREATE INDEX IF NOT EXISTS idx_message_state_is_read ON message_state(is_read) WHERE is_read = true;
+CREATE INDEX IF NOT EXISTS idx_message_state_is_deleted ON message_state(is_deleted) WHERE is_deleted = true;
+CREATE INDEX IF NOT EXISTS idx_message_state_burned_at ON message_state(burned_at) WHERE burned_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_message_state_user_message ON message_state(user_id, message_id);
 
 -- ============================================================================
--- 4. Hook引擎模块 (Hook Engine Module)
+-- 4. 话题模块 (Thread Module)
+-- ============================================================================
+-- 职责: 话题管理、话题参与者管理、话题通知
+
+-- 话题表（Thread）
+-- COMMENT: 话题（Thread）是群组中围绕某条消息展开的讨论串
+-- 参考：Discord、Slack、Telegram 的话题功能
+DROP TABLE IF EXISTS threads CASCADE;
+CREATE TABLE threads (
+    id TEXT NOT NULL PRIMARY KEY,
+    session_id TEXT NOT NULL,                    -- 会话ID（群组ID）
+    root_message_id TEXT NOT NULL,              -- 根消息ID（话题起始消息）
+    title TEXT,                                  -- 话题标题（可选，从根消息提取或用户指定）
+    creator_id TEXT NOT NULL,                   -- 创建者ID
+    reply_count INTEGER DEFAULT 0,               -- 回复数量（冗余字段，用于快速查询）
+    last_reply_at TIMESTAMP WITH TIME ZONE,     -- 最后回复时间
+    last_reply_id TEXT,                         -- 最后回复消息ID
+    last_reply_user_id TEXT,                    -- 最后回复用户ID
+    participant_count INTEGER DEFAULT 0,        -- 参与者数量（去重）
+    is_pinned BOOLEAN DEFAULT FALSE,            -- 是否置顶
+    is_locked BOOLEAN DEFAULT FALSE,            -- 是否锁定（禁止回复）
+    is_archived BOOLEAN DEFAULT FALSE,           -- 是否归档
+    extra JSONB DEFAULT '{}',                    -- 扩展字段
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE threads IS '话题表（Thread），用于群组中的话题讨论';
+COMMENT ON COLUMN threads.id IS '话题ID（通常等于 root_message_id）';
+COMMENT ON COLUMN threads.session_id IS '会话ID（群组ID）';
+COMMENT ON COLUMN threads.root_message_id IS '根消息ID（话题起始消息）';
+COMMENT ON COLUMN threads.title IS '话题标题（可选，从根消息提取或用户指定）';
+COMMENT ON COLUMN threads.creator_id IS '创建者ID';
+COMMENT ON COLUMN threads.reply_count IS '回复数量（冗余字段，用于快速查询）';
+COMMENT ON COLUMN threads.last_reply_at IS '最后回复时间';
+COMMENT ON COLUMN threads.last_reply_id IS '最后回复消息ID';
+COMMENT ON COLUMN threads.last_reply_user_id IS '最后回复用户ID';
+COMMENT ON COLUMN threads.participant_count IS '参与者数量（去重）';
+COMMENT ON COLUMN threads.is_pinned IS '是否置顶';
+COMMENT ON COLUMN threads.is_locked IS '是否锁定（禁止回复）';
+COMMENT ON COLUMN threads.is_archived IS '是否归档';
+
+-- 话题参与者表（Thread Participants）
+-- COMMENT: 记录话题的参与者，用于通知和权限控制
+DROP TABLE IF EXISTS thread_participants CASCADE;
+CREATE TABLE thread_participants (
+    thread_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    first_participated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_participated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    reply_count INTEGER DEFAULT 0,              -- 该用户在此话题的回复数量
+    is_muted BOOLEAN DEFAULT FALSE,             -- 是否静音（不接收通知）
+    PRIMARY KEY (thread_id, user_id)
+);
+
+COMMENT ON TABLE thread_participants IS '话题参与者表，记录话题的参与者信息';
+COMMENT ON COLUMN thread_participants.thread_id IS '话题ID';
+COMMENT ON COLUMN thread_participants.user_id IS '用户ID';
+COMMENT ON COLUMN thread_participants.first_participated_at IS '首次参与时间';
+COMMENT ON COLUMN thread_participants.last_participated_at IS '最后参与时间';
+COMMENT ON COLUMN thread_participants.reply_count IS '该用户在此话题的回复数量';
+COMMENT ON COLUMN thread_participants.is_muted IS '是否静音（不接收通知）';
+
+-- 话题模块索引
+CREATE INDEX IF NOT EXISTS idx_threads_session_id ON threads(session_id);
+CREATE INDEX IF NOT EXISTS idx_threads_root_message_id ON threads(root_message_id);
+CREATE INDEX IF NOT EXISTS idx_threads_creator_id ON threads(creator_id);
+CREATE INDEX IF NOT EXISTS idx_threads_last_reply_at ON threads(last_reply_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_is_pinned ON threads(is_pinned) WHERE is_pinned = TRUE;
+CREATE INDEX IF NOT EXISTS idx_threads_is_archived ON threads(is_archived) WHERE is_archived = FALSE;
+CREATE INDEX IF NOT EXISTS idx_thread_participants_thread_id ON thread_participants(thread_id);
+CREATE INDEX IF NOT EXISTS idx_thread_participants_user_id ON thread_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_thread_participants_last_participated_at ON thread_participants(last_participated_at DESC);
+
+-- ============================================================================
+-- 5. 收藏模块 (Favorite Module)
+-- ============================================================================
+-- 职责: 用户消息收藏管理
+
+-- 收藏表（Favorites）
+-- COMMENT: 用户收藏的消息，支持标签和备注
+DROP TABLE IF EXISTS favorites CASCADE;
+CREATE TABLE favorites (
+    id TEXT NOT NULL PRIMARY KEY,
+    user_id TEXT NOT NULL,                      -- 用户ID
+    message_id TEXT NOT NULL,                   -- 消息ID
+    session_id TEXT NOT NULL,                   -- 会话ID（冗余，用于快速查询）
+    tags TEXT[] DEFAULT '{}',                    -- 收藏标签（数组）
+    note TEXT,                                  -- 收藏备注
+    favorited_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  -- 收藏时间
+    extra JSONB DEFAULT '{}',                   -- 扩展字段
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 唯一约束：一个用户只能收藏同一条消息一次
+    UNIQUE(user_id, message_id)
+);
+
+COMMENT ON TABLE favorites IS '用户收藏表，记录用户收藏的消息';
+COMMENT ON COLUMN favorites.id IS '收藏记录ID（UUID）';
+COMMENT ON COLUMN favorites.user_id IS '用户ID';
+COMMENT ON COLUMN favorites.message_id IS '消息ID';
+COMMENT ON COLUMN favorites.session_id IS '会话ID（冗余字段，用于快速查询）';
+COMMENT ON COLUMN favorites.tags IS '收藏标签（数组）';
+COMMENT ON COLUMN favorites.note IS '收藏备注';
+COMMENT ON COLUMN favorites.favorited_at IS '收藏时间';
+
+-- 收藏表索引
+CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_message_id ON favorites(message_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_session_id ON favorites(session_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_favorited_at ON favorites(favorited_at DESC);
+CREATE INDEX IF NOT EXISTS idx_favorites_tags ON favorites USING GIN(tags);  -- GIN索引支持数组查询
+
+-- ============================================================================
+-- 6. Hook引擎模块 (Hook Engine Module)
 -- ============================================================================
 -- 职责: Hook配置管理、动态配置存储、多租户支持
 
@@ -292,6 +574,7 @@ CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_session_id ON user_sync_cursor(s
 DROP TABLE IF EXISTS hook_configs CASCADE;
 CREATE TABLE hook_configs (
     id BIGSERIAL PRIMARY KEY,
+    hook_id TEXT UNIQUE,                  -- Hook ID（唯一标识，兼容旧版本）
     tenant_id TEXT,                       -- 租户ID（NULL表示全局配置）
     hook_type TEXT NOT NULL,              -- Hook类型（pre_send, post_send, delivery, recall等）
     name TEXT NOT NULL,                   -- Hook名称
@@ -304,15 +587,18 @@ CREATE TABLE hook_configs (
     max_retries INTEGER NOT NULL DEFAULT 0,
     error_policy TEXT NOT NULL DEFAULT 'fail_fast', -- 错误策略（fail_fast, retry, ignore）
     require_success BOOLEAN NOT NULL DEFAULT true,
-    selector_config JSONB NOT NULL DEFAULT '{}',    -- 选择器配置（JSON格式）
-    transport_config JSONB NOT NULL,               -- 传输配置（JSON格式）
+    selector_config JSONB NOT NULL DEFAULT '{}',    -- 选择器配置（JSON格式，兼容 selector）
+    transport_config JSONB NOT NULL,               -- 传输配置（JSON格式，兼容 transport）
+    retry_policy JSONB DEFAULT '{}'::jsonb,        -- 重试策略（JSON格式，兼容旧版本）
     metadata JSONB,                                 -- 元数据（JSON格式）
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT,                                -- 创建者
     
     -- 唯一约束：同一租户下同一类型的Hook名称唯一
-    UNIQUE(tenant_id, hook_type, name)
+    UNIQUE(tenant_id, hook_type, name),
+    -- 外键约束（可选）
+    CONSTRAINT fk_hook_configs_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE
 );
 
 COMMENT ON TABLE hook_configs IS 'Hook配置表（动态API配置，最高优先级）';
@@ -338,13 +624,43 @@ COMMENT ON COLUMN hook_configs.created_by IS '创建者';
 
 -- Hook配置表索引
 CREATE INDEX IF NOT EXISTS idx_hook_configs_tenant_type ON hook_configs(tenant_id, hook_type, enabled);
-CREATE INDEX IF NOT EXISTS idx_hook_configs_priority ON hook_configs(priority);
+CREATE INDEX IF NOT EXISTS idx_hook_configs_priority ON hook_configs(priority DESC);
 CREATE INDEX IF NOT EXISTS idx_hook_configs_hook_type ON hook_configs(hook_type);
 CREATE INDEX IF NOT EXISTS idx_hook_configs_enabled ON hook_configs(enabled);
 CREATE INDEX IF NOT EXISTS idx_hook_configs_updated_at ON hook_configs(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hook_configs_tenant ON hook_configs(tenant_id);
+
+-- Hook执行记录表（TimescaleDB Hypertable）
+-- COMMENT: Hook执行记录表，记录Hook执行历史
+DROP TABLE IF EXISTS hook_executions CASCADE;
+CREATE TABLE hook_executions (
+    execution_id TEXT PRIMARY KEY,
+    hook_id TEXT NOT NULL,
+    hook_name TEXT NOT NULL,
+    hook_type TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    message_id TEXT,
+    success BOOLEAN NOT NULL,
+    latency_ms INTEGER,
+    error_code TEXT,
+    error_message TEXT,
+    executed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- SELECT create_hypertable('hook_executions', 'executed_at', 
+--     chunk_time_interval => INTERVAL '1 day',
+--     if_not_exists => TRUE);
+
+CREATE INDEX IF NOT EXISTS idx_hook_executions_hook_id ON hook_executions(hook_id);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_tenant ON hook_executions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_message_id ON hook_executions(message_id);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_executed_at ON hook_executions(executed_at);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_success ON hook_executions(success);
+
+COMMENT ON TABLE hook_executions IS 'Hook执行记录表，记录Hook执行历史';
 
 -- ============================================================================
--- 5. 连续聚合视图（TimescaleDB Continuous Aggregates）
+-- 7. 连续聚合视图（TimescaleDB Continuous Aggregates）
 -- ============================================================================
 -- 职责: 预聚合统计指标，提高查询性能
 
@@ -380,7 +696,7 @@ CALL add_continuous_aggregate_policy('messages_hourly_stats',
 );
 
 -- ============================================================================
--- 6. 触发器（自动更新时间戳）
+-- 8. 触发器（自动更新时间戳）
 -- ============================================================================
 
 -- 会话表更新时间戳触发器
@@ -438,6 +754,48 @@ CREATE TRIGGER trigger_hook_configs_updated_at
     BEFORE UPDATE ON hook_configs
     FOR EACH ROW
     EXECUTE FUNCTION update_hook_configs_updated_at();
+
+-- message_state 表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_message_state_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_message_state_updated_at
+    BEFORE UPDATE ON message_state
+    FOR EACH ROW
+    EXECUTE FUNCTION update_message_state_updated_at();
+
+-- threads 表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_threads_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_threads_updated_at
+    BEFORE UPDATE ON threads
+    FOR EACH ROW
+    EXECUTE FUNCTION update_threads_updated_at();
+
+-- favorites 表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_favorites_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_favorites_updated_at
+    BEFORE UPDATE ON favorites
+    FOR EACH ROW
+    EXECUTE FUNCTION update_favorites_updated_at();
 
 -- ============================================================================
 -- 初始化完成

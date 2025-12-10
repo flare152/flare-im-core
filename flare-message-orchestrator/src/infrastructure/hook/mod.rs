@@ -424,8 +424,9 @@ fn detect_message_type(message: &Message) -> &'static str {
         };
     }
     
-    // 从 MessageType 枚举推断
+    // 从 MessageType 枚举推断（支持所有 22 种消息类型）
     match MessageType::try_from(message.message_type) {
+        // 基础消息类型（9种）
         Ok(MessageType::Text) => "text",
         Ok(MessageType::Image) => "image",
         Ok(MessageType::Video) => "video",
@@ -433,7 +434,9 @@ fn detect_message_type(message: &Message) -> &'static str {
         Ok(MessageType::File) => "file",
         Ok(MessageType::Location) => "location",
         Ok(MessageType::Card) => "card",
+        Ok(MessageType::Custom) => "custom",
         Ok(MessageType::Notification) => "notification",
+        // 功能消息类型（8种）
         Ok(MessageType::Typing) => "typing",
         Ok(MessageType::Recall) => "recall",
         Ok(MessageType::Read) => "read",
@@ -442,7 +445,13 @@ fn detect_message_type(message: &Message) -> &'static str {
         Ok(MessageType::Task) => "task",
         Ok(MessageType::Schedule) => "schedule",
         Ok(MessageType::Announcement) => "announcement",
-        Ok(MessageType::Custom) | Ok(MessageType::Unspecified) | Err(_) => {
+        // 扩展消息类型（5种）
+        Ok(MessageType::MiniProgram) => "mini_program",
+        Ok(MessageType::LinkCard) => "link_card",
+        Ok(MessageType::Quote) => "quote",
+        Ok(MessageType::Thread) => "thread",
+        Ok(MessageType::MergeForward) => "merge_forward",
+        Ok(MessageType::Unspecified) | Err(_) => {
             // 从 MessageContent 推断类型
             if let Some(content) = message.content.as_ref() {
                 match &content.content {
@@ -462,6 +471,8 @@ fn detect_message_type(message: &Message) -> &'static str {
                     Some(flare_proto::common::message_content::Content::Schedule(_)) => "schedule",
                     Some(flare_proto::common::message_content::Content::Announcement(_)) => "announcement",
                     Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
+                    Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
+                    Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
                     None => "unknown",
                 }
             } else {
@@ -472,17 +483,36 @@ fn detect_message_type(message: &Message) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn infer_from_content_type(raw: &str) -> &'static str {
     match raw.trim().to_lowercase().as_str() {
+        // 基础消息类型
         "text/plain" | "text" | "plain_text" => "text",
         "markdown" | "text/markdown" | "rich_text" | "rich-text" => "rich_text",
         "image" | "image/png" | "image/jpeg" | "image/jpg" => "image",
         "video" | "video/mp4" | "video/mpeg" => "video",
         "audio" | "audio/aac" | "audio/mpeg" | "voice" => "audio",
         "file" | "application/octet-stream" | "application/pdf" | "application/zip" => "file",
-        "sticker" | "emoji" | "gif" => "sticker",
         "location" | "geo" | "geolocation" => "location",
         "card" | "share_card" | "invite_card" => "card",
+        "notification" | "system_notification" => "notification",
+        // 功能消息类型
+        "typing" => "typing",
+        "recall" => "recall",
+        "read" => "read",
+        "forward" => "forward",
+        "vote" => "vote",
+        "task" => "task",
+        "schedule" => "schedule",
+        "announcement" => "announcement",
+        // 扩展消息类型
+        "mini_program" | "miniprogram" => "mini_program",
+        "link_card" | "linkcard" => "link_card",
+        "quote" => "quote",
+        "thread" => "thread",
+        "merge_forward" | "mergeforward" => "merge_forward",
+        // 其他
+        "sticker" | "emoji" | "gif" => "sticker",
         "command" | "cmd" => "command",
         "event" => "event",
         "system" | "system_message" => "system",

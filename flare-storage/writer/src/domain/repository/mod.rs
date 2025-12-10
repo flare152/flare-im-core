@@ -54,6 +54,54 @@ pub trait ArchiveStoreRepository: Send + Sync {
         Ok(())
     }
     
+    /// 更新消息状态（用于撤回、编辑、删除等操作）
+    async fn update_message_status(
+        &self,
+        message_id: &str,
+        status: flare_proto::common::MessageStatus,
+        is_recalled: Option<bool>,
+        recalled_at: Option<prost_types::Timestamp>,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, status, is_recalled, recalled_at);
+        Ok(())
+    }
+    
+    /// 更新消息内容（用于编辑操作）
+    async fn update_message_content(
+        &self,
+        message_id: &str,
+        new_content: &flare_proto::common::MessageContent,
+        edit_version: i32,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, new_content, edit_version);
+        Ok(())
+    }
+    
+    /// 更新消息可见性（用于删除操作）
+    async fn update_message_visibility(
+        &self,
+        message_id: &str,
+        user_id: Option<&str>,
+        visibility: flare_proto::common::VisibilityStatus,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, user_id, visibility);
+        Ok(())
+    }
+    
+    /// 追加操作记录到消息
+    async fn append_operation(
+        &self,
+        message_id: &str,
+        operation: &flare_proto::common::MessageOperation,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, operation);
+        Ok(())
+    }
+    
     /// 获取 Any trait 引用（用于向下转型）
     fn as_any(&self) -> &dyn std::any::Any;
 }

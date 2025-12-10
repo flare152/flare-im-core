@@ -3,23 +3,25 @@ use std::collections::HashMap;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::domain::model::{DeviceInfo, OnlineStatusRecord, SessionRecord};
+use crate::domain::aggregate::Session;
+use crate::domain::value_object::{SessionId, UserId, DeviceId};
+use crate::domain::model::{DeviceInfo, OnlineStatusRecord};
 
 // Rust 2024: 对于需要作为 trait 对象使用的 trait（Arc<dyn Trait>），
 // 如果方法参数包含引用，需要保留 async-trait 宏
 
 #[async_trait]
 pub trait SessionRepository: Send + Sync {
-    async fn save_session(&self, record: &SessionRecord) -> Result<()>;
-    async fn remove_session(&self, session_id: &str, user_id: &str) -> Result<()>;
-    async fn touch_session(&self, user_id: &str) -> Result<()>;
+    async fn save_session(&self, session: &Session) -> Result<()>;
+    async fn remove_session(&self, session_id: &SessionId, user_id: &UserId) -> Result<()>;
+    async fn touch_session(&self, user_id: &UserId) -> Result<()>;
     async fn fetch_statuses(
         &self,
         user_ids: &[String],
     ) -> Result<HashMap<String, OnlineStatusRecord>>;
-    async fn get_user_sessions(&self, user_id: &str) -> Result<Vec<SessionRecord>>;
-    async fn remove_user_sessions(&self, user_id: &str, device_ids: Option<&[String]>) -> Result<()>;
-    async fn get_session_by_device(&self, user_id: &str, device_id: &str) -> Result<Option<SessionRecord>>;
+    async fn get_user_sessions(&self, user_id: &UserId) -> Result<Vec<Session>>;
+    async fn remove_user_sessions(&self, user_id: &UserId, device_ids: Option<&[DeviceId]>) -> Result<()>;
+    async fn get_session_by_device(&self, user_id: &UserId, device_id: &DeviceId) -> Result<Option<Session>>;
     async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceInfo>>;
     async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceInfo>>;
 }

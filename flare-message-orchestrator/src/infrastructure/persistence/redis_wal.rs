@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::pin::Pin;
+use std::future::Future;
 
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -40,35 +42,39 @@ impl RedisWalRepository {
 }
 
 impl WalRepository for RedisWalRepository {
-    async fn append(&self, submission: &MessageSubmission) -> Result<()> {
-        let wal_key = match &self.config.wal_hash_key {
-            Some(key) => key.as_str(),
-            None => return Ok(()),
-        };
+    fn append<'a>(&'a self, submission: &'a MessageSubmission) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let _self = self; // 保持对 self 的引用
+        let _submission = submission; // 保持对 submission 的引用
+        Box::pin(async move {
+            let wal_key = match &_self.config.wal_hash_key {
+                Some(key) => key.as_str(),
+                None => return Ok(()),
+            };
 
-        let mut conn = self.connection().await?;
+            let mut conn = _self.connection().await?;
 
-        let encoded_payload = BASE64.encode(submission.kafka_payload.clone().encode_to_vec());
-        let entry = WalEntrySnapshot {
-            message_id: submission.message_id.clone(),
-            encoded: encoded_payload,
-            persisted: false,
-        };
+            let encoded_payload = BASE64.encode(_submission.kafka_payload.clone().encode_to_vec());
+            let entry = WalEntrySnapshot {
+                message_id: _submission.message_id.clone(),
+                encoded: encoded_payload,
+                persisted: false,
+            };
 
-        let payload = serde_json::to_string(&entry)?;
-        conn.hset::<_, _, _, ()>(
-            wal_key,
-            &submission.message_id,
-            payload,
-        )
-        .await?;
+            let payload = serde_json::to_string(&entry)?;
+            conn.hset::<_, _, _, ()>(
+                wal_key,
+                &_submission.message_id,
+                payload,
+            )
+            .await?;
 
-        if self.config.wal_ttl_seconds > 0 {
-            let _: () = conn
-                .expire(wal_key, self.config.wal_ttl_seconds as i64)
-                .await?;
-        }
+            if _self.config.wal_ttl_seconds > 0 {
+                let _: () = conn
+                    .expire(wal_key, _self.config.wal_ttl_seconds as i64)
+                    .await?;
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 }

@@ -11,7 +11,7 @@ use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::BorrowedMessage;
 use rdkafka::Message;
 use tracing::{debug, error, info, warn, instrument, Span};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use flare_server_core::error::{ErrorBuilder, ErrorCode};
 use flare_server_core::kafka::{build_kafka_consumer, subscribe_and_wait_for_assignment};
 
@@ -114,7 +114,9 @@ impl StorageWriterConsumer {
                     }
                     Ok(Err(e)) => {
                         error!(error = ?e, "Error receiving message from Kafka");
-                        return Err(Box::new(e));
+                        // 添加错误重试机制，避免消费者因临时错误而终止
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        break; // 跳出循环，处理已收集的消息
                     }
                     Err(_) => {
                         // 超时，处理已收集的消息
@@ -175,27 +177,9 @@ impl StorageWriterConsumer {
                     // 即使解码成功，也要清理字符串字段，确保所有字段都是有效的 UTF-8
                     // 这是为了避免后续处理中的编码问题
                     if let Some(ref mut msg) = request.message {
-                        // 清理所有字符串字段
-                        msg.sender_platform_id = String::from_utf8_lossy(
-                            msg.sender_platform_id.as_bytes()
-                        ).to_string();
-                        msg.sender_nickname = String::from_utf8_lossy(
-                            msg.sender_nickname.as_bytes()
-                        ).to_string();
-                        msg.sender_avatar_url = String::from_utf8_lossy(
-                            msg.sender_avatar_url.as_bytes()
-                        ).to_string();
-                        msg.group_id = String::from_utf8_lossy(
-                            msg.group_id.as_bytes()
-                        ).to_string();
                         msg.client_msg_id = String::from_utf8_lossy(
                             msg.client_msg_id.as_bytes()
                         ).to_string();
-                        msg.receiver_id = String::from_utf8_lossy(
-                            msg.receiver_id.as_bytes()
-                        ).to_string();
-                        
-                        // 清理消息内容中的 text 字段
                         if let Some(ref mut content) = msg.content {
                             if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
                                 text_content.text = String::from_utf8_lossy(
@@ -212,27 +196,9 @@ impl StorageWriterConsumer {
                     tracing::warn!(error = ?err, "Failed to decode StoreMessageRequest, trying PushMessageRequest fallback");
                     if let Ok(mut push_req) = flare_proto::push::PushMessageRequest::decode(payload) {
                         if let Some(ref mut msg) = push_req.message {
-                            // 清理字符串字段，确保所有字段都是有效的 UTF-8
-                            msg.sender_platform_id = String::from_utf8_lossy(
-                                msg.sender_platform_id.as_bytes()
-                            ).to_string();
-                            msg.sender_nickname = String::from_utf8_lossy(
-                                msg.sender_nickname.as_bytes()
-                            ).to_string();
-                            msg.sender_avatar_url = String::from_utf8_lossy(
-                                msg.sender_avatar_url.as_bytes()
-                            ).to_string();
-                            msg.group_id = String::from_utf8_lossy(
-                                msg.group_id.as_bytes()
-                            ).to_string();
                             msg.client_msg_id = String::from_utf8_lossy(
                                 msg.client_msg_id.as_bytes()
                             ).to_string();
-                            msg.receiver_id = String::from_utf8_lossy(
-                                msg.receiver_id.as_bytes()
-                            ).to_string();
-                            
-                            // 清理消息内容中的 text 字段
                             if let Some(ref mut content) = msg.content {
                                 if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
                                     text_content.text = String::from_utf8_lossy(
@@ -240,7 +206,6 @@ impl StorageWriterConsumer {
                                     ).to_string();
                                 }
                             }
-                            
                             let store = flare_proto::storage::StoreMessageRequest {
                                 session_id: msg.session_id.clone(),
                                 message: Some(msg.clone()),
@@ -303,6 +268,25 @@ impl StorageWriterConsumer {
         &self,
         request: StoreMessageRequest,
     ) -> AnyhowResult<PersistenceResult> {
+        // 检查是否是操作消息
+        if let Some(message) = &request.message {
+            if crate::domain::service::MessageOperationDomainService::is_operation_message(message) {
+                // 提取 MessageOperation
+                if let Ok(Some(operation)) = crate::domain::service::MessageOperationDomainService::extract_operation_from_message(message) {
+                    // 处理操作消息
+                    use crate::application::commands::ProcessMessageOperationCommand;
+                    return self.command_handler
+                        .handle_operation_message(ProcessMessageOperationCommand {
+                            operation,
+                            message: message.clone(),
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to process message operation: {}", e));
+                }
+            }
+        }
+        
+        // 普通消息处理
         self.command_handler
             .handle(ProcessStoreMessageCommand { request })
             .await

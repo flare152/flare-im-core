@@ -1,7 +1,7 @@
-//! # 聊天室客户端示例
+//! # 一对一聊天客户端示例
 //!
-//! 这是一个基于 Flare IM Core 的聊天室客户端示例，连接到 `flare-signaling-gateway`，
-//! 支持多人同时在线聊天。所有消息都发送到同一个聊天室（session_id: "chatroom"），只支持文本消息。
+//! 这是一个基于 Flare IM Core 的一对一聊天客户端示例，连接到 `flare-signaling-gateway`，
+//! 支持两人之间的私聊。消息直接发送给指定的接收方，不经过聊天室广播。
 //!
 //! ## 使用方法
 //!
@@ -11,33 +11,32 @@
 //! # 启动客户端（使用默认用户ID）
 //! cargo run --example chatroom_client
 //!
-//! # 指定用户ID
-//! cargo run --example chatroom_client -- user1
+//! # 指定用户ID和接收方ID
+//! cargo run --example chatroom_client -- user1 user2
 //!
-//! # 使用环境变量指定用户ID
-//! USER_ID=user1 cargo run --example chatroom_client
+//! # 使用环境变量指定用户ID和接收方ID
+//! USER_ID=user1 RECIPIENT_ID=user2 cargo run --example chatroom_client
 //! ```
 //!
 //! ### 跨地区网关路由（多网关部署）
 //!
 //! ```bash
 //! # 连接到北京网关
-//! NEGOTIATION_HOST=gateway-beijing.example.com:60051 cargo run --example chatroom_client -- user1
+//! NEGOTIATION_HOST=gateway-beijing.example.com:60051 cargo run --example chatroom_client -- user1 user2
 //!
 //! # 连接到上海网关
-//! NEGOTIATION_HOST=gateway-shanghai.example.com:60051 cargo run --example chatroom_client -- user2
+//! NEGOTIATION_HOST=gateway-shanghai.example.com:60051 cargo run --example chatroom_client -- user1 user2
 //!
 //! # 连接到本地网关（开发环境）
-//! NEGOTIATION_HOST=localhost:60051 cargo run --example chatroom_client -- user1
-//! NEGOTIATION_HOST=localhost:60052 cargo run --example chatroom_client -- user2
+//! NEGOTIATION_HOST=localhost:60051 cargo run --example chatroom_client -- user1 user2
 //! ```
 //!
 //! ### 工作原理
 //!
 //! 1. **客户端连接**：客户端通过 `NEGOTIATION_HOST` 连接到指定的 Access Gateway
 //! 2. **网关注册**：Access Gateway 在用户登录时，将 `gateway_id` 注册到 Signaling Online 服务
-//! 3. **消息路由**：当业务系统推送消息时，通过 Signaling Online 查询用户所在的 `gateway_id`，然后路由到对应的 Access Gateway
-//! 4. **跨地区推送**：支持用户在不同地区的网关之间接收消息
+//! 3. **消息路由**：消息通过 Signaling Online 查询接收方所在的 `gateway_id`，然后路由到对应的 Access Gateway
+//! 4. **点对点通信**：消息直接发送给指定接收方，不经过聊天室广播
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,30 +70,21 @@ async fn main() -> Result<()> {
     // 从环境变量或命令行参数获取配置
     // 支持多网关连接：通过 NEGOTIATION_HOST 指定不同的网关地址
     // 示例：
-    //   NEGOTIATION_HOST=localhost:60051 cargo run --example chatroom_client -- user1  # 连接到网关1
-    //   NEGOTIATION_HOST=localhost:60052 cargo run --example chatroom_client -- user2  # 连接到网关2
-    //   NEGOTIATION_HOST=gateway-beijing.example.com:60051 cargo run --example chatroom_client -- user1  # 连接到北京网关
+    //   NEGOTIATION_HOST=localhost:60051 cargo run --example chatroom_client -- user1 user2  # 连接到网关1
     let default_host = std::env::var("NEGOTIATION_HOST")
         .unwrap_or_else(|_| "localhost:60051".to_string());
     let default_ws = format!("ws://{default_host}");
-    let default_quic = format!("quic://{}", default_host.replace("60051", "60052"));
 
     let host = std::env::var("NEGOTIATION_HOST").unwrap_or(default_host);
     let ws_url = std::env::var("NEGOTIATION_WS_URL").unwrap_or(default_ws);
-    let _quic_url = std::env::var("NEGOTIATION_QUIC_URL").unwrap_or(default_quic);  // 保留但不使用，避免警告
     
-    // 显示连接的网关信息（用于跨地区路由调试）
-    if let Ok(gateway_id) = std::env::var("GATEWAY_ID") {
-        info!("🌍 连接到网关: {}", gateway_id);
-    }
-
     let platform = std::env::var("DEVICE_PLATFORM")
         .map(|value| DevicePlatform::from_str(&value))
         .unwrap_or(DevicePlatform::PC);
 
     let device_info = DeviceInfo::new(
         format!(
-            "chatroom-client-{}-{}",
+            "p2p-client-{}-{}",
             platform.as_str(),
             std::process::id()
         ),
@@ -103,12 +93,14 @@ async fn main() -> Result<()> {
     .with_model(platform.as_str().to_string())
     .with_app_version("1.0.0".to_string());
 
-    let user_id = resolve_user_id().await;
+    // 解析用户ID和接收方ID
+    let (user_id, recipient_id) = resolve_user_and_recipient_id().await;
     info!(
         %user_id,
+        %recipient_id,
         platform = %platform.as_str(),
         host = %host,
-        "🚀 启动聊天室客户端"
+        "🚀 启动一对一聊天客户端"
     );
 
     let heartbeat = HeartbeatConfig::default()
@@ -118,6 +110,7 @@ async fn main() -> Result<()> {
     let observer = Arc::new(ChatObserver {
         message_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         user_id: user_id.clone(),
+        recipient_id: recipient_id.clone(),
         seen_message_ids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let event_handler = Arc::new(ChatEventHandler);
@@ -166,16 +159,16 @@ async fn main() -> Result<()> {
     let mut client = client_builder.build_with_race().await?;
 
     info!("✅ 已连接到 {host}");
+    info!("   当前用户ID: {user_id}");
+    info!("   接收方用户ID: {recipient_id}");
     info!("   输入聊天内容后回车即可发送，输入 'quit' 或 'exit' 退出");
     info!("   输入 '/userid' 查看当前用户ID");
+    info!("   输入 '/recipient' 查看接收方ID");
     info!("   输入 '/help' 查看帮助");
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut line = String::new();
-
-    // 解析会话ID（默认聊天室 chatroom；可通过环境变量 SESSION_ID 自定义）
-    let session_id = std::env::var("SESSION_ID").unwrap_or_else(|_| "chatroom".to_string());
 
     loop {
         tokio::select! {
@@ -203,6 +196,10 @@ async fn main() -> Result<()> {
                                 info!("当前用户ID: {user_id}");
                                 continue;
                             }
+                            "/recipient" => {
+                                info!("接收方用户ID: {recipient_id}");
+                                continue;
+                            }
                             "/help" => {
                                 print_help();
                                 continue;
@@ -210,21 +207,95 @@ async fn main() -> Result<()> {
                             _ => {}
                         }
 
-                        // 发送消息（默认使用聊天室会话ID，可通过环境变量覆盖）
-                        let mut metadata = std::collections::HashMap::new();
-                        metadata.insert("session_id".to_string(), session_id.as_bytes().to_vec());
-                        metadata.insert("message_type".to_string(), "text".as_bytes().to_vec()); // 只发送文本消息
+                        // 发送一对一消息
+                        // 构造消息内容
+                        let text_content = flare_proto::common::TextContent {
+                            text: message.clone(),
+                            mentions: vec![],
+                        };
+                        
+                        let message_content = flare_proto::common::MessageContent {
+                            content: Some(flare_proto::common::message_content::Content::Text(text_content)),
+                            extensions: vec![],
+                        };
+                        
+                        // 构造完整的Message对象，将recipient_id作为session_id
+                        let timestamp = prost_types::Timestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        };
+                        
+                        // 设置接收方用户ID到attributes中
+                        let mut attributes = std::collections::HashMap::new();
+                        attributes.insert("recipient_id".to_string(), recipient_id.clone());
+                        
+                        // 构造符合Message Orchestrator期望的session_id格式
+                        // 对于单聊，格式应该是 "single:sender_id:recipient_id"
+                        let session_id = format!("single:{}:{}", user_id, recipient_id);
+                        
+                        let msg = flare_proto::common::Message {
+                            id: generate_message_id(),
+                            session_id,  // 使用正确的session_id格式
+                            client_msg_id: String::new(),
+                            sender_id: user_id.clone(),
+                            source: flare_proto::common::MessageSource::User as i32,
+                            seq: 0,
+                            timestamp: Some(timestamp.clone()),
+                            session_type: flare_proto::common::SessionType::Single as i32,
+                            message_type: flare_proto::common::MessageType::Text as i32,
+                            business_type: String::new(),
+                            content: Some(message_content),
+                            content_type: flare_proto::common::ContentType::PlainText as i32,
+                            attachments: vec![],
+                            extra: std::collections::HashMap::new(),
+                            attributes,
+                            status: flare_proto::common::MessageStatus::Created as i32,
+                            is_recalled: false,
+                            recalled_at: None,
+                            recall_reason: String::new(),
+                            is_burn_after_read: false,
+                            burn_after_seconds: 0,
+                            timeline: Some(flare_proto::common::MessageTimeline {
+                                created_at: Some(timestamp.clone()),
+                                persisted_at: None,
+                                delivered_at: None,
+                                read_at: None,
+                            }),
+                            visibility: std::collections::HashMap::new(),
+                            read_by: vec![],
+                            reactions: vec![],
+                            edit_history: vec![],
+                            tenant: Some(flare_proto::common::TenantContext {
+                                tenant_id: "default".to_string(),
+                                business_type: "im".to_string(),
+                                environment: "development".to_string(),
+                                organization_id: String::new(),
+                                labels: std::collections::HashMap::new(),
+                                attributes: std::collections::HashMap::new(),
+                            }),
+                            audit: None,
+                            tags: vec![],
+                            offline_push_info: None,
+                            extensions: vec![],
+                        };
+                        
+                        // 序列化消息对象
+                        let mut buf = Vec::new();
+                        msg.encode(&mut buf).map_err(|e| flare_core::common::error::FlareError::serialization_error(
+                            format!("Failed to encode message: {}", e)
+                        ))?;
                         
                         let cmd = send_message(
-                            generate_message_id(),
-                            message.into_bytes(),
-                            Some(metadata),
+                            msg.id.clone(),
+                            buf,
+                            None,
                             None,
                         );
                         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
                         match client.send_frame(&frame).await {
                             Ok(_) => {
-                                debug!("消息已发送");
+                                debug!("消息已发送给 {}", recipient_id);
+                                println!("[我 ➡ {}]: {}", recipient_id, message);
                             }
                             Err(err) => {
                                 error!(?err, "发送消息失败");
@@ -255,60 +326,90 @@ async fn main() -> Result<()> {
 
 fn print_help() {
     println!();
-    println!("=== 聊天室客户端帮助 ===");
+    println!("=== 一对一聊天客户端帮助 ===");
     println!("命令:");
     println!("  /userid    - 显示当前用户ID");
+    println!("  /recipient - 显示接收方用户ID");
     println!("  /help      - 显示此帮助信息");
     println!("  quit/exit  - 退出客户端");
     println!();
     println!("使用:");
     println!("  直接输入消息内容后回车即可发送");
-    println!("  消息会广播给所有在线的用户");
+    println!("  消息会直接发送给指定的接收方");
     println!();
 }
 
-async fn resolve_user_id() -> String {
+async fn resolve_user_and_recipient_id() -> (String, String) {
+    let args: Vec<String> = std::env::args().collect();
+    
     // 1. 优先使用命令行参数
-    if let Some(arg) = std::env::args().nth(1) {
-        info!("📝 使用命令行提供的用户ID: {arg}");
-        return arg;
+    if args.len() >= 3 {
+        info!("📝 使用命令行提供的用户ID: {} 和接收方ID: {}", args[1], args[2]);
+        return (args[1].clone(), args[2].clone());
     }
-
+    
     // 2. 使用环境变量
-    if let Ok(env_user) = std::env::var("USER_ID") {
+    let user_id = if let Ok(env_user) = std::env::var("USER_ID") {
         info!("📝 使用环境变量 USER_ID: {env_user}");
-        return env_user;
-    }
+        env_user
+    } else {
+        // 交互式输入用户ID
+        info!("📝 请输入用户ID（直接回车使用默认值）:");
+        print!("用户ID (默认: user-{}): ", std::process::id());
+        use std::io::Write;
+        std::io::stdout().flush().unwrap();
 
-    // 3. 交互式输入
-    info!("📝 请输入用户ID（直接回车使用默认值）:");
-    print!("用户ID (默认: user-{}): ", std::process::id());
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin);
-    let mut buffer = String::new();
-    match reader.read_line(&mut buffer).await {
-        Ok(_) => {
-            let trimmed = buffer.trim();
-            if trimmed.is_empty() {
+        let stdin = tokio::io::stdin();
+        let mut reader = BufReader::new(stdin);
+        let mut buffer = String::new();
+        match reader.read_line(&mut buffer).await {
+            Ok(_) => {
+                let trimmed = buffer.trim();
+                if trimmed.is_empty() {
+                    format!("user-{}", std::process::id())
+                } else {
+                    trimmed.to_string()
+                }
+            }
+            Err(err) => {
+                error!(?err, "读取用户输入失败，使用默认用户ID");
                 format!("user-{}", std::process::id())
-            } else {
-                trimmed.to_string()
             }
         }
-        Err(err) => {
-            error!(?err, "读取用户输入失败，使用默认用户ID");
-            format!("user-{}", std::process::id())
+    };
+    
+    let recipient_id = if let Ok(env_recipient) = std::env::var("RECIPIENT_ID") {
+        info!("📝 使用环境变量 RECIPIENT_ID: {env_recipient}");
+        env_recipient
+    } else {
+        // 交互式输入接收方ID
+        info!("📝 请输入接收方用户ID:");
+        print!("接收方用户ID: ");
+        use std::io::Write;
+        std::io::stdout().flush().unwrap();
+
+        let stdin = tokio::io::stdin();
+        let mut reader = BufReader::new(stdin);
+        let mut buffer = String::new();
+        match reader.read_line(&mut buffer).await {
+            Ok(_) => {
+                buffer.trim().to_string()
+            }
+            Err(err) => {
+                error!(?err, "读取接收方用户ID失败");
+                "unknown".to_string()
+            }
         }
-    }
+    };
+    
+    (user_id, recipient_id)
 }
 
-/// 聊天室消息观察者
+/// 一对一聊天消息观察者
 struct ChatObserver {
     message_count: Arc<std::sync::atomic::AtomicU64>,
     user_id: String,
+    recipient_id: String,
     // 用于去重的消息ID集合（使用简单的 HashSet，限制大小避免内存泄漏）
     seen_message_ids: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
@@ -320,6 +421,7 @@ impl ConnectionObserver for ChatObserver {
             ConnectionEvent::Connected => {
                 info!("✅ 已连接到服务器，协商信息已发送");
                 info!("   用户ID: {}", self.user_id);
+                info!("   接收方ID: {}", self.recipient_id);
             }
             ConnectionEvent::Disconnected(reason) => {
                 warn!("🔴 连接断开: {reason}");
@@ -368,10 +470,13 @@ impl ConnectionObserver for ChatObserver {
                             }
                             
                             if let Some(Type::Message(msg)) = &cmd.r#type {
-                                let index = self
+                                let _index = self
                                     .message_count
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                                     + 1;
+                                
+                                // 添加调试信息
+                                debug!("收到消息，payload长度: {}, message_id: {}", msg.payload.len(), msg.message_id);
                                 
                                 // 尝试解析消息内容
                                 // Access Gateway 发送的 payload 是序列化后的 Message (common.v1.Message)
@@ -379,6 +484,9 @@ impl ConnectionObserver for ChatObserver {
                                     Ok(message) => {
                                         let sender = message.sender_id.clone();
                                         let message_id = message.id.clone();
+                                        
+                                        // 添加调试信息
+                                        debug!("成功解析消息: sender={}, message_id={}, session_id={}", sender, message_id, message.session_id);
                                         
                                         // 检查消息是否已经处理过（去重）
                                         {
@@ -393,6 +501,7 @@ impl ConnectionObserver for ChatObserver {
                                                 seen_ids.clear(); // 简单清理策略
                                             }
                                             seen_ids.insert(message_id.clone());
+                                            debug!("添加消息到已处理集合: {}", message_id);
                                         }
                                         
                                         // 从 MessageContent 中提取文本内容
@@ -402,6 +511,7 @@ impl ConnectionObserver for ChatObserver {
                                             match &content.content {
                                                 Some(flare_proto::common::message_content::Content::Text(text_content)) => {
                                                     // 文本消息：提取 text 字段
+                                                    debug!("解析到文本消息: {}", text_content.text);
                                                     text_content.text.clone()
                                                 }
                                                 Some(flare_proto::common::message_content::Content::Image(_)) => {
@@ -436,26 +546,35 @@ impl ConnectionObserver for ChatObserver {
                                                 }
                                                 None => {
                                                     // content.content 为空，尝试从原始 payload 提取可读文本
-                                                    String::from_utf8_lossy(&msg.payload)
+                                                    debug!("content.content 为空，尝试从原始 payload 提取文本");
+                                                    let text = String::from_utf8_lossy(&msg.payload)
                                                         .chars()
                                                         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || "，。！？：；、".contains(*c))
                                                         .take(200)
                                                         .collect::<String>()
                                                         .trim()
-                                                        .to_string()
+                                                        .to_string();
+                                                    debug!("从原始 payload 提取到文本: {}", text);
+                                                    text
                                                 },
                                                 _ => {
                                                     // 其他未知类型，尝试直接解析 payload 为 UTF-8 文本
-                                                    String::from_utf8_lossy(&msg.payload)
+                                                    debug!("未知内容类型，尝试直接解析 payload");
+                                                    let text = String::from_utf8_lossy(&msg.payload)
                                                         .trim()
-                                                        .to_string()
+                                                        .to_string();
+                                                    debug!("直接解析 payload 得到文本: {}", text);
+                                                    text
                                                 }
                                             }
                                         } else {
                                             // content 为空，尝试直接解析 payload 为 UTF-8 文本
-                                            String::from_utf8_lossy(&msg.payload)
+                                            debug!("content 为空，尝试直接解析 payload 为 UTF-8 文本");
+                                            let text = String::from_utf8_lossy(&msg.payload)
                                                 .trim()
-                                                .to_string()
+                                                .to_string();
+                                            debug!("解析得到文本: {}", text);
+                                            text
                                         };
                                         
                                         (sender, content_text, message_id)
@@ -488,19 +607,32 @@ impl ConnectionObserver for ChatObserver {
                                 };
                                 
                                 // 格式化输出
-                                let formatted_text = if sender == self.user_id {
-                                    format!("[我] {content_text}")
-                                } else {
-                                    format!("[{}] {content_text}", sender)
-                                };
+                                // 只打印清晰的文本内容，避免显示二进制数据
+                                // 过滤掉不可打印字符，只保留字母、数字、中文和常见标点
+                                let clean_content = content_text
+                                    .chars()
+                                    .filter(|c| {
+                                        c.is_alphanumeric() || 
+                                        c.is_whitespace() || 
+                                        "，。！？：；、,.!?;:".contains(*c) ||
+                                        (c.clone() as u32) > 127  // 保留非ASCII字符（如中文）
+                                    })
+                                    .collect::<String>()
+                                    .trim()
+                                    .to_string();
                                 
-                                // 打印格式化的消息（使用 println! 确保输出到控制台）
-                                if sender == self.user_id {
-                                    // 自己的消息用 debug 级别，避免重复显示
-                                    debug!("[消息 #{}] {}", index, formatted_text);
+                                if !clean_content.is_empty() {
+                                    println!("\n📨 [{sender} ➡ {recipient}]: {content}", 
+                                        sender = sender, 
+                                        recipient = self.user_id, 
+                                        content = clean_content);
                                 } else {
-                                    // 其他人的消息用 println! 清晰显示
-                                    println!("\n📨 [消息 #{}] {}", index, formatted_text);
+                                    // 如果过滤后没有内容，至少显示原始内容的前50个字符
+                                    let truncated = content_text.chars().take(50).collect::<String>();
+                                    println!("\n📨 [{sender} ➡ {recipient}]: {content}", 
+                                        sender = sender, 
+                                        recipient = self.user_id, 
+                                        content = truncated);
                                 }
                             }
                         }
@@ -513,11 +645,11 @@ impl ConnectionObserver for ChatObserver {
                                 if let Some(cmd) = &frame.command {
                                     if let Some(Type::Message(msg)) = &cmd.r#type {
                                         let text = String::from_utf8_lossy(&msg.payload).trim().to_string();
-                                        let index = self
+                                        let _index = self
                                             .message_count
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                                             + 1;
-                                        println!("\n📨 [消息 #{}] {}", index, text);
+                                        println!("\n📨 [消息 #{}] {}", _index, text);
                                     }
                                 }
                             }

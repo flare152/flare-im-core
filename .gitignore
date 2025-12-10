@@ -1,6 +1,9 @@
 /target
 .idea
 .vscode
+.cursor
+.DS_Store
+
 .git
 target
 Cargo.lock

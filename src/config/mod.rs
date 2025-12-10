@@ -1138,8 +1138,8 @@ fn default_config() -> FlareAppConfig {
                 port: 50051,
             },
             registry: Some(flare_server_core::RegistryConfig {
-                registry_type: "etcd".to_string(),
-                endpoints: vec!["http://localhost:2379".to_string()],
+                registry_type: "consul".to_string(),
+                endpoints: vec!["http://localhost:28500".to_string()],
                 namespace: "flare".to_string(),
                 ttl: 30,
                 load_balance_strategy: "consistent_hash".to_string(),

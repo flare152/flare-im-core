@@ -1,21 +1,8 @@
-//! # Gateway gRPC Handler模块
-//!
-//! 包含所有gRPC服务处理器
+// 简单网关处理器
+pub mod simple_gateway;
 
-pub mod access_gateway;
-pub mod admin;
-pub mod business;
-pub mod gateway;
-pub mod push;
-pub mod signaling;
-pub mod storage;
+// 轻量级网关处理器
+pub mod lightweight_gateway;
 
-pub use access_gateway::{AccessGatewayHandler, GatewayRouter};
-pub use gateway::GatewayHandler;
-pub use business::{
-    MessageServiceHandler, PushServiceHandler, SessionServiceHandler, UserServiceHandler,
-};
-pub use admin::{
-    ConfigServiceHandler, HookServiceHandler, MetricsServiceHandler, TenantServiceHandler,
-};
-
+pub use simple_gateway::SimpleGatewayHandler;
+pub use lightweight_gateway::LightweightGatewayHandler;

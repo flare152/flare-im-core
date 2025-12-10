@@ -1,8 +1,10 @@
 //! 命令结构体定义（Command DTO）
 
-use flare_proto::signaling::{
-    HeartbeatRequest, LoginRequest, LogoutRequest, PublishSignalRequest, SubscribeRequest,
-    UnsubscribeRequest,
+use flare_proto::signaling::online::{
+    HeartbeatRequest, LoginRequest, LogoutRequest,
+};
+use flare_proto::access_gateway::{
+    PublishSignalRequest, SubscribeRequest, UnsubscribeRequest,
 };
 
 /// 登录命令

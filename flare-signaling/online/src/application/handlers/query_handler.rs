@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use flare_proto::signaling::{GetOnlineStatusResponse, OnlineStatus};
+use flare_proto::signaling::online::{GetOnlineStatusResponse, OnlineStatus};
 use prost_types::Timestamp;
 use tracing::instrument;
 

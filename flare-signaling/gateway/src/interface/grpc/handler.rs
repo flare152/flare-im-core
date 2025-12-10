@@ -12,10 +12,10 @@ use crate::interface::gateway::UnifiedGatewayHandler;
 use flare_proto::access_gateway::access_gateway_server::AccessGateway;
 use flare_proto::access_gateway::{
     BatchPushMessageRequest, BatchPushMessageResponse, PushMessageRequest, PushMessageResponse,
-    QueryUserConnectionsRequest, QueryUserConnectionsResponse,
+    QueryUserConnectionsRequest, QueryUserConnectionsResponse, PushAckRequest, PushCustomRequest,
 };
-use flare_proto::signaling::signaling_service_server::SignalingService;
-use flare_proto::signaling::*;
+use flare_proto::signaling::online::signaling_service_server::SignalingService;
+use flare_proto::signaling::online::*;
 use async_trait::async_trait;
 use tonic::{Request, Response, Status};
 use tracing::info;
@@ -64,34 +64,6 @@ impl SignalingService for UnifiedGatewayGrpcHandler {
         request: Request<GetOnlineStatusRequest>,
     ) -> Result<Response<GetOnlineStatusResponse>, Status> {
         self.handler.handle_get_online_status(request).await
-    }
-
-    async fn route_message(
-        &self,
-        request: Request<RouteMessageRequest>,
-    ) -> Result<Response<RouteMessageResponse>, Status> {
-        self.handler.handle_route_message(request).await
-    }
-
-    async fn subscribe(
-        &self,
-        _request: Request<SubscribeRequest>,
-    ) -> Result<Response<SubscribeResponse>, Status> {
-        Err(Status::unimplemented("Subscribe not implemented"))
-    }
-
-    async fn unsubscribe(
-        &self,
-        _request: Request<UnsubscribeRequest>,
-    ) -> Result<Response<UnsubscribeResponse>, Status> {
-        Err(Status::unimplemented("Unsubscribe not implemented"))
-    }
-
-    async fn publish_signal(
-        &self,
-        _request: Request<PublishSignalRequest>,
-    ) -> Result<Response<PublishSignalResponse>, Status> {
-        Err(Status::unimplemented("PublishSignal not implemented"))
     }
 
     type WatchPresenceStream = tokio_stream::wrappers::ReceiverStream<Result<PresenceEvent, Status>>;
@@ -188,6 +160,117 @@ impl AccessGateway for AccessGatewayHandler {
             })?;
 
         Ok(Response::new(response))
+    }
+
+    async fn push_ack(
+        &self,
+        request: Request<PushAckRequest>,
+    ) -> Result<Response<PushMessageResponse>, Status> {
+        let req = request.into_inner();
+        let ack = req.ack.ok_or_else(|| Status::invalid_argument("ack is required"))?;
+        
+        info!(
+            "PushAck request: {} users, message_id: {}",
+            req.target_user_ids.len(),
+            ack.message_id
+        );
+        
+        // TODO: 实现 ACK 推送逻辑
+        // 将 ACK 封装为 ServerPacket 推送给目标用户
+        Ok(Response::new(PushMessageResponse {
+            request_id: req.request_id,
+            results: vec![],
+            status: Some(flare_proto::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "ACK push not yet implemented".to_string(),
+                details: vec![],
+                context: None,
+            }),
+            statistics: None,
+        }))
+    }
+
+    async fn push_custom(
+        &self,
+        request: Request<PushCustomRequest>,
+    ) -> Result<Response<PushMessageResponse>, Status> {
+        let req = request.into_inner();
+        let custom = req.custom.ok_or_else(|| Status::invalid_argument("custom data is required"))?;
+        
+        info!(
+            "PushCustom request: {} users, type: {}",
+            req.target_user_ids.len(),
+            custom.r#type
+        );
+        
+        // TODO: 实现自定义数据推送逻辑
+        // 将 CustomPushData 封装为 ServerPacket 推送给目标用户
+        Ok(Response::new(PushMessageResponse {
+            request_id: req.request_id,
+            results: vec![],
+            status: Some(flare_proto::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Custom push not yet implemented".to_string(),
+                details: vec![],
+                context: None,
+            }),
+            statistics: None,
+        }))
+    }
+
+    async fn subscribe(
+        &self,
+        request: Request<flare_proto::access_gateway::SubscribeRequest>,
+    ) -> Result<Response<flare_proto::access_gateway::SubscribeResponse>, Status> {
+        let req = request.into_inner();
+        info!("Subscribe request: user_id={}", req.user_id);
+        
+        // TODO: 实现订阅逻辑
+        Ok(Response::new(flare_proto::access_gateway::SubscribeResponse {
+            granted: vec![],
+            status: Some(flare_proto::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Subscribe not yet implemented".to_string(),
+                details: vec![],
+                context: None,
+            }),
+        }))
+    }
+
+    async fn unsubscribe(
+        &self,
+        request: Request<flare_proto::access_gateway::UnsubscribeRequest>,
+    ) -> Result<Response<flare_proto::access_gateway::UnsubscribeResponse>, Status> {
+        let req = request.into_inner();
+        info!("Unsubscribe request: user_id={}", req.user_id);
+        
+        // TODO: 实现取消订阅逻辑
+        Ok(Response::new(flare_proto::access_gateway::UnsubscribeResponse {
+            status: Some(flare_proto::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Unsubscribe not yet implemented".to_string(),
+                details: vec![],
+                context: None,
+            }),
+        }))
+    }
+
+    async fn publish_signal(
+        &self,
+        request: Request<flare_proto::access_gateway::PublishSignalRequest>,
+    ) -> Result<Response<flare_proto::access_gateway::PublishSignalResponse>, Status> {
+        let _req = request.into_inner();
+        info!("PublishSignal request received");
+        
+        // TODO: 实现发布信令逻辑
+        Ok(Response::new(flare_proto::access_gateway::PublishSignalResponse {
+            status: Some(flare_proto::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "PublishSignal not yet implemented".to_string(),
+                details: vec![],
+                context: None,
+            }),
+        }))
     }
 }
 

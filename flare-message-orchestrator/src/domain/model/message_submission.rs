@@ -61,8 +61,15 @@ impl MessageSubmission {
             message.business_type = defaults.default_business_type.clone();
         }
 
-        if message.session_type.is_empty() {
-            message.session_type = defaults.default_session_type.clone();
+        // session_type 是 i32 枚举，0 表示未设置（Unspecified）
+        if message.session_type == 0 {
+            // 将字符串类型的默认 session_type 转换为 i32 枚举
+            message.session_type = match defaults.default_session_type.as_str() {
+                "single" => 1,   // SessionType::Single
+                "group" => 2,    // SessionType::Group
+                "channel" => 3,  // SessionType::Channel
+                _ => 1,           // 默认为 Single
+            };
         }
 
         // 如果 status 未设置，使用默认值（从 string 迁移到 MessageStatus 枚举）
@@ -120,35 +127,36 @@ impl MessageSubmission {
         embed_timeline_in_extra(&mut message, &timeline);
 
         // 清理字符串字段，确保所有字段都是有效的 UTF-8
-        // 这是为了避免 Protobuf 解码错误（特别是 sender_platform_id 字段）
-        // 在发布到 Kafka 之前，确保所有字符串字段都是有效的 UTF-8
-        message.sender_platform_id = String::from_utf8_lossy(
-            message.sender_platform_id.as_bytes()
-        ).to_string();
-        message.sender_nickname = String::from_utf8_lossy(
-            message.sender_nickname.as_bytes()
-        ).to_string();
-        message.sender_avatar_url = String::from_utf8_lossy(
-            message.sender_avatar_url.as_bytes()
-        ).to_string();
-        message.group_id = String::from_utf8_lossy(
-            message.group_id.as_bytes()
-        ).to_string();
+        // 注意：新版 Message 结构已移除 sender_platform_id、sender_nickname、
+        // sender_avatar_url、group_id、receiver_id 等字段，这些信息现在通过
+        // attributes 或 extra 字段存储
         message.client_msg_id = String::from_utf8_lossy(
             message.client_msg_id.as_bytes()
-        ).to_string();
-        message.receiver_id = String::from_utf8_lossy(
-            message.receiver_id.as_bytes()
         ).to_string();
         
         // 清理消息内容中的 text 字段，确保它是有效的 UTF-8
         // 这可以避免 Protobuf 序列化/反序列化时的编码问题
         if let Some(ref mut content) = message.content {
             if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
-                // 清理 text 字段，移除无效的控制字符，确保 UTF-8 编码
-                text_content.text = String::from_utf8_lossy(
-                    text_content.text.as_bytes()
-                ).to_string();
+                // 清理 text 字段：
+                // 1. 确保 UTF-8 编码
+                // 2. 移除控制字符（如 \x08 退格字符、\x00 空字符等）
+                // 3. 保留可打印字符和空白字符（空格、换行、制表符等）
+                let cleaned: String = text_content.text
+                    .chars()
+                    .filter(|c| {
+                        // 保留空白字符（空格、换行、制表符等）
+                        if c.is_whitespace() {
+                            true
+                        } else {
+                            // 过滤掉所有控制字符（包括 \x08 退格字符）
+                            !c.is_control()
+                        }
+                    })
+                    .collect();
+                
+                // 去除首尾空白
+                text_content.text = cleaned.trim().to_string();
             }
         }
 

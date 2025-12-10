@@ -184,7 +184,6 @@ impl SeqGeneratorTrait for DatabaseSeqGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // 注意：这些测试需要实际的 Redis 和数据库连接
     // 在实际测试中，应该使用测试容器或 mock

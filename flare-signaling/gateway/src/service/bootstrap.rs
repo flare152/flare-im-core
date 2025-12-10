@@ -17,7 +17,7 @@ impl ApplicationBootstrap {
         use flare_im_core::load_config;
         
         // 加载应用配置
-        let app_config = load_config(None);
+        let app_config = load_config(Some("../config"));
         // 初始化 OpenTelemetry 追踪
         #[cfg(feature = "tracing")]
         {

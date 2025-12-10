@@ -18,6 +18,7 @@ chrono = { workspace = true }
 flare-server-core = { workspace = true, features = ["kafka"] }
 flare-proto = { workspace = true }
 futures = { workspace = true }
+rand = { workspace = true }
 redis = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

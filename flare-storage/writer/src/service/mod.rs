@@ -1,5 +1,6 @@
 //! 服务模块 - 包含服务启动、注册和管理相关功能
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -20,7 +21,7 @@ impl ApplicationBootstrap {
         use flare_im_core::load_config;
         
         // 加载应用配置
-        let app_config = load_config(Some("config"));
+        let app_config = load_config(Some("./config"));
         
         // 使用 Wire 风格的依赖注入构建应用上下文
         let context = self::wire::initialize(app_config).await?;
@@ -36,9 +37,10 @@ impl ApplicationBootstrap {
     /// 使用 ServiceRuntime 管理消费者生命周期，支持优雅停机
     /// 支持添加多个消费者任务
     pub async fn run_with_context(context: ApplicationContext) -> Result<()> {
-        let consumer = Arc::new(context.consumer);
+        info!("Starting Storage Writer (Kafka consumer)");
         
         // 使用 ServiceRuntime 管理消费者（不需要地址）
+        let consumer = context.consumer;
         let runtime = ServiceRuntime::new_consumer_only("storage-writer")
             .add_consumer("kafka-consumer", async move {
                 // 运行消费者循环

@@ -114,18 +114,4 @@ impl UnifiedGatewayHandler {
             .map_err(Status::from)?;
         Ok(Response::new(response))
     }
-
-    pub async fn handle_route_message(
-        &self,
-        request: Request<RouteMessageRequest>,
-    ) -> Result<Response<RouteMessageResponse>, Status> {
-        let req = request.into_inner();
-        info!(user_id = %req.user_id, svid = %req.svid, "route message placeholder");
-        Ok(Response::new(RouteMessageResponse {
-            success: true,
-            response: b"OK".to_vec(),
-            error_message: String::new(),
-            status: Some(crate::interface::grpc::util::rpc_status_ok()),
-        }))
-    }
 }

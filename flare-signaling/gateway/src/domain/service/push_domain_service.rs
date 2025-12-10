@@ -10,7 +10,6 @@ use tracing::instrument;
 
 use crate::domain::model::ConnectionInfo;
 use crate::domain::repository::ConnectionQuery;
-use crate::infrastructure::online_cache::OnlineStatusCache;
 use crate::interface::connection::LongConnectionHandler;
 
 /// 推送结果（领域层）
@@ -26,46 +25,32 @@ pub struct DomainPushResult {
 pub struct PushDomainService {
     connection_handler: Arc<LongConnectionHandler>,
     connection_query: Arc<dyn ConnectionQuery>,
-    online_cache: Arc<OnlineStatusCache>,
 }
 
 impl PushDomainService {
     pub fn new(
         connection_handler: Arc<LongConnectionHandler>,
         connection_query: Arc<dyn ConnectionQuery>,
-        online_cache: Arc<OnlineStatusCache>,
     ) -> Self {
         Self {
             connection_handler,
             connection_query,
-            online_cache,
         }
     }
 
-    /// 检查用户是否在线（包含缓存逻辑）
+    /// 检查用户是否在线
+    /// 
+    /// Gateway 直接查询本地连接状态，不维护缓存
+    /// 在线状态由 Signaling Online 服务统一管理
     #[instrument(skip(self), fields(user_id = %user_id))]
     pub async fn check_user_online(&self, user_id: &str) -> Result<bool> {
-        // 1. 先检查本地缓存
-        if let Some((online, _gateway_id)) = self.online_cache.get(user_id).await {
-            return Ok(online);
-        }
-
-        // 2. 缓存未命中，查询连接管理器
+        // 直接查询本地连接状态
         let connections = self
             .connection_query
             .query_user_connections(user_id)
             .await?;
 
-        let is_online = !connections.is_empty();
-
-        // 3. 更新缓存（即使离线也缓存，避免频繁查询）
-        if let Some(gateway_id) = connections.first().map(|_| "local".to_string()) {
-            self.online_cache
-                .set(user_id.to_string(), gateway_id, is_online)
-                .await;
-        }
-
-        Ok(is_online)
+        Ok(!connections.is_empty())
     }
 
     /// 过滤连接（根据设备ID和平台）
@@ -97,7 +82,7 @@ impl PushDomainService {
             .collect()
     }
 
-    /// 推送消息到连接
+    /// 推送消息到连接（直接单条推送，保持 Gateway 轻量）
     #[instrument(skip(self, message_bytes), fields(user_id = %user_id, connection_count = connections.len()))]
     pub async fn push_to_connections(
         &self,
@@ -107,7 +92,6 @@ impl PushDomainService {
     ) -> Result<(i32, i32)> {
         let mut success_count = 0;
         let mut failure_count = 0;
-
         for conn in connections {
             match self
                 .connection_handler
@@ -165,4 +149,3 @@ impl PushDomainService {
         }
     }
 }
-

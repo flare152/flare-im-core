@@ -8,9 +8,10 @@ use anyhow::{Context, Result};
 
 use crate::application::handlers::{MessageStorageCommandHandler, MessageStorageQueryHandler};
 use crate::config::StorageReaderConfig;
-use crate::domain::repository::{MessageStorage, VisibilityStorage};
+use crate::domain::repository::{MessageStorage, VisibilityStorage, MessageStateRepository};
 use crate::domain::service::{MessageStorageDomainConfig, MessageStorageDomainService};
-use crate::infrastructure::persistence::mongo::MongoMessageStorage;
+use crate::infrastructure::persistence::postgres::PostgresMessageStorage;
+use crate::infrastructure::persistence::message_state_repo::PostgresMessageStateRepository;
 use crate::interface::grpc::handler::StorageReaderGrpcHandler;
 
 /// 应用上下文 - 包含所有已初始化的服务
@@ -36,32 +37,56 @@ pub async fn initialize(
             .context("Failed to load storage reader service configuration")?
     );
     
-    // 2. 创建消息存储实例
-    let storage: Arc<dyn MessageStorage + Send + Sync> = if let Some(ref mongo_url) = config.mongo_url {
-        tracing::info!(mongo_url = %mongo_url, "Using MongoDB storage");
-        Arc::new(
-            MongoMessageStorage::new(mongo_url, &config.mongo_database)
-                .await
-                .context("Failed to create MongoDB storage")?
-        )
-    } else {
-        tracing::info!("MongoDB URL not configured, using default storage");
-        Arc::new(MongoMessageStorage::default())
+    // 2. 创建消息存储实例（必须使用 PostgreSQL）
+    let storage: Arc<dyn MessageStorage + Send + Sync> = match PostgresMessageStorage::new(&config).await
+        .context("Failed to create PostgreSQL storage")? {
+        Some(postgres_storage) => {
+            tracing::info!("Using PostgreSQL storage");
+            Arc::new(postgres_storage)
+        }
+        None => {
+            return Err(anyhow::anyhow!(
+                "PostgreSQL URL not configured. Set POSTGRES_URL or STORAGE_POSTGRES_URL, or define postgres profile in config"
+            ));
+        }
     };
     
     // 3. 创建可见性存储（可选，暂时为 None）
     let visibility_storage: Option<Arc<dyn VisibilityStorage + Send + Sync>> = None;
     
-    // 4. 构建领域配置
+    // 4. 创建消息状态仓储（使用相同的 PostgreSQL 连接池）
+    let message_state_repo: Option<Arc<dyn MessageStateRepository + Send + Sync>> = {
+        if let Some(url) = &config.postgres_url {
+            // 创建新的连接池用于 message_state_repo
+            // 注意：这里可以优化为共享连接池，但为了简化，先创建新池
+            use sqlx::postgres::PgPoolOptions;
+            let pool = PgPoolOptions::new()
+                .max_connections(config.postgres_max_connections)
+                .min_connections(config.postgres_min_connections)
+                .acquire_timeout(std::time::Duration::from_secs(config.postgres_acquire_timeout_seconds))
+                .idle_timeout(Some(std::time::Duration::from_secs(config.postgres_idle_timeout_seconds)))
+                .max_lifetime(Some(std::time::Duration::from_secs(config.postgres_max_lifetime_seconds)))
+                .test_before_acquire(true)
+                .connect(url)
+                .await
+                .context("Failed to create pool for message_state_repo")?;
+            Some(Arc::new(PostgresMessageStateRepository::new(Arc::new(pool))))
+        } else {
+            None
+        }
+    };
+    
+    // 5. 构建领域配置
     let domain_config = MessageStorageDomainConfig {
         max_page_size: config.max_page_size,
         default_range_seconds: config.default_range_seconds,
     };
     
-    // 5. 构建领域服务
+    // 6. 构建领域服务
     let domain_service = Arc::new(MessageStorageDomainService::new(
         storage.clone(),
         visibility_storage,
+        message_state_repo,
         domain_config,
     ));
     
@@ -82,4 +107,3 @@ pub async fn initialize(
     
     Ok(ApplicationContext { handler: grpc_handler })
 }
-

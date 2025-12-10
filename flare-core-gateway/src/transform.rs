@@ -5,7 +5,6 @@
 
 use anyhow::Result;
 use flare_proto::push::Notification as PushNotification;
-use flare_proto::storage::Message as StorageMessage;
 use prost::Message as _;
 
 // 注意：communication_core.proto 已删除，以下函数已注释

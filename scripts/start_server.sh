@@ -213,12 +213,32 @@ for service in "${CORE_SERVICES[@]}"; do
         "signaling-online")
             PACKAGE="flare-signaling-online"
             BIN_NAME="flare-signaling-online"
-            ENV_VARS=""
+            # 优先使用命令行参数，其次使用配置文件，最后使用默认值
+            SIGNALING_ONLINE_HOST=${SIGNALING_ONLINE_SERVICE_HOST:-$(grep -E '^\s*address\s*=' "$PROJECT_ROOT/config/services/signaling-online.toml" | sed -E 's/.*=\s*"([^"]*)".*/\1/' | head -1)}
+            SIGNALING_ONLINE_HOST=${SIGNALING_ONLINE_HOST:-"0.0.0.0"}
+            SIGNALING_ONLINE_PORT=${SIGNALING_ONLINE_SERVICE_PORT:-$(grep -E '^\s*port\s*=' "$PROJECT_ROOT/config/services/signaling-online.toml" | sed -E 's/.*=\s*([0-9]+).*/\1/' | head -1)}
+            SIGNALING_ONLINE_PORT=${SIGNALING_ONLINE_PORT:-50061}
+            ONLINE_SERVICE_ENDPOINT=${ONLINE_SERVICE_ENDPOINT:-"http://${SIGNALING_ONLINE_HOST}:${SIGNALING_ONLINE_PORT}"}
+            # 直接设置环境变量
+            export SIGNALING_ONLINE_SERVICE_HOST="$SIGNALING_ONLINE_HOST"
+            export SIGNALING_ONLINE_SERVICE_PORT="$SIGNALING_ONLINE_PORT"
+            export ONLINE_SERVICE_ENDPOINT="$ONLINE_SERVICE_ENDPOINT"
+            ENV_VARS="set"
             ;;
         "signaling-route")
             PACKAGE="flare-signaling-route"
             BIN_NAME="flare-signaling-route"
-            ENV_VARS=""
+            # 优先使用命令行参数，其次使用配置文件，最后使用默认值
+            SIGNALING_ROUTE_HOST=${SIGNALING_ROUTE_SERVICE_HOST:-$(grep -E '^\s*address\s*=' "$PROJECT_ROOT/config/services/signaling-route.toml" | sed -E 's/.*=\s*"([^"]*)".*/\1/' | head -1)}
+            SIGNALING_ROUTE_HOST=${SIGNALING_ROUTE_HOST:-"0.0.0.0"}
+            SIGNALING_ROUTE_PORT=${SIGNALING_ROUTE_SERVICE_PORT:-$(grep -E '^\s*port\s*=' "$PROJECT_ROOT/config/services/signaling-route.toml" | sed -E 's/.*=\s*([0-9]+).*/\1/' | head -1)}
+            SIGNALING_ROUTE_PORT=${SIGNALING_ROUTE_PORT:-50062}
+            ROUTE_SERVICE_ENDPOINT=${ROUTE_SERVICE_ENDPOINT:-"http://${SIGNALING_ROUTE_HOST}:${SIGNALING_ROUTE_PORT}"}
+            # 直接设置环境变量
+            export SIGNALING_ROUTE_SERVICE_HOST="$SIGNALING_ROUTE_HOST"
+            export SIGNALING_ROUTE_SERVICE_PORT="$SIGNALING_ROUTE_PORT"
+            export ROUTE_SERVICE_ENDPOINT="$ROUTE_SERVICE_ENDPOINT"
+            ENV_VARS="set"
             ;;
         "hook-engine")
             PACKAGE="flare-hook-engine"
@@ -280,10 +300,13 @@ for service in "${CORE_SERVICES[@]}"; do
     pid_file="$LOGS_DIR/flare-$service.pid"
     
     # 启动服务（使用编译好的二进制，避免并发编译问题）
-    if [ -n "$ENV_VARS" ]; then
-        eval "$ENV_VARS" "$PROJECT_ROOT/target/debug/$BIN_NAME" > "$LOGS_DIR/flare-$service.log" 2>&1 &
-    else
-        "$PROJECT_ROOT/target/debug/$BIN_NAME" > "$LOGS_DIR/flare-$service.log" 2>&1 &
+    "$PROJECT_ROOT/target/debug/$BIN_NAME" > "$LOGS_DIR/flare-$service.log" 2>&1 &
+    
+    # 清理环境变量
+    if [ "$service" = "signaling-online" ]; then
+        unset SIGNALING_ONLINE_SERVICE_HOST SIGNALING_ONLINE_SERVICE_PORT ONLINE_SERVICE_ENDPOINT
+    elif [ "$service" = "signaling-route" ]; then
+        unset SIGNALING_ROUTE_SERVICE_HOST SIGNALING_ROUTE_SERVICE_PORT ROUTE_SERVICE_ENDPOINT
     fi
     service_pid=$!
     echo $service_pid > "$pid_file"
@@ -352,6 +375,28 @@ if [ "$GATEWAY_MODE" == "single" ]; then
             rm -f "$pid_file"
         fi
     fi
+    
+    # 检查端口是否被占用，如果是则停止占用端口的进程
+    check_and_kill_port() {
+        local port=$1
+        local pid=$(lsof -ti :$port 2>/dev/null | head -1)
+        if [ -n "$pid" ]; then
+            local process_name=$(ps -p "$pid" -o comm= 2>/dev/null)
+            if [ -n "$process_name" ]; then
+                echo -e "${YELLOW}   检测到端口 $port 被进程 $process_name (PID: $pid) 占用，正在停止...${NC}"
+                kill "$pid" 2>/dev/null || true
+                sleep 1
+                if ps -p "$pid" > /dev/null 2>&1; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            fi
+        fi
+    }
+    
+    # 检查并清理端口占用
+    check_and_kill_port "$DEFAULT_WS_PORT"
+    check_and_kill_port "$((DEFAULT_WS_PORT + 1))"  # QUIC port
+    check_and_kill_port "$DEFAULT_GRPC_PORT"
     
     echo -e "${YELLOW}   启动 access-gateway (默认端口)...${NC}"
     echo -e "${BLUE}      WebSocket: $DEFAULT_WS_PORT, QUIC: $((DEFAULT_WS_PORT + 1)), gRPC: $DEFAULT_GRPC_PORT${NC}"

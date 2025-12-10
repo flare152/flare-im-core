@@ -104,8 +104,19 @@ mod push_commands {
             let mut success_count = 0;
             let mut failure_count = 0;
 
-            // 序列化消息
-            let message_bytes = message.encode_to_vec();
+            // 构建 MessageEnvelope 推送封装
+            let window_id = uuid::Uuid::new_v4().to_string();
+            let max_seq = message.seq;
+            
+            let envelope = flare_proto::common::MessageEnvelope {
+                kind: flare_proto::common::EnvelopeKind::KindDelivery as i32,
+                messages: vec![message.clone()],
+                has_more: false,
+                max_seq,
+                next_cursor: String::new(),
+                window_id: window_id.clone(),
+            };
+            let message_bytes = envelope.encode_to_vec();
 
             // 处理每个目标用户
             for user_id in target_user_ids {
@@ -228,19 +239,28 @@ mod push_commands {
                 if let Some(ref ack_publisher) = self.ack_publisher {
                     for conn in &filtered_connections {
                         let ack_status = if domain_result.success_count > 0 && domain_result.failure_count == 0 {
-                            "success"
+                            crate::infrastructure::AckStatusValue::Success
                         } else {
-                            "failed"
+                            crate::infrastructure::AckStatusValue::Failed
                         };
                         
-                        let ack_event = crate::infrastructure::PushAckEvent {
-                            message_id: message.id.clone(),
+                        let ack_event = crate::infrastructure::AckAuditEvent {
+                            ack: crate::infrastructure::AckData {
+                                message_id: message.id.clone(),
+                                status: ack_status,
+                                error_code: None,
+                                error_message: if domain_result.failure_count > 0 {
+                                    Some(domain_result.error_message.clone())
+                                } else {
+                                    None
+                                },
+                            },
                             user_id: user_id.clone(),
                             connection_id: conn.connection_id.clone(),
                             gateway_id: self.gateway_id.clone(),
-                            ack_type: "push_ack".to_string(),
-                            status: ack_status.to_string(),
                             timestamp: Utc::now().timestamp(),
+                            window_id: Some(window_id.clone()),
+                            ack_seq: Some(max_seq as i64),
                         };
                         
                         if let Err(e) = ack_publisher.publish_ack(&ack_event).await {
@@ -291,6 +311,7 @@ mod push_commands {
                 .observe(total_duration.as_secs_f64());
 
             Ok(PushMessageResponse {
+                request_id: String::new(),
                 results,
                 status: Some(ok_status()),
                 statistics: Some(statistics),
@@ -465,6 +486,7 @@ mod push_commands {
                         .build_error();
                     let error_status = to_rpc_status(&flare_error);
                     results.push(PushMessageResponse {
+                        request_id: String::new(),
                         results: vec![],
                         status: Some(error_status),
                         statistics: None,
@@ -493,7 +515,7 @@ mod session_commands {
     use tracing::{info, warn};
 
     use crate::domain::model::Session;
-use crate::domain::repository::{SessionStore, SignalingGateway};
+use crate::domain::repository::SignalingGateway;
 
     pub struct LoginCommand {
         pub request: LoginRequest,
@@ -509,19 +531,16 @@ use crate::domain::repository::{SessionStore, SignalingGateway};
 
     pub struct SessionCommandService {
         signaling: Arc<dyn SignalingGateway>,
-        store: Arc<dyn SessionStore>,
         gateway_id: String,
     }
 
     impl SessionCommandService {
         pub fn new(
             signaling: Arc<dyn SignalingGateway>,
-            store: Arc<dyn SessionStore>,
             gateway_id: String,
         ) -> Self {
             Self {
                 signaling,
-                store,
                 gateway_id,
             }
         }
@@ -530,15 +549,12 @@ use crate::domain::repository::{SessionStore, SignalingGateway};
             let mut response = self.signaling.login(command.request.clone()).await?;
 
             if response.success {
-                let session = Session::new(
-                    response.session_id.clone(),
-                    command.request.user_id,
-                    command.request.device_id,
-                    Some(response.route_server.clone()),
-                    self.gateway_id.clone(),
+                // Gateway 不存储会话信息，会话由 Signaling Online 管理
+                info!(
+                    session_id = %response.session_id,
+                    user_id = %command.request.user_id,
+                    "Login successful via Signaling Online"
                 );
-                self.store.insert(session).await?;
-                info!(session_id = %response.session_id, "session registered");
                 if response.status.is_none() {
                     response.status = Some(ok_status());
                 }
@@ -562,12 +578,14 @@ use crate::domain::repository::{SessionStore, SignalingGateway};
         ) -> Result<(LogoutResponse, Option<Session>)> {
             let mut response = self.signaling.logout(command.request.clone()).await?;
 
+            // Gateway 不存储会话信息，会话由 Signaling Online 管理
             let removed = if response.success {
-                let removed = self.store.remove(&command.request.session_id).await?;
-                if let Some(ref session) = removed {
-                    info!(session_id = %session.session_id, user_id = %session.user_id, "session removed");
-                }
-                removed
+                info!(
+                    session_id = %command.request.session_id,
+                    user_id = %command.request.user_id,
+                    "Logout successful via Signaling Online"
+                );
+                None // Gateway 不维护会话信息，返回 None
             } else {
                 None
             };
@@ -589,8 +607,8 @@ use crate::domain::repository::{SessionStore, SignalingGateway};
         pub async fn handle_heartbeat(&self, command: HeartbeatCommand) -> Result<HeartbeatResponse> {
             let mut response = self.signaling.heartbeat(command.request.clone()).await?;
 
+            // Gateway 不存储会话信息，会话由 Signaling Online 管理
             if response.success {
-                let _ = self.store.touch(&command.request.session_id).await?;
                 if response.status.is_none() {
                     response.status = Some(ok_status());
                 }
@@ -605,10 +623,6 @@ use crate::domain::repository::{SessionStore, SignalingGateway};
 
             Ok(response)
         }
-
-        pub fn store(&self) -> Arc<dyn SessionStore> {
-            self.store.clone()
-        }
     }
 }
 
@@ -617,4 +631,3 @@ pub use push_commands::{BatchPushMessageCommand, PushMessageCommand, PushMessage
 pub use session_commands::{
     HeartbeatCommand, LoginCommand, LogoutCommand, SessionCommandService,
 };
-

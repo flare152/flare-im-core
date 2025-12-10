@@ -2,7 +2,6 @@
 #
 # 配置说明：
 # - Kafka 配置通过 kafka 字段引用 base.toml 中的 kafka.message
-# - MongoDB 配置通过 mongo 字段引用 base.toml 中的 mongodb.primary
 # - PostgreSQL 配置通过 postgres 字段引用 base.toml 中的 postgres.media（可选）
 # - Redis 配置通过 wal_store 字段引用 base.toml 中的 redis.message_wal
 # - 所有基础设施配置都在 base.toml 中定义
@@ -15,9 +14,6 @@ kafka = "message"
 # 生产环境应该使用固定的 consumer group 名称以确保消息不丢失
 consumer_group = "storage-writer-v2"
 kafka_topic = "storage-messages"
-
-# MongoDB 配置：引用 base.toml 中的 mongodb.primary
-mongo = "primary"
 
 # PostgreSQL 配置（可选，用于归档）
 postgres = "media"

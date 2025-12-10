@@ -6,27 +6,27 @@ networks:
 
 services:
   # ===== Etcd - 服务注册发现 =====
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.9
-    container_name: flare-etcd
-    networks:
-      - flare-network
-    ports:
-      - "22379:2379"
-      - "22380:2380"
-    volumes:
-      - ./data/etcd:/etcd-data
-    command: 
-      /usr/local/bin/etcd
-      --name=etcd0
-      --data-dir=/etcd-data
-      --listen-client-urls=http://0.0.0.0:2379
-      --advertise-client-urls=http://etcd:2379
-      --listen-peer-urls=http://0.0.0.0:2380
-      --initial-advertise-peer-urls=http://etcd:2380
-      --initial-cluster=etcd0=http://etcd:2380
-      --initial-cluster-token=etcd-cluster-1
-      --initial-cluster-state=new
+  # etcd:
+  #   image: quay.io/coreos/etcd:v3.5.9
+  #   container_name: flare-etcd
+  #   networks:
+  #     - flare-network
+  #   ports:
+  #     - "22379:2379"
+  #     - "22380:2380"
+  #   volumes:
+  #     - ./data/etcd:/etcd-data
+  #   command: 
+  #     /usr/local/bin/etcd
+  #     --name=etcd0
+  #     --data-dir=/etcd-data
+  #     --listen-client-urls=http://0.0.0.0:2379
+  #     --advertise-client-urls=http://etcd:2379
+  #     --listen-peer-urls=http://0.0.0.0:2380
+  #     --initial-advertise-peer-urls=http://etcd:2380
+  #     --initial-cluster=etcd0=http://etcd:2380
+  #     --initial-cluster-token=etcd-cluster-1
+  #     --initial-cluster-state=new
 
   # ===== Consul - 服务注册 / 配置中心 =====
   consul:

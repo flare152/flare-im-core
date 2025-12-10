@@ -120,7 +120,7 @@ pub async fn initialize(
     ));
     
     // 12. 构建 gRPC 处理器
-    let grpc_handler = SessionGrpcHandler::new(command_handler, query_handler);
+    let grpc_handler = SessionGrpcHandler::new(command_handler, query_handler, None);
     
     Ok(ApplicationContext { handler: grpc_handler })
 }
