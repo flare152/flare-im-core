@@ -84,7 +84,24 @@ url = "mongodb://localhost:27017"
 database = "flare"
 
 # 对象存储配置 - 简化为单一配置，通过环境变量或部署时配置选择具体后端
+# 默认使用 rusFS 对象存储配置
 [object_storage.default]
+profile_type = "s3"
+endpoint = "http://localhost:29000"
+access_key = "rustfsadmin"
+secret_key = "rustfsadmin"
+bucket = "flare-media"
+region = "us-east-1"
+use_ssl = false
+cdn_base_url = "http://localhost:29000/flare-media"
+# 预签名URL过期时间（秒），默认1小时
+presign_url_ttl_seconds = 3600
+use_presign = true
+bucket_root_prefix = "media"
+force_path_style = true
+
+# MinIO 对象存储配置（备用）
+[object_storage.minio]
 profile_type = "minio"
 endpoint = "http://localhost:29000"
 access_key = "minioadmin"

@@ -129,25 +129,52 @@ services:
       retries: 5
 
   # ===== MinIO - 对象存储 =====
-  minio:
-    image: minio/minio:latest
-    container_name: flare-minio
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: flare-minio
+  #   networks:
+  #     - flare-network
+  #   ports:
+  #     - "29000:9000"
+  #     - "29001:9001"
+  #   environment:
+  #     MINIO_ROOT_USER: minioadmin
+  #     MINIO_ROOT_PASSWORD: minioadmin
+  #   volumes:
+  #     - ./data/minio:/data
+  #   command: server /data --console-address ":9001"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+  #     interval: 30s
+  #     timeout: 20s
+  #     retries: 3
+
+  # ===== rusFS - 对象存储 =====
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: flare-rustfs
+    restart: always
     networks:
       - flare-network
     ports:
-      - "29000:9000"
-      - "29001:9001"
+      - "29000:9000" # S3 API
+      - "29001:9001" # 管理 API 控制台
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_SERVER_DOMAINS: "localhost:29001"
     volumes:
-      - ./data/minio:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      - ./data/rustfs:/data
+    command: [
+      "--address", ":9000",
+      "--console-address", ":9001",
+      "--console-enable",
+      "--server-domains", "localhost:29001",
+      "--access-key", "rustfsadmin",
+      "--secret-key", "rustfsadmin",
+      "/data"
+    ]
 
   # ===== Loki - 日志聚合 =====
   loki:
