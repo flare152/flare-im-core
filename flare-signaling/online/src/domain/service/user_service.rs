@@ -13,7 +13,11 @@ use flare_server_core::error::ErrorCode;
 use prost_types::Timestamp;
 use tracing::{info, warn};
 
+// 引入ConnectionQuality转换适配器
+use crate::domain::value_object::ConnectionQuality;
+
 use crate::domain::repository::SessionRepository;
+use crate::domain::aggregate::Session;
 use crate::util;
 
 /// 用户领域服务 - 包含所有业务逻辑
@@ -35,37 +39,38 @@ impl UserService {
     ) -> Result<GetUserPresenceResponse> {
         let user_id = &request.user_id;
 
-        // 获取用户的所有设备
-        let devices = self.session_repository.list_user_devices(user_id).await?;
+        // 获取用户的所有会话
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let sessions = self.session_repository.get_user_sessions(&user_id_vo).await?;
         
         // 计算在线状态
-        let is_online = !devices.is_empty();
-        let last_seen = devices
+        let is_online = !sessions.is_empty();
+        let last_seen = sessions
             .iter()
-            .map(|d| d.last_active_time)
+            .map(|s| s.last_heartbeat_at())
             .max()
             .unwrap_or_else(Utc::now);
 
         let presence = UserPresence {
             user_id: user_id.clone(),
             is_online,
-            devices: devices
+            devices: sessions
                 .into_iter()
-                .map(|d| DeviceInfo {
-                    device_id: d.device_id,
-                    platform: d.platform,
-                    model: d.model.unwrap_or_default(),
-                    os_version: d.os_version.unwrap_or_default(),
+                .map(|s| DeviceInfo {
+                    device_id: s.device_id().as_str().to_string(),
+                    platform: s.device_platform().to_string(),
+                    model: String::new(),
+                    os_version: String::new(),
                     last_active_time: Some(Timestamp {
-                        seconds: d.last_active_time.timestamp(),
-                        nanos: d.last_active_time.timestamp_subsec_nanos() as i32,
+                        seconds: s.last_heartbeat_at().timestamp(),
+                        nanos: s.last_heartbeat_at().timestamp_subsec_nanos() as i32,
                     }),
-                    priority: 0,  // TODO: 从 SessionRecord 获取
-                    token_version: 0,  // TODO: 从 SessionRecord 获取
-                    connection_quality: None,  // TODO: 从 SessionRecord 获取
-                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    priority: s.device_priority() as i32,
+                    token_version: s.token_version().value(),
+                    connection_quality: s.connection_quality().cloned().map(|cq| cq.into()),
+                    session_id: s.id().as_str().to_string(),
+                    gateway_id: s.gateway_id().to_string(),
+                    server_id: s.server_id().to_string(),
                 })
                 .collect(),
             last_seen: Some(Timestamp {
@@ -136,26 +141,28 @@ impl UserService {
     ) -> Result<ListUserDevicesResponse> {
         let user_id = &request.user_id;
 
-        let devices = self.session_repository.list_user_devices(user_id).await?;
+        // 获取用户的所有会话
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let sessions = self.session_repository.get_user_sessions(&user_id_vo).await?;
 
         Ok(ListUserDevicesResponse {
-            devices: devices
+            devices: sessions
                 .into_iter()
-                .map(|d| DeviceInfo {
-                    device_id: d.device_id,
-                    platform: d.platform,
-                    model: d.model.unwrap_or_default(),
-                    os_version: d.os_version.unwrap_or_default(),
+                .map(|s| DeviceInfo {
+                    device_id: s.device_id().as_str().to_string(),
+                    platform: s.device_platform().to_string(),
+                    model: String::new(),
+                    os_version: String::new(),
                     last_active_time: Some(Timestamp {
-                        seconds: d.last_active_time.timestamp(),
-                        nanos: d.last_active_time.timestamp_subsec_nanos() as i32,
+                        seconds: s.last_heartbeat_at().timestamp(),
+                        nanos: s.last_heartbeat_at().timestamp_subsec_nanos() as i32,
                     }),
-                    priority: 0,  // TODO: 从 SessionRecord 获取
-                    token_version: 0,  // TODO: 从 SessionRecord 获取
-                    connection_quality: None,  // TODO: 从 SessionRecord 获取
-                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    priority: s.device_priority() as i32,
+                    token_version: s.token_version().value(),
+                    connection_quality: s.connection_quality().cloned().map(|cq| cq.into()),
+                    session_id: s.id().as_str().to_string(),
+                    gateway_id: s.gateway_id().to_string(),
+                    server_id: s.server_id().to_string(),
                 })
                 .collect(),
             status: util::rpc_status_ok(),
@@ -208,25 +215,27 @@ impl UserService {
         let user_id = &request.user_id;
         let device_id = &request.device_id;
 
-        let device = self.session_repository.get_device(user_id, device_id).await?;
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let session = self.session_repository.get_session_by_device(&user_id_vo, &device_vo).await?;
 
-        if let Some(device) = device {
+        if let Some(session) = session {
             Ok(GetDeviceResponse {
                 device: Some(DeviceInfo {
-                    device_id: device.device_id,
-                    platform: device.platform,
-                    model: device.model.unwrap_or_default(),
-                    os_version: device.os_version.unwrap_or_default(),
+                    device_id: session.device_id().as_str().to_string(),
+                    platform: session.device_platform().to_string(),
+                    model: String::new(),
+                    os_version: String::new(),
                     last_active_time: Some(Timestamp {
-                        seconds: device.last_active_time.timestamp(),
-                        nanos: device.last_active_time.timestamp_subsec_nanos() as i32,
+                        seconds: session.last_heartbeat_at().timestamp(),
+                        nanos: session.last_heartbeat_at().timestamp_subsec_nanos() as i32,
                     }),
-                    priority: 0,  // TODO: 从 SessionRecord 获取
-                    token_version: 0,  // TODO: 从 SessionRecord 获取
-                    connection_quality: None,  // TODO: 从 SessionRecord 获取
-                    session_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    gateway_id: String::new(),  // TODO: 从 SessionRecord 获取
-                    server_id: String::new(),  // TODO: 从 SessionRecord 获取
+                    priority: session.device_priority() as i32,
+                    token_version: session.token_version().value(),
+                    connection_quality: session.connection_quality().cloned().map(|cq| cq.into()),
+                    session_id: session.id().as_str().to_string(),
+                    gateway_id: session.gateway_id().to_string(),
+                    server_id: session.server_id().to_string(),
                 }),
                 status: util::rpc_status_ok(),
             })
@@ -238,4 +247,3 @@ impl UserService {
         }
     }
 }
-

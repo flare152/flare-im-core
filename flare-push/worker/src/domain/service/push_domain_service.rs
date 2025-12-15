@@ -343,6 +343,8 @@ impl PushDomainService {
                 session_id: String::new(),
                 client_msg_id: String::new(),
                 sender_id: String::new(),
+                receiver_id: String::new(), // 离线推送：receiver_id 由任务决定
+                channel_id: String::new(), // 离线推送：channel_id 由任务决定
                 source: 1, // MessageSource::User
                 seq: 0,
                 timestamp: Some(prost_types::Timestamp {
@@ -414,6 +416,25 @@ impl PushDomainService {
             retry_policy: self.retry_policy.clone(),
             metrics: Arc::clone(&self.metrics),
         }
+    }
+
+    /// 获取推送任务状态
+    pub async fn get_push_task_status(&self, message_id: &str, user_id: &str) -> Result<Option<String>> {
+        // 这是一个占位实现，实际实现需要查询存储或缓存来获取任务状态
+        // 在实际系统中，这可能涉及查询Redis、数据库或其他存储系统
+        Ok(None)
+    }
+
+    /// 获取推送统计信息
+    pub async fn get_push_statistics(&self, _query: &crate::application::queries::QueryPushStatisticsQuery) -> Result<crate::application::dto::PushStatsResponse> {
+        // 这是一个占位实现，实际实现需要从指标系统或存储中获取统计数据
+        Ok(crate::application::dto::PushStatsResponse {
+            total_pushes: 0,
+            successful_pushes: 0,
+            failed_pushes: 0,
+            average_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+        })
     }
 }
 

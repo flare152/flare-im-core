@@ -416,6 +416,8 @@ impl PostgresMessageStorage {
             id,
             session_id,
             sender_id,
+            receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
+            channel_id: String::new(), // 从数据库读取：channel_id 可能为空（旧数据）
             content: content_proto,
             timestamp: Some(datetime_to_timestamp(timestamp)),
             extra: extra_map,
@@ -648,6 +650,33 @@ impl MessageStorage for PostgresMessageStorage {
                 }
                 
                 Ok(Some(message))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_message_timestamp(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        // 直接查询消息的时间戳，避免加载完整的消息内容
+        let row = sqlx::query(
+            r#"
+            SELECT timestamp
+            FROM messages
+            WHERE id = $1
+            LIMIT 1
+            "#
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to get message timestamp")?;
+
+        match row {
+            Some(row) => {
+                let timestamp: DateTime<Utc> = row.get("timestamp");
+                Ok(Some(timestamp))
             }
             None => Ok(None),
         }

@@ -1,6 +1,7 @@
 //! 消息持久化领域服务 - 包含所有业务逻辑实现
 
 use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use flare_im_core::utils::{current_millis, extract_timeline_from_extra, embed_seq_in_message};
 use flare_proto::common::Message;
@@ -16,6 +17,9 @@ use crate::domain::repository::{
     MessageIdempotencyRepository, RealtimeStoreRepository, SeqGenerator, SessionStateRepository,
     SessionUpdateRepository, UserSyncCursorRepository, WalCleanupRepository,
 };
+use crate::domain::service::session_domain_service::SessionDomainService; // 添加SessionDomainService导入
+use flare_server_core::ServiceClient; // 添加ServiceClient导入
+use tokio::sync::Mutex; // 添加Mutex导入
 
 /// 消息持久化领域服务 - 包含所有业务逻辑
 /// 
@@ -32,6 +36,7 @@ pub struct MessagePersistenceDomainService {
     user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>>,
     seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>>,
     session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>>,
+    session_domain_service: Arc<SessionDomainService>, // 使用SessionDomainService替代原来的session_client
 }
 
 impl MessagePersistenceDomainService {
@@ -48,7 +53,11 @@ impl MessagePersistenceDomainService {
         user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>>,
         seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>>,
         session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>>,
+        session_client: Option<Arc<Mutex<ServiceClient>>>, // 保持session_client参数用于创建SessionDomainService
     ) -> Self {
+        // 创建SessionDomainService实例
+        let session_domain_service = Arc::new(SessionDomainService::new(session_client));
+        
         Self {
             idempotency_repo,
             hot_cache_repo,
@@ -61,6 +70,7 @@ impl MessagePersistenceDomainService {
             user_cursor_repo,
             seq_generator,
             session_update_repo,
+            session_domain_service, // 使用SessionDomainService
         }
     }
 
@@ -178,7 +188,8 @@ impl MessagePersistenceDomainService {
         let session_id = prepared.session_id.clone();
         let message_id = prepared.message_id.clone();
         let sender_id = prepared.message.sender_id.clone();
-
+        let timeline = prepared.timeline.clone(); // 克隆 timeline 在使用前
+        
         // 数据库写入
         if let Some(repo) = &self.hot_cache_repo {
             repo.store_hot(&prepared.message).await?;
@@ -199,7 +210,7 @@ impl MessagePersistenceDomainService {
                 .advance_cursor(
                     &session_id,
                     &prepared.message.sender_id,
-                    prepared.timeline.ingestion_ts,
+                    timeline.ingestion_ts, // 使用克隆的 timeline
                 )
                 .await?;
         }
@@ -214,6 +225,14 @@ impl MessagePersistenceDomainService {
             repo.batch_update_unread_count(&session_id, s, Some(&sender_id)).await?;
         }
 
+        // 5. 构建持久化结果
+        let result = PersistenceResult {
+            message_id,
+            session_id,
+            timeline, // 使用克隆的 timeline
+            deduplicated: false,
+        };
+        
         Ok(())
     }
 
@@ -348,4 +367,141 @@ impl MessagePersistenceDomainService {
         Ok(())
     }
 
+    /// 获取会话参与者列表
+    /// 
+    /// 通过gRPC调用Session服务获取会话的所有参与者，用于更新未读数
+    pub async fn get_session_participants(&self, session_id: &str) -> Result<Vec<String>> {
+        self.session_domain_service.get_session_participants(session_id).await
+    }
+
+    /// 更新参与者的未读数
+    /// 
+    /// 根据会话参与者列表，批量更新他们的未读数
+    pub async fn update_participants_unread_count(&self, session_id: &str, seq: i64, sender_id: &str) -> Result<()> {
+        // 获取会话参与者列表
+        let participant_ids = self.get_session_participants(session_id).await?;
+        
+        // 如果有配置session_update_repo，则更新未读数
+        if let Some(repo) = &self.session_update_repo {
+            // 过滤掉发送者自己
+            let filtered_participants: Vec<String> = participant_ids
+                .into_iter()
+                .filter(|id| id != sender_id)
+                .collect();
+                
+            // 批量更新未读数
+            if !filtered_participants.is_empty() {
+                repo.batch_update_unread_count(session_id, seq, Some(sender_id)).await?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 存储一致性保障机制
+    /// 
+    /// 确保数据库和缓存之间的一致性，包括：
+    /// 1. 数据库写入成功后再更新缓存
+    /// 2. 缓存更新失败时的补偿机制
+    /// 3. 消息去重检查
+    /// 4. 批量操作的原子性保障
+    pub async fn ensure_consistency(&self, mut prepared: PreparedMessage) -> Result<PersistenceResult> {
+        // 1. 幂等性检查（防止重复处理）
+        let is_new = self.check_idempotency(&prepared).await?;
+        if !is_new {
+            return Ok(PersistenceResult {
+                message_id: prepared.message_id.clone(),
+                session_id: prepared.session_id.clone(),
+                timeline: prepared.timeline.clone(),
+                deduplicated: true,
+            });
+        }
+        
+        // 2. 验证并补全媒资附件
+        self.verify_and_enrich_media(&mut prepared.message).await?;
+        
+        // 保存必要的信息用于后续步骤
+        let message_id = prepared.message_id.clone();
+        let session_id = prepared.session_id.clone();
+        let timeline = prepared.timeline.clone();
+        
+        // 3. 持久化消息到存储
+        self.persist_message(prepared).await?;
+        
+        // 4. 清理 WAL 条目
+        self.cleanup_wal(&message_id).await?;
+        
+        // 5. 构建持久化结果
+        let result = PersistenceResult {
+            message_id,
+            session_id,
+            timeline,
+            deduplicated: false,
+        };
+        
+        // 6. 发布 ACK 事件
+        self.publish_ack(&result).await?;
+        
+        Ok(result)
+    }
+    
+    /// 批量存储一致性保障机制
+    /// 
+    /// 确保批量操作的原子性和一致性
+    pub async fn ensure_batch_consistency(&self, prepared: Vec<PreparedMessage>) -> Result<Vec<PersistenceResult>> {
+        if prepared.is_empty() {
+            return Ok(vec![]);
+        }
+        
+        // 1. 批量幂等性检查
+        let mut new_messages = Vec::new();
+        let mut results = Vec::new();
+        
+        for mut msg in prepared {
+            let is_new = self.check_idempotency(&msg).await?;
+            if is_new {
+                // 验证并补全媒资附件
+                self.verify_and_enrich_media(&mut msg.message).await?;
+                new_messages.push(msg);
+            } else {
+                // 构建重复消息的结果
+                results.push(PersistenceResult {
+                    message_id: msg.message_id.clone(),
+                    session_id: msg.session_id.clone(),
+                    timeline: msg.timeline.clone(),
+                    deduplicated: true,
+                });
+            }
+        }
+        
+        if new_messages.is_empty() {
+            return Ok(results);
+        }
+        
+        // 2. 批量持久化消息
+        self.persist_batch(new_messages.clone()).await?;
+        
+        // 3. 批量清理 WAL 条目
+        for msg in &new_messages {
+            self.cleanup_wal(&msg.message_id).await?;
+        }
+        
+        // 4. 构建持久化结果
+        for msg in new_messages {
+            let result = PersistenceResult {
+                message_id: msg.message_id.clone(),
+                session_id: msg.session_id.clone(),
+                timeline: msg.timeline.clone(),
+                deduplicated: false,
+            };
+            results.push(result);
+        }
+        
+        // 5. 批量发布 ACK 事件
+        for result in &results {
+            self.publish_ack(result).await?;
+        }
+        
+        Ok(results)
+    }
 }

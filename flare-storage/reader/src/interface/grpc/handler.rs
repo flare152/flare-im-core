@@ -43,6 +43,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<QueryMessagesRequest>,
     ) -> Result<Response<QueryMessagesResponse>, Status> {
         let req = request.into_inner();
+        let cursor_clone = req.cursor.clone();
         let query = QueryMessagesQuery {
             session_id: req.session_id,
             start_time: req.start_time,
@@ -55,30 +56,21 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             },
         };
 
-        let original_cursor = query.cursor.clone();
-        match self.query_handler.handle_query_messages(query).await {
-            Ok(messages) => {
-                let message_count = messages.len() as i32;
-                // 构建简单的游标（基于最后一条消息）
-                let next_cursor = messages.last()
-                    .and_then(|msg| {
-                        msg.timestamp.as_ref().map(|ts| {
-                            format!("{}:{}", ts.seconds, msg.id.clone())
-                        })
-                    })
-                    .unwrap_or_default();
+        match self.query_handler.handle_query_messages_with_pagination(query).await {
+            Ok(result) => {
+                let message_count = result.messages.len() as i32;
                 let has_more = message_count >= req.limit;
                 
                 Ok(Response::new(QueryMessagesResponse {
-                    messages,
-                    next_cursor: next_cursor.clone(),
-                    has_more,
+                    messages: result.messages,
+                    next_cursor: result.next_cursor.clone(),
+                    has_more: result.has_more,
                     pagination: Some(flare_proto::common::Pagination {
-                        cursor: original_cursor.unwrap_or_default(),
-                        limit: message_count,
-                        has_more,
+                        cursor: cursor_clone,
+                        limit: req.limit,
+                        has_more: result.has_more,
                         previous_cursor: String::new(),
-                        total_size: message_count as i64, // 简化：使用当前返回数量
+                        total_size: result.total_size,
                     }),
                     status: Some(flare_server_core::error::ok_status()),
                 }))
@@ -221,7 +213,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         let command = DeleteMessageForUserCommand {
             message_ids: vec![req.message_id],
             user_id: req.user_id,
-            session_id: String::new(), // TODO: 从消息中获取或从请求中获取
+            session_id: String::new(), // 从消息中获取或从请求中获取
             permanent: req.permanent,
         };
 
@@ -252,8 +244,20 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 if req.clear_before_message_id.is_empty() {
                     return Err(Status::invalid_argument("clear_before_message_id is required"));
                 }
-                // TODO: 查询消息时间戳
-                None
+                // 查询消息时间戳
+                match self.query_handler.handle_get_message_timestamp(&req.clear_before_message_id).await {
+                    Ok(Some(timestamp)) => Some(timestamp),
+                    Ok(None) => {
+                        return Err(Status::not_found(format!(
+                            "Message not found: {}", 
+                            req.clear_before_message_id
+                        )));
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "Failed to get message timestamp");
+                        return Err(Status::internal("Failed to get message timestamp"));
+                    }
+                }
             }
             flare_proto::storage::ClearType::ClearBeforeTime => {
                 req.clear_before_time.as_ref().and_then(|ts| {

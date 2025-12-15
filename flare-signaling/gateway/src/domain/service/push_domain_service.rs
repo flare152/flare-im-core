@@ -83,6 +83,8 @@ impl PushDomainService {
     }
 
     /// 推送消息到连接（直接单条推送，保持 Gateway 轻量）
+    /// 
+    /// 优化：去重连接，避免重复推送
     #[instrument(skip(self, message_bytes), fields(user_id = %user_id, connection_count = connections.len()))]
     pub async fn push_to_connections(
         &self,
@@ -90,9 +92,40 @@ impl PushDomainService {
         connections: &[ConnectionInfo],
         message_bytes: &[u8],
     ) -> Result<(i32, i32)> {
+        let start_time = std::time::Instant::now();
+        
+        // 去重连接：使用 HashSet 去重 connection_id，避免重复推送
+        use std::collections::HashSet;
+        let mut seen_connection_ids = HashSet::new();
+        let mut unique_connections = Vec::new();
+        
+        for conn in connections {
+            if seen_connection_ids.insert(conn.connection_id.clone()) {
+                unique_connections.push(conn);
+            } else {
+                tracing::warn!(
+                    user_id = %user_id,
+                    connection_id = %conn.connection_id,
+                    timestamp_ms = start_time.elapsed().as_millis(),
+                    "Duplicate connection detected, skipping"
+                );
+            }
+        }
+        
+        let dedup_duration_ms = start_time.elapsed().as_millis();
+        tracing::debug!(
+            user_id = %user_id,
+            original_count = connections.len(),
+            unique_count = unique_connections.len(),
+            dedup_duration_ms = dedup_duration_ms,
+            "Connection deduplication completed"
+        );
+        
         let mut success_count = 0;
         let mut failure_count = 0;
-        for conn in connections {
+        let push_start = std::time::Instant::now();
+        for conn in &unique_connections {
+            let conn_start = std::time::Instant::now();
             match self
                 .connection_handler
                 .push_message_to_connection(&conn.connection_id, message_bytes.to_vec())
@@ -100,6 +133,12 @@ impl PushDomainService {
             {
                 Ok(_) => {
                     success_count += 1;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        connection_id = %conn.connection_id,
+                        push_duration_ms = conn_start.elapsed().as_millis(),
+                        "Message pushed to connection successfully"
+                    );
                 }
                 Err(err) => {
                     failure_count += 1;
@@ -107,11 +146,23 @@ impl PushDomainService {
                         error = %err,
                         user_id = %user_id,
                         connection_id = %conn.connection_id,
+                        push_duration_ms = conn_start.elapsed().as_millis(),
                         "Failed to push message to connection"
                     );
                 }
             }
         }
+        
+        let total_duration_ms = start_time.elapsed().as_millis();
+        let push_duration_ms = push_start.elapsed().as_millis();
+        tracing::debug!(
+            user_id = %user_id,
+            success_count = success_count,
+            failure_count = failure_count,
+            total_duration_ms = total_duration_ms,
+            push_duration_ms = push_duration_ms,
+            "Push to connections completed"
+        );
 
         Ok((success_count, failure_count))
     }
@@ -129,6 +180,73 @@ impl PushDomainService {
             .await?;
 
         Ok(self.filter_connections(&connections, options))
+    }
+
+    /// 推送 ACK 数据包给用户
+    /// 
+    /// 策略：
+    /// 1. ACK 推送给用户的所有在线设备
+    /// 2. 推送失败不影响其他用户
+    /// 3. 记录推送结果用于统计
+    #[instrument(skip(self), fields(user_id = %user_id))]
+    pub async fn push_ack_to_user(
+        &self,
+        user_id: &str,
+        packet: flare_proto::common::ServerPacket,
+    ) -> Result<()> {
+        // 查询用户的所有连接
+        let connections = self
+            .connection_query
+            .query_user_connections(user_id)
+            .await?;
+
+        if connections.is_empty() {
+            tracing::debug!(user_id = %user_id, "No online connections for ACK push");
+            return Ok(());
+        }
+
+        let mut success_count = 0;
+        let mut failure_count = 0;
+
+        // 向每个连接发送 ACK 数据包
+        for conn in &connections {
+            match self.connection_handler.push_packet_to_connection(&conn.connection_id, &packet).await {
+                Ok(_) => {
+                    success_count += 1;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        connection_id = %conn.connection_id,
+                        "ACK packet pushed successfully"
+                    );
+                }
+                Err(err) => {
+                    failure_count += 1;
+                    tracing::warn!(
+                        error = %err,
+                        user_id = %user_id,
+                        connection_id = %conn.connection_id,
+                        "Failed to push ACK packet"
+                    );
+                }
+            }
+        }
+
+        if failure_count > 0 {
+            tracing::warn!(
+                user_id = %user_id,
+                success_count = success_count,
+                failure_count = failure_count,
+                "ACK push completed with some failures"
+            );
+        } else {
+            tracing::info!(
+                user_id = %user_id,
+                success_count = success_count,
+                "ACK push completed successfully"
+            );
+        }
+
+        Ok(())
     }
 
     /// 构建推送结果

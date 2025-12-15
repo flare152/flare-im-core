@@ -13,12 +13,13 @@ use crate::domain::service::PushDomainService;
 use crate::infrastructure::ack_publisher::{KafkaAckPublisher, NoopAckPublisher};
 use crate::infrastructure::dlq_publisher::KafkaDlqPublisher;
 use crate::infrastructure::hook::HookExecutor;
-use crate::infrastructure::offline::NoopOfflinePushSender;
-use crate::infrastructure::online::NoopOnlinePushSender;
+use crate::infrastructure::offline::{build_offline_sender, NoopOfflinePushSender};
+use crate::infrastructure::online::{build_online_sender, NoopOnlinePushSender};
 use crate::interface::consumers::PushWorkerConsumer;
 use flare_im_core::gateway::{GatewayRouter, GatewayRouterConfig};
 use flare_im_core::hooks::{HookDispatcher, HookRegistry};
 use flare_im_core::metrics::PushWorkerMetrics;
+use flare_proto::hooks::hook_extension_client::HookExtensionClient;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -60,8 +61,8 @@ pub async fn initialize(
     }
     
     // 3. 构建推送发送器
-    let online_sender: Arc<dyn OnlinePushSender> = NoopOnlinePushSender::shared();
-    let offline_sender: Arc<dyn OfflinePushSender> = NoopOfflinePushSender::shared();
+    let online_sender: Arc<dyn OnlinePushSender> = build_online_sender(&worker_config);
+    let offline_sender: Arc<dyn OfflinePushSender> = build_offline_sender(&worker_config);
     
     // 4. 构建 ACK 发布器
     let ack_publisher: Arc<dyn AckPublisher> = if let Some(ref ack_topic) = worker_config.ack_topic {
@@ -96,7 +97,8 @@ pub async fn initialize(
     let hooks = Arc::new(HookDispatcher::new(hook_registry));
     
     // 8. 构建 Hook Executor
-    let hook_executor = Arc::new(HookExecutor::new(Arc::new(()))); // TODO: 等待 flare-hook-engine 实现
+    let hook_client = build_hook_extension_client(&worker_config).await;
+    let hook_executor = Arc::new(HookExecutor::new(hook_client));
     
     // 9. 初始化指标收集
     let metrics = Arc::new(PushWorkerMetrics::new());
@@ -135,5 +137,33 @@ pub async fn initialize(
     );
     
     Ok(ApplicationContext { consumer })
+}
+
+/// 构建 Hook Extension 客户端
+async fn build_hook_extension_client(
+    config: &Arc<PushWorkerConfig>,
+) -> Option<HookExtensionClient<tonic::transport::Channel>> {
+    // 从配置中获取 hook_engine_endpoint
+    let endpoint = config.hook_engine_endpoint.as_ref()?;
+    
+    match tonic::transport::Endpoint::from_shared(endpoint.clone()) {
+        Ok(endpoint) => {
+            let endpoint_uri = endpoint.uri().to_string();
+            match HookExtensionClient::connect(endpoint).await {
+                Ok(client) => {
+                    tracing::info!(endpoint = %endpoint_uri, "Connected to Hook engine");
+                    Some(client)
+                }
+                Err(err) => {
+                    tracing::error!(error = ?err, endpoint = %endpoint_uri, "Failed to connect to Hook Extension service");
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            tracing::error!(error = ?err, endpoint = %endpoint, "Invalid Hook Extension endpoint");
+            None
+        }
+    }
 }
 

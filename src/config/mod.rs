@@ -338,6 +338,9 @@ pub struct PushProxyServiceConfig {
     /// 通知主题
     #[serde(default)]
     pub notification_topic: Option<String>,
+    /// ACK 主题（从 Gateway 接收客户端 ACK，发布到 Kafka）
+    #[serde(default)]
+    pub ack_topic: Option<String>,
     /// 超时时间（毫秒）
     #[serde(default)]
     pub timeout_ms: Option<u64>,

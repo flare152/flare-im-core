@@ -21,6 +21,10 @@ use crate::interface::grpc::{HookExtensionServer, HookServiceServer};
 use crate::service::bootstrap::HookEngineConfig;
 use crate::service::registry::CoreHookRegistry;
 
+use flare_server_core::{DiscoveryFactory, DiscoveryConfig, BackendType, KvStore, KvBackend};
+use std::collections::HashMap;
+use serde_json::json;
+
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
     pub hook_extension_service: HookExtensionServer,
@@ -49,12 +53,50 @@ pub async fn initialize(config: HookEngineConfig) -> Result<ApplicationContext> 
     
     // 配置中心（中等优先级）
     if let Some(ref endpoint) = config.config_center_endpoint {
-        loaders.push(Arc::new(ConfigLoaderItem::ConfigCenter(
-            ConfigCenterLoader::new(
+        let mut config_loader = ConfigCenterLoader::new(
             endpoint.clone(),
             config.tenant_id.clone(),
-            ),
-        )));
+        );
+        
+        // 如果是Consul端点，创建KV存储
+        if endpoint.starts_with("consul://") {
+            // 解析endpoint
+            if let Some(addr) = endpoint.strip_prefix("consul://") {
+                let parts: Vec<&str> = addr.split(':').collect();
+                if parts.len() == 2 {
+                    let host = parts[0];
+                    let port = parts[1];
+                    
+                    // 创建Consul后端配置
+                    let mut backend_config = HashMap::new();
+                    backend_config.insert("url".to_string(), json!(format!("http://{}:{}", host, port)));
+                    
+                    let discovery_config = DiscoveryConfig {
+                        backend: BackendType::Consul,
+                        backend_config,
+                        namespace: None,
+                        version: None,
+                        tag_filters: vec![],
+                        load_balance: flare_server_core::LoadBalanceStrategy::RoundRobin,
+                        health_check: None,
+                        refresh_interval: Some(30),
+                    };
+                    
+                    // 创建Consul后端
+                    // 直接创建ConsulBackend实例，这样我们可以同时获得DiscoveryBackend和KvBackend的实现
+                    if let Ok(backend) = flare_server_core::discovery::backend::consul::ConsulBackend::new(&discovery_config).await {
+                        // 由于ConsulBackend没有实现Clone trait，我们需要创建一个新的实例用于KvBackend
+                        if let Ok(kv_backend) = flare_server_core::discovery::backend::consul::ConsulBackend::new(&discovery_config).await {
+                            let kv_backend: Arc<dyn KvBackend> = Arc::new(kv_backend);
+                            let kv_store = Arc::new(KvStore::new(kv_backend));
+                            config_loader = config_loader.with_kv_store(kv_store);
+                        }
+                    }
+                }
+            }
+        }
+        
+        loaders.push(Arc::new(ConfigLoaderItem::ConfigCenter(config_loader)));
     }
     
     // 数据库配置（最高优先级）

@@ -69,10 +69,17 @@ impl PushQueryHandler {
         &self,
         _query: QueryPushStatisticsQuery,
     ) -> Result<serde_json::Value> {
-        // TODO: 实现统计查询逻辑
+        // 实现统计查询逻辑
+        // 从MessageStateTracker获取统计数据
+        let stats = self.state_tracker.get_statistics().await;
+        
         Ok(serde_json::json!({
-            "total_pushes": 0,
-            "success_rate": 0.0,
+            "total_pushes": stats.total_pushes,
+            "success_rate": stats.success_rate,
+            "pending_count": stats.pending_count,
+            "delivered_count": stats.delivered_count,
+            "failed_count": stats.failed_count,
+            "average_delivery_time_ms": stats.average_delivery_time_ms,
         }))
     }
 }

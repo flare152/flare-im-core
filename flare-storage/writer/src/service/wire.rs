@@ -29,6 +29,8 @@ use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerat
 use crate::interface::messaging::consumer::StorageWriterConsumer;
 use flare_im_core::metrics::StorageWriterMetrics;
 use flare_server_core::kafka::build_kafka_producer;
+use flare_server_core::ServiceClient; // 添加ServiceClient导入
+
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -100,7 +102,7 @@ pub async fn initialize(
         };
     
     // 11. 创建会话状态仓储（可选）
-    let session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>> =
+    let mut session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>> =
         redis_client.as_ref().map(|client| {
             Arc::new(RedisSessionStateRepository::new(client.clone())) as Arc<_>
         });
@@ -156,7 +158,38 @@ pub async fn initialize(
     // 15. 初始化指标收集（应用层关注点）
     let metrics = Arc::new(StorageWriterMetrics::new());
     
-    // 16. 创建领域服务（不包含指标，符合 DDD 原则）
+    // 16. 创建 Session 服务客户端（用于获取会话参与者列表）
+    let session_client: Option<Arc<tokio::sync::Mutex<ServiceClient>>> = {
+        use flare_im_core::service_names::{SESSION, get_service_name};
+        let session_service = get_service_name(SESSION);
+        
+        // 添加超时保护，避免服务发现阻塞整个启动过程
+        let discover_result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            flare_im_core::discovery::create_discover(&session_service)
+        ).await;
+        
+        match discover_result {
+            Ok(Ok(Some(discover))) => {
+                let service_client = ServiceClient::new(discover);
+                Some(Arc::new(tokio::sync::Mutex::new(service_client)))
+            },
+            Ok(Ok(None)) => {
+                tracing::warn!("Session service discovery returned None");
+                None
+            },
+            Ok(Err(e)) => {
+                tracing::warn!(error = ?e, "Failed to create session service discovery");
+                None
+            },
+            Err(_) => {
+                tracing::warn!("Session service discovery timeout");
+                None
+            }
+        }
+    };
+    
+    // 17. 创建领域服务（不包含指标，符合 DDD 原则）
     // 注意：根据设计文档，只使用 PostgreSQL 作为归档存储，Redis 作为缓存
     let domain_service = Arc::new(MessagePersistenceDomainService::new(
         idempotency_repo,
@@ -166,12 +199,21 @@ pub async fn initialize(
         wal_cleanup_repo,
         ack_publisher,
         media_verifier,
-        session_state_repo,
+        session_state_repo.clone(), // 先传入原始的session_state_repo
         user_cursor_repo,
         seq_generator,
         session_update_repo,
+        session_client, // 添加session_client参数
     ));
-    
+        
+    // 更新session_state_repo，注入domain_service
+    if let Some(repo) = &mut session_state_repo {
+        // 由于Rust的所有权机制，我们需要重新构建session_state_repo
+        if let Some(client) = redis_client {
+            *repo = Arc::new(RedisSessionStateRepository::new(client.clone()).with_domain_service(Some(domain_service.clone())));
+        }
+    }
+        
     // 17. 创建操作消息领域服务
     let operation_service = Arc::new(MessageOperationDomainService::new(
         archive_repo,

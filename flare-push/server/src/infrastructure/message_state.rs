@@ -46,6 +46,36 @@ pub struct MessageState {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 推送统计信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushStatistics {
+    /// 总推送数
+    pub total_pushes: u64,
+    /// 成功率
+    pub success_rate: f64,
+    /// 待处理数
+    pub pending_count: u64,
+    /// 已送达数
+    pub delivered_count: u64,
+    /// 失败数
+    pub failed_count: u64,
+    /// 平均推送时间（毫秒）
+    pub average_delivery_time_ms: f64,
+}
+
+impl Default for PushStatistics {
+    fn default() -> Self {
+        Self {
+            total_pushes: 0,
+            success_rate: 0.0,
+            pending_count: 0,
+            delivered_count: 0,
+            failed_count: 0,
+            average_delivery_time_ms: 0.0,
+        }
+    }
+}
+
 /// 消息状态跟踪器
 pub struct MessageStateTracker {
     #[allow(dead_code)]
@@ -150,6 +180,47 @@ impl MessageStateTracker {
         if let Some(state) = cache.get_mut(&key) {
             state.message_type = message_type;
         }
+    }
+
+    /// 获取推送统计信息
+    pub async fn get_statistics(&self) -> PushStatistics {
+        let cache = self.state_cache.read().await;
+        
+        let mut stats = PushStatistics::default();
+        let mut total_delivery_time_ms = 0u64;
+        let mut delivered_with_time_count = 0u64;
+        
+        for state in cache.values() {
+            stats.total_pushes += 1;
+            
+            match state.status {
+                MessageStatus::Pending => stats.pending_count += 1,
+                MessageStatus::Delivered => {
+                    stats.delivered_count += 1;
+                    // 计算平均推送时间
+                    let created = state.created_at.timestamp_millis();
+                    if let Some(delivered) = state.ack_received_at.map(|dt| dt.timestamp_millis()) {
+                        let delivery_time = delivered.saturating_sub(created);
+                        total_delivery_time_ms = total_delivery_time_ms.saturating_add(delivery_time as u64);
+                        delivered_with_time_count += 1;
+                    }
+                },
+                MessageStatus::Failed => stats.failed_count += 1,
+                _ => {}
+            }
+        }
+        
+        // 计算成功率
+        if stats.total_pushes > 0 {
+            stats.success_rate = (stats.delivered_count as f64) / (stats.total_pushes as f64);
+        }
+        
+        // 计算平均推送时间
+        if delivered_with_time_count > 0 {
+            stats.average_delivery_time_ms = (total_delivery_time_ms as f64) / (delivered_with_time_count as f64);
+        }
+        
+        stats
     }
 }
 

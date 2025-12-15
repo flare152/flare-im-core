@@ -14,6 +14,8 @@ path = "cmd/main.rs"
 flare-server-core = { workspace = true, features = ["kafka"] }
 flare-proto = { workspace = true }
 flare-im-core = { path = "../..", features = ["tracing"] }
+flare-hook-engine = { path = "../../flare-hook-engine" }
+flare-core = { path = "../../../flare-core" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
@@ -24,6 +26,7 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 rdkafka = { workspace = true }
 redis = { workspace = true }
+deadpool-redis = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 prost = { workspace = true }

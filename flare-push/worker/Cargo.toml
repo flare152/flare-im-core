@@ -29,4 +29,8 @@ futures = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 chrono = { workspace = true }
-
+tonic = { workspace = true }
+base64 = { workspace = true }
+reqwest = { workspace = true }
+redis = { workspace = true }
+deadpool-redis = { workspace = true }

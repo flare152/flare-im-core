@@ -100,6 +100,19 @@ ack_timeout_seconds = 30
 # ACK 监控间隔（秒）
 ack_monitor_interval_seconds = 1
 
+# ACK 监控性能优化配置
+# 每次 SCAN 的 keys 数量（避免一次性扫描太多）
+ack_scan_batch_size = 500
+
+# Pipeline 批量获取的批次大小（避免单个 Pipeline 太大）
+ack_pipeline_batch_size = 1000
+
+# 批量处理超时事件的批次大小
+ack_timeout_batch_size = 100
+
+# 并发处理超时事件的最大数量（使用信号量控制）
+ack_timeout_concurrent_limit = 50
+
 # ============================================
 # 离线推送队列配置
 # ============================================
@@ -109,3 +122,6 @@ offline_topic = "flare.im.push.offline"
 
 # 死信队列 Topic
 dlq_topic = "flare.im.push.dlq"
+
+# ACK Topic（从 Push Proxy 消费客户端 ACK）
+ack_topic = "flare.im.push.acks"

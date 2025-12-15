@@ -29,15 +29,21 @@ use crate::infrastructure::adapters::conversion::{
     proto_to_pre_send_decision, proto_to_recall_decision,
 };
 
+// 导入服务发现相关模块
+use flare_server_core::{ServiceDiscover, ServiceClient, DiscoveryConfig, DiscoveryFactory};
+
 /// gRPC Hook适配器
 pub struct GrpcHookAdapter {
     // 模式1: 直接地址模式（固定客户端）
     client: Option<Arc<Mutex<HookExtensionClient<Channel>>>>,
     
     // 模式2: 服务发现模式（动态选择实例）
-    service_client: Option<Arc<Mutex<flare_server_core::ServiceClient>>>,
+    service_client: Option<Arc<Mutex<ServiceClient>>>,
     service_name: String,
     load_balance_strategy: LoadBalanceStrategy,
+    
+    // 模式3: 动态服务发现模式（通过服务发现客户端创建ServiceClient）
+    discovery_client: Option<Arc<ServiceDiscover>>,
     
     // 通用配置
     metadata: HashMap<String, String>,
@@ -64,6 +70,7 @@ impl GrpcHookAdapter {
             service_client: None,
             service_name: String::new(),
             load_balance_strategy: LoadBalanceStrategy::RoundRobin,
+            discovery_client: None,
             metadata,
             timeout: Duration::from_secs(5),
         })
@@ -71,7 +78,7 @@ impl GrpcHookAdapter {
     
     /// 从服务发现创建gRPC Hook适配器（模式2: 服务发现模式）
     pub async fn new_from_service_client(
-        service_client: Arc<Mutex<flare_server_core::ServiceClient>>,
+        service_client: Arc<Mutex<ServiceClient>>,
         service_name: String,
         load_balance_strategy: LoadBalanceStrategy,
         metadata: HashMap<String, String>,
@@ -87,6 +94,31 @@ impl GrpcHookAdapter {
             service_client: Some(service_client),
             service_name,
             load_balance_strategy,
+            discovery_client: None,
+            metadata,
+            timeout: Duration::from_secs(5),
+        })
+    }
+    
+    /// 从服务发现客户端创建gRPC Hook适配器（模式3: 动态服务发现模式）
+    pub async fn new_from_discovery(
+        discovery_client: Arc<ServiceDiscover>,
+        service_name: String,
+        load_balance_strategy: LoadBalanceStrategy,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
+        tracing::info!(
+            service_name = %service_name,
+            strategy = ?load_balance_strategy,
+            "Created gRPC adapter from discovery client"
+        );
+        
+        Ok(Self {
+            client: None,
+            service_client: None,
+            service_name,
+            load_balance_strategy,
+            discovery_client: Some(discovery_client),
             metadata,
             timeout: Duration::from_secs(5),
         })
@@ -111,6 +143,11 @@ impl GrpcHookAdapter {
             let client = HookExtensionClient::new(channel);
             return Ok(client);
         }
+        
+        // 模式3: 动态服务发现模式
+        // 注意：由于ServiceDiscover没有实现Clone trait，我们不能直接克隆它
+        // 在这种模式下，我们需要在创建GrpcHookAdapter时就创建好ServiceClient
+        // 这里的实现仅作说明，实际使用时应该在new_from_discovery中创建ServiceClient
         
         Err(anyhow::anyhow!("No client available: neither endpoint nor service discovery configured"))
     }

@@ -9,6 +9,7 @@ use flare_proto::signaling::{LoginRequest, LogoutRequest, HeartbeatRequest};
 use tracing::{info, warn, instrument};
 
 use crate::domain::repository::SignalingGateway;
+use crate::domain::service::ConnectionQualityService;
 
 /// 会话管理领域服务
 ///
@@ -18,16 +19,19 @@ use crate::domain::repository::SignalingGateway;
 /// - 提供会话生命周期管理
 pub struct SessionDomainService {
     signaling_gateway: Arc<dyn SignalingGateway>,
+    quality_service: Arc<ConnectionQualityService>,
     gateway_id: String,
 }
 
 impl SessionDomainService {
     pub fn new(
         signaling_gateway: Arc<dyn SignalingGateway>,
+        quality_service: Arc<ConnectionQualityService>,
         gateway_id: String,
     ) -> Self {
         Self {
             signaling_gateway,
+            quality_service,
             gateway_id,
         }
     }
@@ -159,13 +163,31 @@ impl SessionDomainService {
         &self,
         user_id: &str,
         session_id: &str,
+        connection_id: Option<&str>,
     ) -> Result<()> {
+        // 获取连接质量信息（如果提供了connection_id）
+        let current_quality = if let Some(conn_id) = connection_id {
+            if let Some(metrics) = self.quality_service.get_quality(conn_id).await {
+                Some(flare_proto::common::ConnectionQuality {
+                    rtt_ms: metrics.rtt_ms,
+                    packet_loss_rate: metrics.packet_loss_rate,
+                    last_measure_ts: chrono::Utc::now().timestamp_millis(),
+                    network_type: metrics.network_type.clone(),
+                    signal_strength: 0, // 在实际实现中应该从设备获取
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let heartbeat_request = HeartbeatRequest {
             user_id: user_id.to_string(),
             session_id: session_id.to_string(),
             context: None,
             tenant: None,
-            current_quality: None,  // TODO: 从链接质量服务获取
+            current_quality,  // 使用从链接质量服务获取的质量信息
         };
         
         // 添加超时保护

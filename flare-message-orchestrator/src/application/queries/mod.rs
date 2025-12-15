@@ -39,3 +39,14 @@ pub struct SearchMessagesQuery {
     pub cursor: Option<String>,
 }
 
+/// 查询消息结果（带分页信息）
+#[derive(Debug, Clone)]
+pub struct QueryMessagesResult {
+    /// 消息列表
+    pub messages: Vec<flare_proto::common::Message>,
+    /// 下一页游标
+    pub next_cursor: String,
+    /// 是否还有更多数据
+    pub has_more: bool,
+}
+

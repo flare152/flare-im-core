@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
+use futures_util::stream::StreamExt;
 
 use flare_proto::media::media_service_client::MediaServiceClient;
 use flare_proto::media::*;
@@ -77,10 +78,21 @@ impl GrpcMediaClient {
     /// 上传文件（流式）
     pub async fn upload_file(
         &self,
-        request: impl tonic::IntoStreamingRequest<Message = UploadFileRequest>,
+        request: Request<tonic::Streaming<UploadFileRequest>>,
     ) -> Result<Response<UploadFileResponse>, Status> {
+        // 收集流中的所有元素，处理Result类型
+        let stream = request.into_inner();
+        let items: Vec<Result<UploadFileRequest, Status>> = stream.collect().await;
+        
+        // 检查是否有错误
+        let upload_requests: Result<Vec<UploadFileRequest>, Status> = items.into_iter().collect();
+        let upload_requests = upload_requests?;
+        
+        // 创建一个新的流
+        let new_stream = tokio_stream::iter(upload_requests);
+        
         let mut client = self.get_client().await?;
-        client.upload_file(request).await
+        client.upload_file(new_stream).await
     }
 
     /// 初始化分片上传

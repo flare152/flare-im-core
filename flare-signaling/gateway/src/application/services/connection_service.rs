@@ -145,7 +145,7 @@ impl ConnectionApplicationService {
         session_id: &str,
     ) -> Result<()> {
         self.session_domain_service
-            .refresh_heartbeat(user_id, session_id)
+            .refresh_heartbeat(user_id, session_id, Some(connection_id))
             .await
     }
 }

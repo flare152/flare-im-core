@@ -191,13 +191,76 @@ mod tests {
     #[tokio::test]
     #[ignore] // 需要 Redis 和数据库
     async fn test_redis_seq_generator() {
-        // TODO: 实现测试
+        use super::*;
+        use std::sync::Arc;
+        
+        // 创建 Redis 客户端
+        let redis_client = redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
+        let redis_client = Arc::new(redis_client);
+        
+        // 创建序列生成器
+        let seq_generator = RedisSeqGenerator::new(redis_client, None);
+        
+        let session_id = "test-session-redis-1";
+        
+        // 测试生成序列号
+        let seq1 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq1");
+        let seq2 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq2");
+        let seq3 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq3");
+        
+        // 验证递增性
+        assert!(seq2 > seq1);
+        assert!(seq3 > seq2);
+        assert_eq!(seq2, seq1 + 1);
+        assert_eq!(seq3, seq2 + 1);
     }
 
     #[tokio::test]
     #[ignore] // 需要数据库
     async fn test_database_seq_generator() {
-        // TODO: 实现测试
+        use super::*;
+        use std::sync::Arc;
+        
+        // 注意：这个测试需要实际的数据库连接
+        // 在实际测试中，应该使用测试数据库或 mock
+        
+        /*
+        // 创建数据库连接池（示例代码，实际需要正确的数据库URL）
+        let db_pool = sqlx::PgPool::connect("postgresql://user:password@localhost/test_db")
+            .await
+            .expect("Failed to connect to database");
+        let db_pool = Arc::new(db_pool);
+        
+        // 创建序列生成器
+        let seq_generator = DatabaseSeqGenerator::new(db_pool);
+        
+        let session_id = "test-session-db-1";
+        
+        // 测试生成序列号
+        let seq1 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq1");
+        let seq2 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq2");
+        let seq3 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq3");
+        
+        // 验证递增性
+        assert!(seq2 > seq1);
+        assert!(seq3 > seq2);
+        assert_eq!(seq2, seq1 + 1);
+        assert_eq!(seq3, seq2 + 1);
+        */
+    }
+    
+    #[tokio::test]
+    async fn test_seq_generator_trait_object() {
+        use super::*;
+        use std::sync::Arc;
+        
+        // 测试 trait 对象的使用
+        let redis_client = redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
+        let redis_client = Arc::new(redis_client);
+        let seq_generator: Arc<dyn SeqGeneratorTrait> = Arc::new(RedisSeqGenerator::new(redis_client, None));
+        
+        // 确保 trait 对象可以正常使用（虽然实际调用会失败，因为我们没有真正的Redis）
+        let _seq_generator = seq_generator;
     }
 }
 

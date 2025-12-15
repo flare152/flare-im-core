@@ -66,7 +66,8 @@ toml = "0.9"
 
 # 数据库
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono"] }
-redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = "0.18"
 
 # 消息队列
 rdkafka = "0.38"
@@ -165,12 +166,18 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 ulid = { workspace = true }
 
-# OpenTelemetry 分布式追踪（可选功能）
-opentelemetry = { version = "0.31", optional = true }
-opentelemetry-otlp = { version = "0.31", optional = true }
-opentelemetry_sdk = { version = "0.31", optional = true }
-tracing-opentelemetry = { version = "0.25", optional = true }
+# ACK模块依赖
+dashmap = "6.0"
+redis = { workspace = true }
+sqlx = { workspace = true }
+zstd = "0.13"
 
+# OpenTelemetry 分布式追踪（可选功能）
+opentelemetry = { version = "0.28", optional = true }
+opentelemetry-otlp = { version = "0.28", optional = true }
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"], optional = true }
+opentelemetry-semantic-conventions = { version = "0.28", optional = true }
+tracing-opentelemetry = { version = "0.29", optional = true }
 [features]
 default = []
 tracing = ["opentelemetry", "opentelemetry-otlp", "opentelemetry_sdk", "tracing-opentelemetry"]
@@ -196,4 +203,8 @@ harness = false
 
 [[bench]]
 name = "push_server_bench"
+harness = false
+
+[[bench]]
+name = "ack_performance_bench"
 harness = false

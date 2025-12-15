@@ -78,15 +78,22 @@ pub async fn initialize(
         hooks,
     ));
     
-    // 10. 构建命令处理器
-    let command_handler = Arc::new(MessageCommandHandler::new(domain_service, metrics));
-    
-    // 11. 初始化 Storage Reader 客户端（如果配置了 reader_endpoint）
+    // 10. 构建 Storage Reader 客户端（如果配置了 reader_endpoint）
     let reader_client = build_storage_reader_client(&config).await;
     
-    // 12. 构建 gRPC 处理器
+    // 11. 构建查询处理器
+    let query_handler = Arc::new(crate::application::handlers::MessageQueryHandler::new(
+        domain_service.clone(),
+        reader_client.clone().map(|client| Arc::new(client)),
+    ));
+    
+    // 12. 构建命令处理器
+    let command_handler = Arc::new(MessageCommandHandler::new(domain_service, metrics));
+    
+    // 13. 构建 gRPC 处理器
     let handler = MessageGrpcHandler::new(
         command_handler,
+        query_handler,
         reader_client,
         publisher, // 现在可以安全地移动，因为 domain_service 使用的是 clone
     );

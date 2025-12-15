@@ -157,10 +157,14 @@ impl MessageRouter {
             tenant_id,
         )?;
 
-        // 发送请求
-        let response = match client.send_message(tonic::Request::new(request)).await {
-            Ok(resp) => resp,
-            Err(e) => {
+        // 发送请求（添加超时保护，避免阻塞）
+        let timeout_duration = std::time::Duration::from_secs(5); // 5秒超时
+        let response = match tokio::time::timeout(
+            timeout_duration,
+            client.send_message(tonic::Request::new(request))
+        ).await {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
                 error!(
                     error = %e,
                     user_id = %user_id,
@@ -173,6 +177,18 @@ impl MessageRouter {
                     *client_guard = None;
                 }
                 return Err(anyhow::anyhow!("Failed to send message to Message Orchestrator: {}", e));
+            }
+            Err(_) => {
+                error!(
+                    user_id = %user_id,
+                    session_id = %session_id,
+                    timeout_secs = timeout_duration.as_secs(),
+                    "Timeout sending message to Message Orchestrator"
+                );
+                return Err(anyhow::anyhow!(
+                    "Timeout sending message to Message Orchestrator (timeout: {}s)",
+                    timeout_duration.as_secs()
+                ));
             }
         };
 

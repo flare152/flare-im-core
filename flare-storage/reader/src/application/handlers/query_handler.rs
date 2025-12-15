@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::instrument;
 use flare_proto::common::Message;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use flare_im_core::utils::extract_seq_from_message;
 
 use crate::application::queries::{
@@ -71,10 +71,91 @@ impl MessageStorageQueryHandler {
             .await
     }
 
+    /// 查询消息列表（带分页结果）
+    #[instrument(skip(self), fields(session_id = %query.session_id))]
+    pub async fn handle_query_messages_with_pagination(
+        &self,
+        query: QueryMessagesQuery,
+    ) -> Result<QueryMessagesResult> {
+        // 如果有领域服务，使用领域服务处理分页逻辑
+        if let Some(domain_service) = &self.domain_service {
+            let start_time = if query.start_time == 0 {
+                0
+            } else {
+                query.start_time
+            };
+            
+            let end_time = if query.end_time == 0 {
+                Utc::now().timestamp()
+            } else {
+                query.end_time
+            };
+
+            // 使用领域服务处理分页查询
+            domain_service
+                .query_messages(
+                    &query.session_id,
+                    start_time,
+                    end_time,
+                    query.limit,
+                    query.cursor.as_deref(),
+                )
+                .await
+        } else {
+            // 如果没有领域服务，直接使用存储层（简化实现）
+            let start_time = if query.start_time == 0 {
+                None
+            } else {
+                DateTime::from_timestamp(query.start_time, 0)
+            };
+            
+            let end_time = if query.end_time == 0 {
+                None
+            } else {
+                DateTime::from_timestamp(query.end_time, 0)
+            };
+
+            // 直接查询消息
+            let messages = self.storage
+                .query_messages(
+                    &query.session_id,
+                    None, // user_id
+                    start_time,
+                    end_time,
+                    query.limit,
+                )
+                .await?;
+            
+            // 构建简化的 QueryMessagesResult
+            let message_count = messages.len() as i32;
+            let next_cursor = messages.last()
+                .and_then(|msg| {
+                    msg.timestamp.as_ref().map(|ts| {
+                        format!("{}:{}", ts.seconds, msg.id.clone())
+                    })
+                })
+                .unwrap_or_default();
+            let has_more = message_count >= query.limit;
+            
+            Ok(QueryMessagesResult {
+                messages,
+                next_cursor,
+                has_more,
+                total_size: message_count as i64,
+            })
+        }
+    }
+
     /// 获取单条消息
     #[instrument(skip(self), fields(message_id = %query.message_id))]
     pub async fn handle_get_message(&self, query: GetMessageQuery) -> Result<Option<Message>> {
         self.storage.get_message(&query.message_id).await
+    }
+
+    /// 获取消息的时间戳
+    #[instrument(skip(self), fields(message_id = %message_id))]
+    pub async fn handle_get_message_timestamp(&self, message_id: &str) -> Result<Option<DateTime<Utc>>> {
+        self.storage.get_message_timestamp(message_id).await
     }
 
     /// 搜索消息
@@ -162,4 +243,3 @@ impl MessageStorageQueryHandler {
         Ok((messages.messages, last_seq))
     }
 }
-

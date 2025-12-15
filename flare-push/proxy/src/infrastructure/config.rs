@@ -6,6 +6,7 @@ pub struct PushProxyConfig {
     pub kafka_bootstrap: String,
     pub message_topic: String,
     pub notification_topic: String,
+    pub ack_topic: String,  // ACK Topic（从 Gateway 接收客户端 ACK）
     pub kafka_timeout_ms: u64,
 }
 
@@ -27,6 +28,9 @@ impl PushProxyConfig {
             notification_topic: service
                 .notification_topic
                 .unwrap_or_else(|| "push-notifications".to_string()),
+            ack_topic: std::env::var("PUSH_PROXY_ACK_TOPIC")
+                .or_else(|_| service.ack_topic.clone().ok_or(std::env::VarError::NotPresent))
+                .unwrap_or_else(|_| "flare.im.push.acks".to_string()),
             kafka_timeout_ms: service
                 .timeout_ms
                 .or_else(|| kafka_profile.and_then(|cfg| cfg.timeout_ms))

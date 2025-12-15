@@ -58,6 +58,20 @@ pub trait MessageStorage: Send + Sync {
         message_id: &str,
     ) -> Result<Option<Message>>;
 
+    /// 获取消息的时间戳
+    ///
+    /// 用于清除会话时根据消息ID确定清除时间点
+    ///
+    /// # 参数
+    /// * `message_id` - 消息ID
+    ///
+    /// # 返回
+    /// * `Ok(Option<DateTime<Utc>>)` - 消息的时间戳，如果消息不存在则返回None
+    async fn get_message_timestamp(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<DateTime<Utc>>>;
+
     async fn update_message(
         &self,
         message_id: &str,

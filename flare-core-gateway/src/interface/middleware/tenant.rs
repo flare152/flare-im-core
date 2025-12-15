@@ -17,24 +17,73 @@ impl TenantMiddleware {
     pub fn extract_from_claims(claims: &TokenClaims) -> TenantContext {
         TenantContext {
             tenant_id: claims.tenant_id.clone(),
+            business_type: claims.business_type.clone(),
+            environment: claims.environment.clone(),
+            organization_id: claims.organization_id.clone(),
             ..Default::default()
         }
     }
     
     /// 从请求Metadata提取租户上下文（备用方法）
-    pub fn extract_from_metadata(_metadata: &tonic::metadata::MetadataMap) -> Option<TenantContext> {
-        // TODO: 实现从Metadata提取租户上下文
-        // 可以支持x-tenant-id header等
-        None
+    pub fn extract_from_metadata(metadata: &tonic::metadata::MetadataMap) -> Option<TenantContext> {
+        // 实现从Metadata提取租户上下文
+        // 支持x-tenant-id header等
+        let tenant_id = metadata.get("x-tenant-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+            
+        if let Some(id) = tenant_id {
+            let business_type = metadata.get("x-business-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+                
+            let environment = metadata.get("x-environment")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+                
+            let organization_id = metadata.get("x-organization-id")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            
+            Some(TenantContext {
+                tenant_id: id,
+                business_type,
+                environment,
+                organization_id,
+                ..Default::default()
+            })
+        } else {
+            None
+        }
     }
     
     /// 验证租户上下文
     pub async fn validate_tenant_context(
-        _tenant_context: &TenantContext,
-        _tenant_repository: Option<&dyn TenantRepository>,
+        tenant_context: &TenantContext,
+        tenant_repository: Option<&dyn TenantRepository>,
     ) -> Result<()> {
-        // TODO: 如果提供了tenant_repository，验证租户是否存在和启用
-        // 目前先简单返回成功
+        // 如果提供了tenant_repository，验证租户是否存在和启用
+        if let Some(repo) = tenant_repository {
+            if !repo.tenant_exists(&tenant_context.tenant_id).await.unwrap_or(false) {
+                return Err(ErrorBuilder::new(
+                    ErrorCode::InvalidTenant,
+                    "Tenant does not exist",
+                )
+                .build_error());
+            }
+            
+            if !repo.is_tenant_enabled(&tenant_context.tenant_id).await.unwrap_or(false) {
+                return Err(ErrorBuilder::new(
+                    ErrorCode::InvalidTenant,
+                    "Tenant is disabled",
+                )
+                .build_error());
+            }
+        }
+        
         debug!("Tenant context validated");
         Ok(())
     }
@@ -49,4 +98,3 @@ pub trait TenantRepository: Send + Sync {
     /// 检查租户是否启用
     async fn is_tenant_enabled(&self, tenant_id: &str) -> Result<bool>;
 }
-

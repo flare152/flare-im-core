@@ -31,6 +31,8 @@ pub struct PushWorkerConfig {
     pub push_provider: String, // "fcm" | "apns" | "webpush" | "noop"
     // Gateway Router 配置
     pub access_gateway_service: Option<String>, // Access Gateway 服务名
+    // Hook Engine 配置
+    pub hook_engine_endpoint: Option<String>, // Hook Extension 服务端点
 }
 
 impl PushWorkerConfig {
@@ -124,6 +126,9 @@ impl PushWorkerConfig {
         let access_gateway_service = env::var("PUSH_WORKER_ACCESS_GATEWAY_SERVICE")
             .ok();
 
+        let hook_engine_endpoint = env::var("PUSH_WORKER_HOOK_ENGINE_ENDPOINT")
+            .ok();
+
         Self {
             kafka_bootstrap,
             consumer_group,
@@ -144,6 +149,7 @@ impl PushWorkerConfig {
             dlq_topic,
             push_provider,
             access_gateway_service,
+            hook_engine_endpoint,
         }
     }
 }

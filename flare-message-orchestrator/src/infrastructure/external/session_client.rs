@@ -36,6 +36,10 @@ impl SessionRepository for GrpcSessionClient {
         let business_type = business_type.to_string();
         let tenant_id = tenant_id.map(|s| s.to_string());
         
+        // 将 session_id 放入 attributes，确保会话服务使用传入的 session_id
+        let mut attributes = std::collections::HashMap::new();
+        attributes.insert("session_id".to_string(), session_id.clone());
+        
         let request = CreateSessionRequest {
             context: Some(RequestContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
@@ -63,7 +67,7 @@ impl SessionRepository for GrpcSessionClient {
                 pinned: false,
                 attributes: std::collections::HashMap::new(),
             }).collect(),
-            attributes: std::collections::HashMap::new(),
+            attributes,
             visibility: 0,
         };
 

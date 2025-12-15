@@ -24,12 +24,6 @@ use crate::interface::grpc::handler::{AccessGatewayHandler, UnifiedGatewayGrpcHa
 use crate::service::service_manager::PortConfig;
 use tokio::sync::Mutex;
 
-/// gRPC 服务集合
-pub struct GrpcServices {
-    pub signaling_handler: Arc<UnifiedGatewayGrpcHandler>,
-    pub access_gateway_handler: Arc<AccessGatewayHandler>,
-    pub grpc_addr: std::net::SocketAddr,
-}
 use flare_core::server::connection::ConnectionManager;
 use flare_core::server::handle::{DefaultServerHandle, ServerHandle};
 use flare_core::server::builder::flare::{FlareServerBuilder, FlareServer};
@@ -37,6 +31,13 @@ use flare_core::common::message::{ArcMessageMiddleware, LoggingMiddleware, Metri
 use flare_im_core::metrics::AccessGatewayMetrics;
 use flare_server_core::auth::{RedisTokenStore, TokenService};
 use flare_server_core::Config;
+
+/// gRPC 服务集合
+pub struct GrpcServices {
+    pub signaling_handler: Arc<UnifiedGatewayGrpcHandler>,
+    pub access_gateway_handler: Arc<AccessGatewayHandler>,
+    pub grpc_addr: std::net::SocketAddr,
+}
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -113,14 +114,17 @@ pub async fn initialize(
     // 8. 构建连接查询服务
     let connection_query = build_connection_query(connection_manager.clone()).await;
     
-    // 9. 构建ACK发布器（使用 gRPC，轻量化设计）
+    // 9. 构建ACK发布器（使用 gRPC，通过 Push Proxy 路由，支持跨区域部署）
     let ack_publisher: Option<Arc<dyn AckPublisher>> = if access_config.use_ack_report {
-        // 使用 Push Server 接收 ACK 上报（默认使用 flare-push-server）
-        use flare_im_core::service_names::{PUSH_SERVER, get_service_name};
-        let push_service_name = get_service_name(PUSH_SERVER);
+        // 使用 Push Proxy 接收 ACK 上报（跨区域部署时，Push Proxy 在本地区域，延迟更低）
+        // ACK 通过 Push Proxy → Kafka → Push Server，保持架构一致性
+        use flare_im_core::service_names::{PUSH_PROXY, get_service_name};
+        let push_proxy_service_name = get_service_name(PUSH_PROXY);
         
-        let publisher = GrpcAckPublisher::new(push_service_name.clone());
-        info!("✅ ACK Publisher initialized: service={} (gRPC)", push_service_name);
+        // 创建服务发现工厂
+        let discovery_factory = Arc::new(flare_server_core::discovery::DiscoveryFactory {});
+        let publisher = GrpcAckPublisher::new(discovery_factory, push_proxy_service_name.clone());
+        info!("✅ ACK Publisher initialized: service={} (gRPC via Push Proxy)", push_proxy_service_name);
         Some(publisher)
     } else {
         info!("ACK Publisher disabled by configuration");
@@ -187,15 +191,32 @@ pub async fn initialize(
         Some(router)
     };
     
-    // 13. 构建领域服务
-    let _gateway_service = Arc::new(GatewayService::new(
+    // 12. 构建连接处理器（提前构建，用于后续服务）
+    let mut connection_handler = Arc::new(LongConnectionHandler::new_with_placeholders(
         signaling_gateway.clone(),
-        connection_query.clone(),
+        gateway_id.clone(),
+        ack_publisher.clone(),
+        message_router.clone(),
+        metrics.clone(),
     ));
     
+    // 13. 构建领域服务
+    let gateway_service_config = crate::domain::service::GatewayServiceConfig {
+        gateway_id: gateway_id.clone(),
+        online_service_endpoint: Some("http://127.0.0.1:50061".to_string()), // 添加Online服务端点
+    };
+    
+    let gateway_service = Arc::new(GatewayService::new(
+        signaling_gateway.clone(),
+        connection_query.clone(),
+        connection_handler.clone(),
+        gateway_service_config,
+    ).await);
+
     // 14. 构建会话领域服务（新增）
     let session_domain_service = Arc::new(SessionDomainService::new(
         signaling_gateway.clone(),
+        Arc::new(crate::domain::service::connection_quality_service::ConnectionQualityService::new()),
         gateway_id.clone(),
     ));
     
@@ -219,10 +240,13 @@ pub async fn initialize(
         ack_sender.clone(),
         ack_publisher.clone(),
         session_domain_service.clone(),
+        None, // session_service_client
         gateway_id.clone(),
     ));
     
-    // 17. 构建连接处理器
+    // 17. 更新连接处理器中的应用服务引用
+    // 由于Rust的所有权机制和Arc的限制，我们不能直接替换connection_handler
+    // 我们需要重新构建一个新的Arc来包含所有必要的服务
     let connection_handler = Arc::new(LongConnectionHandler::new(
         signaling_gateway.clone(),
         gateway_id.clone(),
@@ -274,27 +298,8 @@ pub async fn initialize(
     
     info!("✅ 长连接服务器构建完成");
     
-    // 23. 获取 server handle 和 connection manager
-    info!("准备获取 server handle 和 connection manager...");
-    let server_guard = long_connection_server.lock().await;
-    let server = server_guard.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Server not initialized"))?;
-    let (server_handle, manager_trait) = if let Some(manager_trait) =
-        server.get_server_handle_components()
-    {
-        let handle: Arc<dyn ServerHandle> =
-            Arc::new(DefaultServerHandle::new(manager_trait.clone()));
-        (handle, manager_trait)
-    } else {
-        return Err(anyhow::anyhow!("无法获取连接管理器"));
-    };
-    
-    drop(server_guard);
-    
-    info!("设置 server handle 和 connection manager...");
-    handler.set_server_handle(server_handle).await;
-    handler.set_connection_manager(manager_trait).await;
-    info!("✅ Server handle 和 connection manager 设置完成");
+    // 逻辑移到了 build_long_connection_server 内部，避免 Start 后的 Race Condition
+    // 这里不需要再做一次了
     
     // 24. 构建 gRPC 处理器
     info!("构建 gRPC 处理器...");
@@ -305,8 +310,9 @@ pub async fn initialize(
     let access_gateway_grpc_handler = Arc::new(AccessGatewayHandler::new(
         push_service.clone(),
         connection_query_service.clone(),
-    ));
-    info!("✅ gRPC 处理器构建完成");
+        gateway_service.subscription_service.clone(),
+        connection_handler.clone(),
+    ));    info!("✅ gRPC 处理器构建完成");
     
     // 25. gRPC 地址
     let grpc_addr: std::net::SocketAddr = format!(
@@ -371,7 +377,7 @@ async fn build_long_connection_server(
     runtime_config: &Config,
     ws_port: u16,
     quic_port: u16,
-    _handler: Arc<UnifiedGatewayHandler>,
+    handler: Arc<UnifiedGatewayHandler>,
     connection_manager: Arc<ConnectionManager>,
     authenticator: Arc<dyn flare_core::server::auth::Authenticator + Send + Sync>,
     connection_handler: Arc<LongConnectionHandler>,
@@ -488,6 +494,21 @@ async fn build_long_connection_server(
         }
     };
     
+    // 23. 获取 server handle 和 connection manager
+    // 直接使用传入的 connection_manager，避免从 server 获取可能导致的类型或所有权问题
+    info!("设置 server handle 和 connection manager...");
+    
+    // ConnectionManager 实现了 ConnectionManagerTrait，可以直接转型
+    let manager_trait: Arc<dyn flare_core::server::connection::ConnectionManagerTrait> = connection_manager.clone();
+    
+    // 创建 ServerHandle
+    let server_handle: Arc<dyn ServerHandle> = Arc::new(DefaultServerHandle::new(manager_trait.clone()));
+    
+    handler.set_server_handle(server_handle).await;
+    handler.set_connection_manager(manager_trait).await;
+    info!("✅ Server handle 和 connection manager 设置完成");
+    
+    // 24. 启动长连接服务器 (移到依赖注入之后)
     info!("正在启动长连接服务器...");
     let _ = std::io::stdout().flush();
     

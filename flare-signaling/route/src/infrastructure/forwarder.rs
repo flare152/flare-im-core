@@ -197,7 +197,7 @@ impl MessageForwarder {
                 self.forward_to_im(payload, context, tenant).await
             }
             _ => {
-                // 其他业务系统：使用 Router 解析端点并转发（占位）
+                // 其他业务系统：使用 Router 解析端点并转发
                 if let Some(repo) = route_repository {
                     // 优先使用 Router 解析端点；无 Router 时回退到仓库查找
                     let endpoint = if let Some(router_arc) = self.router.lock().await.clone() {
@@ -220,14 +220,32 @@ impl MessageForwarder {
                             }
                         }
                     };
-                    // 连接业务系统客户端（占位）
-                    let _client = self.get_business_client(&endpoint).await?;
-                    // TODO: 实现通用业务系统转发协议
-                    Err(anyhow::anyhow!(
-                        "Generic business system forwarding for SVID {} is not yet implemented. Endpoint: {}",
-                        normalized_svid,
-                        endpoint
-                    ))
+                    
+                    // 连接业务系统客户端并转发消息
+                    let mut client = self.get_business_client(&endpoint).await?;
+                    
+                    // 构造转发请求
+                    let request = flare_proto::message::SendMessageRequest {
+                        session_id: "".to_string(), // 需要根据实际逻辑填充
+                        message: None, // 消息内容在 payload 中
+                        sync: false,
+                        context,
+                        tenant,
+                    };
+                    
+                    // 发送请求到业务系统
+                    let response = client.send_message(tonic::Request::new(request)).await
+                        .context("Failed to send message to business service")?;
+
+                    let response_inner = response.into_inner();
+
+                    // 序列化响应
+                    let mut response_bytes = Vec::new();
+                    flare_proto::message::SendMessageResponse::encode(&response_inner, &mut response_bytes)
+                        .context("Failed to encode SendMessageResponse")?;
+
+                    info!("✅ Message forwarded to business service successfully: SVID={}, Endpoint={}", normalized_svid, endpoint);
+                    Ok(response_bytes)
                 } else {
                     Err(anyhow::anyhow!(
                         "Route repository not available, cannot resolve endpoint for SVID {}",

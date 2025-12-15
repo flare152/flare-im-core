@@ -24,6 +24,12 @@ pub trait SessionRepository: Send + Sync {
     async fn get_session_by_device(&self, user_id: &UserId, device_id: &DeviceId) -> Result<Option<Session>>;
     async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceInfo>>;
     async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceInfo>>;
+    
+    // 新增方法：获取带有完整Session信息的设备列表
+    async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<Session>> {
+        let user_id_vo = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        self.get_user_sessions(&user_id_vo).await
+    }
 }
 
 /// 订阅仓库接口

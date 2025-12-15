@@ -348,7 +348,8 @@ impl GatewayRouterTrait for GatewayRouter {
             "Calling Access Gateway push_message"
         );
         
-        let timeout_duration = Duration::from_secs(10); // 10秒超时
+        // 优化超时时间：单聊消息推送应该很快，设置3秒超时
+        let timeout_duration = Duration::from_secs(3); // 3秒超时
         let response = match tokio::time::timeout(
             timeout_duration,
             client.push_message(tonic::Request::new(request.clone()))

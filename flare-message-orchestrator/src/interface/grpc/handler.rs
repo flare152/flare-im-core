@@ -48,8 +48,8 @@ use flare_proto::message::{
 };
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
 use flare_proto::storage::{
-    DeleteMessageRequest, GetMessageRequest, MarkMessageReadRequest, QueryMessagesRequest,
-    RecallMessageRequest, SearchMessagesRequest, StoreMessageRequest,
+    DeleteMessageRequest, GetMessageRequest, MarkMessageReadRequest,
+    RecallMessageRequest, StoreMessageRequest,
     SetMessageAttributesRequest,
 };
 use prost_types;
@@ -58,7 +58,7 @@ use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument, warn};
 
 use crate::application::commands::StoreMessageCommand;
-use crate::application::handlers::MessageCommandHandler;
+use crate::application::handlers::{MessageCommandHandler, MessageQueryHandler};
 use crate::domain::repository::MessageEventPublisher;
 use flare_proto::message::message_service_server::MessageService;
 
@@ -71,6 +71,7 @@ use flare_proto::message::message_service_server::MessageService;
 #[derive(Clone)]
 pub struct MessageGrpcHandler {
     command_handler: Arc<MessageCommandHandler>,
+    query_handler: Arc<MessageQueryHandler>,
     reader_client: Option<StorageReaderServiceClient<tonic::transport::Channel>>,
     publisher: Arc<crate::domain::repository::MessageEventPublisherItem>,
 }
@@ -78,11 +79,13 @@ pub struct MessageGrpcHandler {
 impl MessageGrpcHandler {
     pub fn new(
         command_handler: Arc<MessageCommandHandler>,
+        query_handler: Arc<MessageQueryHandler>,
         reader_client: Option<StorageReaderServiceClient<tonic::transport::Channel>>,
         publisher: Arc<crate::domain::repository::MessageEventPublisherItem>,
     ) -> Self {
         Self {
             command_handler,
+            query_handler,
             reader_client,
             publisher,
         }
@@ -177,6 +180,22 @@ impl MessageGrpcHandler {
         message: &flare_proto::Message,
         req: &SendMessageRequest,
     ) -> Result<Response<SendMessageResponse>, Status> {
+        // 验证单聊消息必须包含 receiver_id
+        if message.session_type == flare_proto::common::SessionType::Single as i32 {
+            if message.receiver_id.is_empty() {
+                error!(
+                    message_id = %message.id,
+                    session_id = %message.session_id,
+                    sender_id = %message.sender_id,
+                    "Single chat message missing receiver_id in gRPC handler"
+                );
+                return Err(Status::invalid_argument(
+                    format!("Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}", 
+                        message.id, message.session_id, message.sender_id)
+                ));
+            }
+        }
+        
         // 将 SendMessageRequest 转换为 StoreMessageRequest
         let store_request = StoreMessageRequest {
             session_id: req.session_id.clone(),
@@ -581,6 +600,8 @@ impl MessageGrpcHandler {
                     id: uuid::Uuid::new_v4().to_string(),
                     session_id: request.session_id.clone(),
                     sender_id: operation.operator_id.clone(),
+                    receiver_id: String::new(), // 回复消息：receiver_id 由原消息决定
+                    channel_id: String::new(), // 回复消息：channel_id 由原消息决定
                     content: Some(reply_content),
                     timestamp: operation.timestamp.clone(),
                     ..Default::default()
@@ -655,6 +676,8 @@ impl MessageGrpcHandler {
                     id: uuid::Uuid::new_v4().to_string(),
                     session_id: request.session_id.clone(),
                     sender_id: operation.operator_id.clone(),
+                    receiver_id: String::new(), // 话题回复：receiver_id 由话题决定
+                    channel_id: String::new(), // 话题回复：channel_id 由话题决定
                     content: Some(thread_reply_content),
                     timestamp: operation.timestamp.clone(),
                     ..Default::default()
@@ -817,7 +840,7 @@ impl MessageGrpcHandler {
         }
     }
 
-    /// 处理 QueryMessages 请求 - 转发到 StorageReaderService
+    /// 处理 QueryMessages 请求 - 使用 QueryHandler
     #[instrument(skip(self, request))]
     pub async fn query_messages(
         &self,
@@ -825,41 +848,48 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageQueryMessagesResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
-
-        let storage_req = QueryMessagesRequest {
-            session_id: req.session_id,
-            start_time: req.start_time,
-            end_time: req.end_time,
-            limit: req.limit,
-            cursor: req.cursor,
-            context: req.context,
-            tenant: req.tenant,
-            pagination: req.pagination,
+        // 构建查询对象
+        let query = crate::application::queries::QueryMessagesQuery {
+            session_id: req.session_id.clone(),
+            limit: Some(req.limit),
+            cursor: if req.cursor.is_empty() { None } else { Some(req.cursor.clone()) },
+            start_time: if req.start_time == 0 { None } else { Some(req.start_time) },
+            end_time: if req.end_time == 0 { None } else { Some(req.end_time) },
         };
 
-        let storage_resp = client
-            .clone()
-            .query_messages(Request::new(storage_req))
+        // 调用查询处理器
+        let result = self.query_handler
+            .query_messages_with_pagination(query)
             .await
             .map_err(|err| {
-                error!(error = ?err, "Failed to query messages from reader");
-                Status::internal("query storage reader failed")
-            })?
-            .into_inner();
+                error!(error = %err, "Failed to query messages");
+                Status::internal(format!("Query messages failed: {}", err))
+            })?;
+
+        // 构建响应
+        let pagination = if let Some(mut pagination) = req.pagination {
+            pagination.has_more = result.has_more;
+            pagination.cursor = result.next_cursor.clone();
+            Some(pagination)
+        } else {
+            None
+        };
 
         Ok(Response::new(MessageQueryMessagesResponse {
-            messages: storage_resp.messages,
-            next_cursor: storage_resp.next_cursor,
-            has_more: storage_resp.has_more,
-            pagination: storage_resp.pagination,
-            status: storage_resp.status,
+            messages: result.messages,
+            next_cursor: result.next_cursor,
+            has_more: result.has_more,
+            pagination,
+            status: Some(flare_proto::common::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Success".to_string(),
+                details: vec![],
+                context: None,
+            }),
         }))
     }
 
-    /// 处理 SearchMessages 请求 - 转发到 StorageReaderService
+    /// 处理 SearchMessages 请求 - 使用 QueryHandler
     #[instrument(skip(self, request))]
     pub async fn search_messages(
         &self,
@@ -867,37 +897,39 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageSearchMessagesResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
-
-        let storage_req = SearchMessagesRequest {
-            context: req.context,
-            tenant: req.tenant,
-            filters: req.filters,
-            sort: req.sort,
-            pagination: req.pagination,
-            time_range: req.time_range,
+        // 构建搜索查询对象
+        let query = crate::application::queries::SearchMessagesQuery {
+            session_id: None, // SearchMessagesRequest中没有session_id字段
+            keyword: String::new(), // SearchMessagesRequest中没有keyword字段，应在filters中处理
+            limit: req.pagination.as_ref()
+                .map(|p| p.limit),
+            cursor: req.pagination.as_ref()
+                .and_then(|p| if !p.cursor.is_empty() { Some(p.cursor.clone()) } else { None }),
         };
 
-        let storage_resp = client
-            .clone()
-            .search_messages(Request::new(storage_req))
+        // 调用查询处理器
+        let messages = self.query_handler
+            .search_messages(query)
             .await
             .map_err(|err| {
-                error!(error = ?err, "Failed to search messages from reader");
-                Status::internal("search storage reader failed")
-            })?
-            .into_inner();
+                error!(error = %err, "Failed to search messages");
+                Status::internal(format!("Search messages failed: {}", err))
+            })?;
 
+        // 构建响应
         Ok(Response::new(MessageSearchMessagesResponse {
-            messages: storage_resp.messages,
-            pagination: storage_resp.pagination,
-            status: storage_resp.status,
+            messages,
+            pagination: req.pagination,
+            status: Some(flare_proto::common::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Success".to_string(),
+                details: vec![],
+                context: None,
+            }),
         }))
     }
 
-    /// 处理 GetMessage 请求 - 转发到 StorageReaderService
+    /// 处理 GetMessage 请求 - 使用 QueryHandler
     #[instrument(skip(self, request))]
     pub async fn get_message(
         &self,
@@ -905,29 +937,30 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageGetMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
-
-        let storage_req = GetMessageRequest {
-            context: req.context,
-            tenant: req.tenant,
-            message_id: req.message_id,
+        // 构建查询对象
+        let query = crate::application::queries::QueryMessageQuery {
+            message_id: req.message_id.clone(),
+            session_id: String::new(), // GetMessageRequest中没有session_id字段
         };
 
-        let storage_resp = client
-            .clone()
-            .get_message(Request::new(storage_req))
+        // 调用查询处理器
+        let message = self.query_handler
+            .query_message(query)
             .await
             .map_err(|err| {
-                error!(error = ?err, "Failed to get message from reader");
-                Status::internal("get message from reader failed")
-            })?
-            .into_inner();
+                error!(error = %err, "Failed to get message");
+                Status::internal(format!("Get message failed: {}", err))
+            })?;
 
+        // 构建响应
         Ok(Response::new(MessageGetMessageResponse {
-            message: storage_resp.message,
-            status: storage_resp.status,
+            message: Some(message),
+            status: Some(flare_proto::common::RpcStatus {
+                code: flare_proto::common::ErrorCode::Ok as i32,
+                message: "Success".to_string(),
+                details: vec![],
+                context: None,
+            }),
         }))
     }
 
@@ -977,29 +1010,16 @@ impl MessageGrpcHandler {
                 .await
             {
                 if let Some(original_message) = current.into_inner().message {
-                    // 确定接收者（从原消息的 session_id 和 session_type 推断）
+                    // 确定接收者（优先使用 receiver_id 和 channel_id）
                     let mut user_ids = Vec::new();
                     
-                    // 从会话 ID 提取用户 ID（假设格式为 "single:user1:user2" 或 "group:group_id"）
-                    if let Ok(session_type) = flare_proto::common::SessionType::try_from(original_message.session_type) {
-                        match session_type {
-                            flare_proto::common::SessionType::Single => {
-                                // 单聊：从 session_id 解析出另一个用户
-                                let parts: Vec<&str> = original_message.session_id.split(':').collect();
-                                if parts.len() >= 3 {
-                                    // session_id 格式: single:user1:user2
-                                    for user_id in &parts[1..] {
-                                        if *user_id != original_message.sender_id {
-                                            user_ids.push(user_id.to_string());
+                    // 单聊：使用 receiver_id
+                    if original_message.session_type == flare_proto::common::SessionType::Single as i32 {
+                        if !original_message.receiver_id.is_empty() {
+                            user_ids.push(original_message.receiver_id.clone());
                                         }
                                     }
-                                }
-                            },
-                            _ => {
-                                // 群聊、频道等：需要查询会话成员（这里暂时留空，由推送服务处理）
-                            }
-                        }
-                    }
+                    // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 session_id 查询成员
 
                     // 构建撤回后的消息（用于推送通知）
                     let mut recalled_message = original_message.clone();
@@ -1226,32 +1246,16 @@ impl MessageGrpcHandler {
         }
         edited_message.status = flare_proto::common::MessageStatus::Sent as i32; // 保持为 Sent 状态
 
-        // 确定接收者（从原消息获取，新版 Message 已移除 receiver_ids 和 receiver_id 字段）
-        let mut user_ids = Vec::new(); // receiver_ids 字段已移除
-        // 从 session_id 提取接收者信息
-        let session_parts: Vec<&str> = original_message.session_id.split(':').collect();
-        if session_parts.len() >= 3 && session_parts[0] == "single" {
-            // 单聊：从 session_id 解析出另一个用户
-            for user_id in &session_parts[1..] {
-                if *user_id != original_message.sender_id {
-                    user_ids.push(user_id.to_string());
-                }
+        // 确定接收者（优先使用 receiver_id 和 channel_id）
+        let mut user_ids = Vec::new();
+        
+        // 单聊：使用 receiver_id
+        if original_message.session_type == flare_proto::common::SessionType::Single as i32 {
+            if !original_message.receiver_id.is_empty() {
+                user_ids.push(original_message.receiver_id.clone());
             }
         }
-
-        // 如果是单聊，确保有接收者
-        if user_ids.is_empty() {
-            // 从 session_id 提取接收者信息（新版 Message 已移除 receiver_id 字段）
-            let session_parts: Vec<&str> = original_message.session_id.split(':').collect();
-            if session_parts.len() >= 3 && session_parts[0] == "single" {
-                // 单聊：从 session_id 解析出另一个用户
-                for user_id in &session_parts[1..] {
-                    if *user_id != original_message.sender_id {
-                        user_ids.push(user_id.to_string());
-                    }
-                }
-            }
-        }
+        // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 session_id 查询成员
 
         // 构建推送请求并发布到 Kafka
         if !user_ids.is_empty() {
@@ -1659,6 +1663,8 @@ impl MessageGrpcHandler {
 
             let forward_message = flare_proto::common::Message {
                 session_id: req.target_session_id.clone(),
+                receiver_id: String::new(), // 转发消息：receiver_id 由目标会话决定
+                channel_id: String::new(), // 转发消息：channel_id 由目标会话决定
                 message_type: flare_proto::common::MessageType::Forward as i32,
                 content: Some(flare_proto::common::MessageContent {
                     content: Some(flare_proto::common::message_content::Content::Forward(forward_content)),

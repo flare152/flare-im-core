@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use flare_proto::common::Message;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use flare_core::common::session_id::{generate_server_session_id, SessionType, validate_session_id};
+use flare_core::common::session_id::{generate_single_chat_session_id, generate_server_session_id, SessionType, validate_session_id};
 
 use crate::domain::model::{
     ConflictResolutionPolicy, DevicePresence, DeviceState, MessageSyncResult, Session,
@@ -436,6 +436,18 @@ impl SessionDomainService {
         } else {
             // 没有指定 session_id，根据会话类型生成
             let session_id = match session_type.as_str() {
+                "single" => {
+                    // 单聊：从参与者中提取两个用户ID，使用 generate_single_chat_session_id
+                    if participants.len() != 2 {
+                        return Err(anyhow::anyhow!(
+                            "Single chat session must have exactly 2 participants, got {}",
+                            participants.len()
+                        ));
+                    }
+                    let user1 = &participants[0].user_id;
+                    let user2 = &participants[1].user_id;
+                    generate_single_chat_session_id(user1, user2)
+                }
                 "group" => generate_server_session_id(SessionType::Group),
                 "assistant" | "ai" => generate_server_session_id(SessionType::Ai),
                 "system" => generate_server_session_id(SessionType::System),

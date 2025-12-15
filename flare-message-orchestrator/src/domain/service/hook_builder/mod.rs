@@ -113,24 +113,23 @@ pub fn build_hook_context(
             .entry("session_type".into())
             .or_insert(session_type_str.clone());
         
-        // 从 session_id 提取接收者信息
-        let session_parts: Vec<&str> = message.session_id.split(':').collect();
-        let receiver_list = if session_parts.len() >= 3 && session_parts.first() == Some(&"single") {
-            session_parts[1..].iter()
-                .filter(|&id| id != &message.sender_id)
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        
+        // 提取接收者信息（优先使用 receiver_id 和 channel_id）
+        // 单聊：使用 receiver_id
+        if message.session_type == flare_proto::common::SessionType::Single as i32 {
+            if !message.receiver_id.is_empty() {
         ctx.attributes
             .entry("receiver_id".into())
-            .or_insert(receiver_list.first().cloned().unwrap_or_default());
-        if !receiver_list.is_empty() {
+                    .or_insert(message.receiver_id.clone());
+                ctx.attributes
+                    .entry("receiver_ids".into())
+                    .or_insert(message.receiver_id.clone());
+            }
+        }
+        // 群聊/频道：使用 channel_id
+        if !message.channel_id.is_empty() {
             ctx.attributes
-                .entry("receiver_ids".into())
-                .or_insert(receiver_list.join(","));
+                .entry("channel_id".into())
+                .or_insert(message.channel_id.clone());
         }
         if let Some(client_msg_id) = extract_client_message_id(message) {
             ctx.attributes
@@ -224,13 +223,14 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         .entry("sender_id".into())
         .or_insert(message.sender_id.clone());
     
-    // 从 session_id 提取接收者信息（新版 Message 已移除 receiver_id 和 receiver_ids 字段）
-    let session_parts: Vec<&str> = message.session_id.split(':').collect();
-    let receiver_list = if session_parts.len() >= 3 && session_parts.first() == Some(&"single") {
-        session_parts[1..].iter()
-            .filter(|&id| id != &message.sender_id)
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
+    // 提取接收者信息（优先使用 receiver_id 和 channel_id）
+    // 单聊：使用 receiver_id
+    let receiver_list = if message.session_type == flare_proto::common::SessionType::Single as i32 {
+        if !message.receiver_id.is_empty() {
+            vec![message.receiver_id.clone()]
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
@@ -245,11 +245,22 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         } else {
             receiver_list.join(",")
         });
+    
+    // 群聊/频道：使用 channel_id
+    if !message.channel_id.is_empty() {
+        metadata
+            .entry("channel_id".into())
+            .or_insert(message.channel_id.clone());
+    }
+    
     draft.metadata = metadata;
 
     draft.extra("session_id", json!(request.session_id));
     draft.extra("sync", json!(request.sync));
     draft.extra("receiver_ids", json!(receiver_list));
+    if !message.channel_id.is_empty() {
+        draft.extra("channel_id", json!(message.channel_id));
+    }
 
     // request.context 是 RequestContext，我们需要从中提取信息构建 JSON
     if let Some(request_ctx) = request.context.as_ref() {

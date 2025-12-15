@@ -57,9 +57,13 @@ futures-util = { workspace = true }
 once_cell = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+rand = { workspace = true }
 
 # etcd客户端（配置中心）
 etcd-client = { workspace = true }
+
+# Consul客户端（配置中心）
+# 使用 flare-server-core 的服务发现模块
 
 # 监控指标（可选）
 # prometheus = "0.13"

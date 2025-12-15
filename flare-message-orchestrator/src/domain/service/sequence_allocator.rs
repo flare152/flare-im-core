@@ -110,7 +110,7 @@ impl SequenceAllocator {
     /// 
     /// # 参数
     /// 
-    /// - `session_id`: 会话 ID（如 "single:user1:user2" 或 "group:group123"）
+    /// - `session_id`: 会话 ID（如 "1-{hash}" 或 "2-group123"）
     /// - `tenant_id`: 租户 ID（用于多租户隔离）
     /// 
     /// # 返回
@@ -303,7 +303,7 @@ impl SequenceAllocator {
     /// # 示例
     /// 
     /// ```
-    /// seq:tenant-a:single:user1:user2  → 单聊
+    /// seq:tenant-a:1-{hash}  → 单聊
     /// seq:tenant-b:group:group123      → 群聊
     /// ```
     fn build_redis_key(&self, tenant_id: &str, session_id: &str) -> String {

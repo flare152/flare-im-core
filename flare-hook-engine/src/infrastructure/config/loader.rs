@@ -8,10 +8,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+use base64::{Engine as _, engine::general_purpose};
 
 use crate::domain::model::HookConfig;
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
+use flare_server_core::{ServiceDiscover, DiscoveryFactory, DiscoveryConfig, BackendType, KvStore, KvBackend};
 
 /// Hook配置加载器接口
 pub trait ConfigLoader: Send + Sync {
@@ -206,11 +208,16 @@ impl ConfigLoader for DatabaseConfigLoader {
 }
 
 /// 配置中心加载器（etcd/Consul）
-#[derive(Debug)]
 pub struct ConfigCenterLoader {
     endpoint: String,
     tenant_id: Option<String>,
     config_key: String,
+    // 添加服务发现客户端
+    discovery_client: Option<Arc<flare_server_core::ServiceDiscover>>,
+    // 添加工厂用于创建后端
+    factory: Option<flare_server_core::DiscoveryFactory>,
+    // 添加KV存储
+    kv_store: Option<Arc<KvStore>>,
 }
 
 impl ConfigCenterLoader {
@@ -226,10 +233,31 @@ impl ConfigCenterLoader {
             endpoint,
             tenant_id,
             config_key,
+            discovery_client: None,
+            factory: None,
+            kv_store: None,
         }
     }
 
-    /// 解析endpoint，支持etcd://host:port格式
+    /// 设置服务发现客户端
+    pub fn with_discovery_client(mut self, client: Arc<flare_server_core::ServiceDiscover>) -> Self {
+        self.discovery_client = Some(client);
+        self
+    }
+
+    /// 设置发现工厂
+    pub fn with_factory(mut self, factory: flare_server_core::DiscoveryFactory) -> Self {
+        self.factory = Some(factory);
+        self
+    }
+
+    /// 设置KV存储
+    pub fn with_kv_store(mut self, kv_store: Arc<KvStore>) -> Self {
+        self.kv_store = Some(kv_store);
+        self
+    }
+
+    /// 解析endpoint，支持etcd://host:port和consul://host:port格式
     fn parse_endpoint(&self) -> Result<(String, u16)> {
         if self.endpoint.starts_with("etcd://") {
             let addr = self.endpoint.strip_prefix("etcd://").unwrap();
@@ -242,11 +270,29 @@ impl ConfigCenterLoader {
                 .context("Invalid etcd port")?;
             Ok((host, port))
         } else if self.endpoint.starts_with("consul://") {
-            // TODO: 支持Consul
-            anyhow::bail!("Consul not implemented yet");
+            let addr = self.endpoint.strip_prefix("consul://").unwrap();
+            let parts: Vec<&str> = addr.split(':').collect();
+            if parts.len() != 2 {
+                anyhow::bail!("Invalid consul endpoint format: {}", self.endpoint);
+            }
+            let host = parts[0].to_string();
+            let port = parts[1].parse::<u16>()
+                .context("Invalid consul port")?;
+            Ok((host, port))
         } else {
             anyhow::bail!("Unsupported config center endpoint format: {}", self.endpoint);
         }
+    }
+}
+
+impl std::fmt::Debug for ConfigCenterLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigCenterLoader")
+            .field("endpoint", &self.endpoint)
+            .field("tenant_id", &self.tenant_id)
+            .field("config_key", &self.config_key)
+            .field("discovery_client", &self.discovery_client.as_ref().map(|_| "ServiceDiscover"))
+            .finish()
     }
 }
 
@@ -255,49 +301,179 @@ impl ConfigLoader for ConfigCenterLoader {
     async fn load(&self) -> Result<HookConfig> {
         let (host, port) = self.parse_endpoint()?;
         
-        // 使用etcd-client连接etcd并读取配置
-        use etcd_client::Client;
-        
-        let endpoints = vec![format!("http://{}:{}", host, port)];
-        let mut client = Client::connect(endpoints, None)
-            .await
-            .context("Failed to connect to etcd")?;
-        
-        let resp = client.get(self.config_key.clone(), None)
-            .await
-            .context("Failed to get config from etcd")?;
-        
-        if let Some(kv) = resp.kvs().first() {
-            // etcd-client返回的是bytes，需要转换为字符串
-            let value = String::from_utf8(kv.value().to_vec())
-                .context("Failed to parse etcd value as UTF-8 string")?;
+        // 根据endpoint类型选择不同的配置中心客户端
+        if self.endpoint.starts_with("etcd://") {
+            // 使用etcd-client连接etcd并读取配置
+            use etcd_client::Client;
             
-            // 解析配置（支持TOML或JSON格式）
-            let config: HookConfig = if value.trim_start().starts_with('{') {
-                // JSON格式
-                serde_json::from_str(&value)
-                    .context("Failed to parse etcd config as JSON")?
+            let endpoints = vec![format!("http://{}:{}", host, port)];
+            let mut client = Client::connect(endpoints, None)
+                .await
+                .context("Failed to connect to etcd")?;
+            
+            let resp = client.get(self.config_key.clone(), None)
+                .await
+                .context("Failed to get config from etcd")?;
+            
+            if let Some(kv) = resp.kvs().first() {
+                // etcd-client返回的是bytes，需要转换为字符串
+                let value = String::from_utf8(kv.value().to_vec())
+                    .context("Failed to parse etcd value as UTF-8 string")?;
+                
+                // 解析配置（支持TOML或JSON格式）
+                let config: HookConfig = if value.trim_start().starts_with('{') {
+                    // JSON格式
+                    serde_json::from_str(&value)
+                        .context("Failed to parse etcd config as JSON")?
+                } else {
+                    // TOML格式
+                    toml::from_str(&value)
+                        .context("Failed to parse etcd config as TOML")?
+                };
+                
+                info!(
+                    endpoint = %self.endpoint,
+                    config_key = %self.config_key,
+                    hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
+                    "Loaded hook config from etcd"
+                );
+                
+                Ok(config)
             } else {
-                // TOML格式
-                toml::from_str(&value)
-                    .context("Failed to parse etcd config as TOML")?
-            };
+                warn!(
+                    endpoint = %self.endpoint,
+                    config_key = %self.config_key,
+                    "Config not found in etcd, using default config"
+                );
+                Ok(HookConfig::default())
+            }
+        } else if self.endpoint.starts_with("consul://") {
+            // 使用flare-server-core的KV存储模块连接Consul并读取配置
             
-            info!(
-                endpoint = %self.endpoint,
-                config_key = %self.config_key,
-                hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
-                "Loaded hook config from etcd"
-            );
-            
-            Ok(config)
+            // 如果有KV存储，使用KV存储读取配置；否则使用HTTP客户端
+            if let Some(kv_store) = &self.kv_store {
+                // 使用KV存储从Consul KV存储中读取配置
+                match kv_store.get_string(&self.config_key).await {
+                    Ok(Some(value)) => {
+                        // 解析配置（支持TOML或JSON格式）
+                        let config: HookConfig = if value.trim_start().starts_with('{') {
+                            // JSON格式
+                            serde_json::from_str(&value)
+                                .context("Failed to parse consul config as JSON")?
+                        } else {
+                            // TOML格式
+                            toml::from_str(&value)
+                                .context("Failed to parse consul config as TOML")?
+                        };
+                        
+                        info!(
+                            endpoint = %self.endpoint,
+                            config_key = %self.config_key,
+                            hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
+                            "Loaded hook config from consul via KV store"
+                        );
+                        
+                        Ok(config)
+                    }
+                    Ok(None) => {
+                        warn!(
+                            endpoint = %self.endpoint,
+                            config_key = %self.config_key,
+                            "Config not found in consul"
+                        );
+                        Ok(HookConfig::default())
+                    }
+                    Err(e) => {
+                        error!(
+                            endpoint = %self.endpoint,
+                            config_key = %self.config_key,
+                            error = %e,
+                            "Failed to get config from consul via KV store"
+                        );
+                        Err(anyhow::anyhow!("Failed to get config from consul via KV store: {}", e))
+                    }
+                }
+            } else {
+                // 直接使用HTTP客户端从Consul KV存储中读取配置
+                // 构造Consul KV URL
+                let key = self.config_key.trim_start_matches('/');
+                let url = format!("http://{}:{}/v1/kv/{}", host, port, key);
+                
+                // 使用HTTP客户端从Consul KV存储中读取配置
+                let http_client = reqwest::Client::new();
+                match http_client.get(&url).send().await {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            let body: Vec<serde_json::Value> = response.json().await
+                                .context("Failed to parse consul response")?;
+                            
+                            if let Some(first) = body.first() {
+                                // 从响应中提取Value字段并进行base64解码
+                                if let Some(value_base64) = first.get("Value").and_then(|v| v.as_str()) {
+                                    // base64解码
+                                    let value_bytes = general_purpose::STANDARD.decode(value_base64)
+                                        .context("Failed to decode base64 value from consul")?;
+                                    let value = String::from_utf8(value_bytes)
+                                        .context("Failed to parse consul value as UTF-8 string")?;
+                                    
+                                    // 解析配置（支持TOML或JSON格式）
+                                    let config: HookConfig = if value.trim_start().starts_with('{') {
+                                        // JSON格式
+                                        serde_json::from_str(&value)
+                                            .context("Failed to parse consul config as JSON")?
+                                    } else {
+                                        // TOML格式
+                                        toml::from_str(&value)
+                                            .context("Failed to parse consul config as TOML")?
+                                    };
+                                    
+                                    info!(
+                                        endpoint = %self.endpoint,
+                                        config_key = %self.config_key,
+                                        hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
+                                        "Loaded hook config from consul"
+                                    );
+                                    
+                                    Ok(config)
+                                } else {
+                                    warn!(
+                                        endpoint = %self.endpoint,
+                                        config_key = %self.config_key,
+                                        "Config value not found in consul response"
+                                    );
+                                    Ok(HookConfig::default())
+                                }
+                            } else {
+                                warn!(
+                                    endpoint = %self.endpoint,
+                                    config_key = %self.config_key,
+                                    "Empty response from consul"
+                                );
+                                Ok(HookConfig::default())
+                            }
+                        } else {
+                            warn!(
+                                endpoint = %self.endpoint,
+                                config_key = %self.config_key,
+                                status = %response.status(),
+                                "Failed to get config from consul"
+                            );
+                            Ok(HookConfig::default())
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            endpoint = %self.endpoint,
+                            config_key = %self.config_key,
+                            error = %e,
+                            "Failed to get config from consul"
+                        );
+                        Err(anyhow::anyhow!("Failed to get config from consul: {}", e))
+                    }
+                }
+            }
         } else {
-            warn!(
-                endpoint = %self.endpoint,
-                config_key = %self.config_key,
-                "Config not found in etcd, using default config"
-            );
-            Ok(HookConfig::default())
+            anyhow::bail!("Unsupported config center endpoint format: {}", self.endpoint);
         }
     }
 }

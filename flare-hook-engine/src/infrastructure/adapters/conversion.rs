@@ -81,6 +81,8 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
         session_id: record.conversation_id.clone(),
         client_msg_id: record.client_message_id.clone().unwrap_or_default(),
         sender_id: record.sender_id.clone(),
+        receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
+        channel_id: String::new(), // 从数据库读取：channel_id 可能为空（旧数据）
         source: 1,
         seq: 0,
         timestamp: Some(ts.clone()),

@@ -76,12 +76,10 @@ impl MediaService for LightweightGatewayHandler {
     /// 上传文件（流式）
     async fn upload_file(
         &self,
-        _request: Request<tonic::Streaming<UploadFileRequest>>,
+        request: Request<tonic::Streaming<UploadFileRequest>>,
     ) -> Result<Response<UploadFileResponse>, Status> {
-        // TODO: 修复流式上传文件的实现
-        Err(Status::unimplemented("Stream upload not implemented yet"))
-        // // 代理到真实的媒体服务
-        // self.media_client.upload_file_from_streaming_request(request).await
+        // 代理到真实的媒体服务
+        (*self.media_client).upload_file(request).await
     }
 
     /// 初始化分片上传

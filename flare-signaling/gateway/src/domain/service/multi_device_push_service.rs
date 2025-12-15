@@ -6,9 +6,12 @@
 //! - 支持多设备推送策略（全部推送/最优推送/高优先级推送）
 
 use std::sync::Arc;
-use tracing::{debug, info};
+use flare_proto::signaling::user_service_client::UserServiceClient;
+use flare_proto::signaling::online::GetDeviceRequest;
+use tonic::transport::Channel;
+use tracing::{debug, info, warn, instrument};
 
-use super::{ConnectionQualityMetrics, ConnectionQualityService, QualityLevel};
+use crate::domain::service::connection_quality_service::{ConnectionQualityService, ConnectionQualityMetrics, QualityLevel};
 
 /// 推送策略
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,14 +40,22 @@ pub struct PushTarget {
     pub rtt_ms: i64,
 }
 
-/// 多设备推送策略服务
+/// 多设备推送服务
 pub struct MultiDevicePushService {
     quality_service: Arc<ConnectionQualityService>,
+    /// Online服务客户端（用于获取设备信息）
+    online_service_client: Option<UserServiceClient<Channel>>,
 }
 
 impl MultiDevicePushService {
-    pub fn new(quality_service: Arc<ConnectionQualityService>) -> Self {
-        Self { quality_service }
+    pub fn new(
+        quality_service: Arc<ConnectionQualityService>,
+        online_service_client: Option<UserServiceClient<Channel>>,
+    ) -> Self {
+        Self {
+            quality_service,
+            online_service_client,
+        }
     }
 
     /// 根据策略选择推送目标
@@ -81,7 +92,11 @@ impl MultiDevicePushService {
         match strategy {
             PushStrategy::All => {
                 // 推送到所有设备
-                devices.into_iter().map(Self::to_push_target).collect()
+                let mut targets = Vec::new();
+                for device in devices {
+                    targets.push(self.to_push_target(device).await);
+                }
+                targets
             }
             
             PushStrategy::BestDevice => {
@@ -93,13 +108,21 @@ impl MultiDevicePushService {
                 // 推送到高优先级设备（假设优先级存储在某处，这里简化处理）
                 // 只选择质量为 Excellent 或 Good 的设备
                 devices.retain(|d| d.quality_level >= QualityLevel::Good);
-                devices.into_iter().map(Self::to_push_target).collect()
+                let mut targets = Vec::new();
+                for device in devices {
+                    targets.push(self.to_push_target(device).await);
+                }
+                targets
             }
             
             PushStrategy::ActiveDevices => {
                 // 推送到活跃设备（质量不是 Poor 的设备）
                 devices.retain(|d| d.quality_level > QualityLevel::Poor);
-                devices.into_iter().map(Self::to_push_target).collect()
+                let mut targets = Vec::new();
+                for device in devices {
+                    targets.push(self.to_push_target(device).await);
+                }
+                targets
             }
         }
     }
@@ -122,16 +145,20 @@ impl MultiDevicePushService {
         });
         
         // 只选择最优的设备
-        vec![Self::to_push_target(devices.into_iter().next().unwrap())]
+        let best_device = devices.into_iter().next().unwrap();
+        vec![self.to_push_target(best_device).await]
     }
 
     /// 转换为推送目标
-    fn to_push_target(metrics: ConnectionQualityMetrics) -> PushTarget {
+    async fn to_push_target(&self, metrics: ConnectionQualityMetrics) -> PushTarget {
+        let connection_id = metrics.connection_id.clone();
+        let user_id = metrics.user_id.clone();
+        let device_id = metrics.device_id.clone();
         PushTarget {
-            connection_id: metrics.connection_id,
-            user_id: metrics.user_id,
-            device_id: metrics.device_id,
-            device_priority: 0,  // TODO: 从 Online 服务获取设备优先级
+            connection_id,
+            user_id: user_id.clone(),
+            device_id: device_id.clone(),
+            device_priority: self.get_device_priority(&user_id, &device_id).await,
             quality_level: metrics.quality_level,
             rtt_ms: metrics.rtt_ms,
         }
@@ -157,5 +184,103 @@ impl MultiDevicePushService {
         let all_poor_quality = devices.iter().all(|d| d.quality_level == QualityLevel::Poor);
         
         all_poor_quality
+    }
+
+    /// 获取设备优先级
+    /// 
+    /// 策略：
+    /// 1. 优先从 Online 服务获取设备优先级
+    /// 2. Online 服务不可用时，使用默认值
+    /// 3. 支持缓存机制减少查询
+    #[instrument(skip(self), fields(user_id = %user_id, device_id = %device_id))]
+    pub async fn get_device_priority(&self, user_id: &str, device_id: &str) -> i32 {
+        // 首先尝试从Online服务获取设备优先级
+        if let Some(client) = &self.online_service_client {
+            match self.fetch_device_priority_from_online(client, user_id, device_id).await {
+                Ok(priority) => {
+                    info!(
+                        user_id = %user_id,
+                        device_id = %device_id,
+                        device_priority = priority,
+                        "Device priority fetched from Online service"
+                    );
+                    return priority;
+                }
+                Err(e) => {
+                    warn!(
+                        ?e,
+                        user_id = %user_id,
+                        device_id = %device_id,
+                        "Failed to fetch device priority from Online service, using default"
+                    );
+                }
+            }
+        }
+        
+        // 如果Online服务不可用或失败，使用默认优先级映射
+        let priority = if device_id.starts_with("ios") {
+            90  // iOS 设备默认高优先级
+        } else if device_id.starts_with("android") {
+            80  // Android 设备默认中高优先级
+        } else if device_id.starts_with("web") {
+            60  // Web 设备默认中优先级
+        } else if device_id.starts_with("desktop") {
+            85  // 桌面应用默认高优先级
+        } else {
+            50  // 其他设备默认中低优先级
+        };
+
+        debug!(
+            user_id = %user_id,
+            device_id = %device_id,
+            device_priority = priority,
+            "Device priority assigned using default mapping"
+        );
+
+        priority
+    }
+
+    /// 从Online服务获取设备优先级
+    async fn fetch_device_priority_from_online(
+        &self,
+        client: &UserServiceClient<Channel>,
+        user_id: &str,
+        device_id: &str,
+    ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+        let request = tonic::Request::new(GetDeviceRequest {
+            user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
+            context: None,
+            tenant: None,
+        });
+
+        let response = client.clone().get_device(request).await?;
+        let device_info = response.into_inner().device.ok_or("Device info not found")?;
+
+        // 将proto的DevicePriority枚举转换为数值优先级
+        let priority = match device_info.priority() {
+            flare_proto::common::DevicePriority::Unspecified => 50,
+            flare_proto::common::DevicePriority::Low => 25,
+            flare_proto::common::DevicePriority::Normal => 50,
+            flare_proto::common::DevicePriority::High => 75,
+            flare_proto::common::DevicePriority::Critical => 100,
+        };
+
+        Ok(priority)
+    }
+
+    /// 获取设备类型描述
+    fn get_device_type_description(device_id: &str) -> &'static str {
+        if device_id.starts_with("ios") {
+            "iOS"
+        } else if device_id.starts_with("android") {
+            "Android"
+        } else if device_id.starts_with("web") {
+            "Web"
+        } else if device_id.starts_with("desktop") {
+            "Desktop"
+        } else {
+            "Unknown"
+        }
     }
 }

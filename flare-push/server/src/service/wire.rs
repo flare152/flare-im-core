@@ -10,21 +10,27 @@ use crate::application::handlers::PushCommandHandler;
 use crate::config::PushServerConfig;
 use crate::domain::service::PushDomainService;
 use crate::infrastructure::ack_tracker::AckTracker;
+use flare_im_core::ack::{AckModule, AckServiceConfig};
+use deadpool_redis;
 use crate::infrastructure::cache::redis_online::OnlineStatusRepositoryImpl;
 use crate::infrastructure::cache::online_status_cache::CachedOnlineStatusRepository;
 use crate::infrastructure::message_state::MessageStateTracker;
 use crate::infrastructure::mq::kafka_task_publisher::KafkaPushTaskPublisher;
 use crate::infrastructure::signaling::SignalingOnlineClient;
 use crate::infrastructure::session_client::SessionServiceClient;
-use crate::interface::consumers::PushKafkaConsumer;
+use crate::interface::consumers::{PushKafkaConsumer, AckKafkaConsumer};
 use flare_im_core::gateway::{GatewayRouter, GatewayRouterConfig, GatewayRouterTrait};
 use flare_im_core::hooks::{HookDispatcher, HookRegistry};
 use flare_im_core::metrics::PushServerMetrics;
 use flare_im_core::service_names::{SIGNALING_ONLINE, SESSION, ACCESS_GATEWAY, get_service_name};
 
 /// 应用上下文 - 包含所有已初始化的服务
+/// 
+/// 注意：Push Server 是纯消费者，不提供 gRPC 服务
+/// ACK 通过 Push Proxy → Kafka → Push Server 的方式传递
 pub struct ApplicationContext {
     pub consumer: Arc<PushKafkaConsumer>,
+    pub ack_consumer: Arc<AckKafkaConsumer>,
 }
 
 /// 构建应用上下文
@@ -160,15 +166,35 @@ pub async fn initialize(
         Some(redis_client.clone()),
     );
     
-    // 10. 构建 ACK 跟踪器（AckTracker::new 已经返回 Arc）
-    let ack_tracker = AckTracker::new(server_config.clone());
+    // 10. 创建 Redis 连接池（用于 ACK 重试计数）
+    let redis_pool = deadpool_redis::Config::from_url(server_config.redis_url.clone())
+        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+        .context("Failed to create Redis pool")?;
     
-    // 11. 启动 ACK 监控任务
+    // 11. 初始化统一的 ACK 模块
+    let ack_config = AckServiceConfig::default();
+    // 覆盖 Redis URL
+    let ack_config = AckServiceConfig {
+        redis_url: server_config.redis_url.clone(),
+        ..ack_config
+    };
+    let ack_module = Arc::new(
+        AckModule::new(ack_config).await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize ACK module: {}", e))?
+    );
+    
+    // 12. 构建 ACK 跟踪器（使用统一的 AckManager）
+    let ack_tracker = AckTracker::new(
+        ack_module.clone(),
+        server_config.clone(),
+    )
+    .with_task_publisher(task_publisher.clone())
+    .with_redis_pool(redis_pool.clone());
+    
+    // 12. 启动 ACK 监控任务
     let ack_tracker_monitor = Arc::clone(&ack_tracker);
     tokio::spawn(async move {
-        if let Err(e) = ack_tracker_monitor.start_monitor().await {
-            tracing::warn!(error = %e, "ACK tracker monitor error");
-        }
+        ack_tracker_monitor.start_monitor();
     });
     
     // 12. 构建 Hook 分发器
@@ -193,7 +219,7 @@ pub async fn initialize(
     // 15. 构建命令处理器
     let command_handler = Arc::new(PushCommandHandler::new(domain_service.clone()));
     
-    // 16. 构建消费者
+    // 16. 构建推送消息消费者
     let consumer = Arc::new(
         PushKafkaConsumer::new(
             server_config.clone(),
@@ -204,12 +230,27 @@ pub async fn initialize(
         .context("Failed to create Push Kafka consumer")?
     );
     
+    // 17. 构建 ACK 消费者
+    let ack_consumer = Arc::new(
+        AckKafkaConsumer::new(
+            server_config.clone(),
+            domain_service.clone(),
+        )
+        .await
+        .context("Failed to create ACK Kafka consumer")?
+    );
+    
     tracing::info!(
         bootstrap = %server_config.kafka_bootstrap,
         group = %server_config.consumer_group,
-        "Push Server initialized"
+        task_topic = %server_config.task_topic,
+        ack_topic = %server_config.ack_topic,
+        "Push Server initialized (pure consumer, no gRPC service)"
     );
     
-    Ok(ApplicationContext { consumer })
+    Ok(ApplicationContext { 
+        consumer,
+        ack_consumer,
+    })
 }
 

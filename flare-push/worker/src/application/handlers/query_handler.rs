@@ -24,8 +24,10 @@ impl PushQueryHandler {
         &self,
         query: QueryPushTaskStatusQuery,
     ) -> Result<String> {
-        // TODO: 实现查询逻辑
-        todo!("Implement query push task status logic")
+        // 实现查询逻辑
+        // 调用领域服务查询推送任务状态
+        let status = self.domain_service.get_push_task_status(&query.message_id, &query.user_id).await?;
+        Ok(status.unwrap_or_default()) // 处理Option<String>到String的转换
     }
 
     /// 查询推送统计
@@ -33,9 +35,10 @@ impl PushQueryHandler {
     pub async fn query_push_statistics(
         &self,
         query: QueryPushStatisticsQuery,
-    ) -> Result<std::collections::HashMap<String, String>> {
-        // TODO: 实现推送统计查询逻辑
-        todo!("Implement push statistics query logic")
+    ) -> Result<crate::application::dto::PushStatsResponse> {
+        // 实现推送统计查询逻辑
+        // 调用领域服务查询推送统计信息
+        let stats = self.domain_service.get_push_statistics(&query).await?;
+        Ok(stats)
     }
 }
-

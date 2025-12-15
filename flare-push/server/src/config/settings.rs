@@ -40,9 +40,17 @@ pub struct PushServerConfig {
     // ACK超时配置
     pub ack_timeout_seconds: u64,
     pub ack_monitor_interval_seconds: u64,
+    pub ack_timeout_max_retries: u32,
+    // ACK 监控性能优化配置
+    pub ack_scan_batch_size: usize,        // 每次 SCAN 的 keys 数量
+    pub ack_pipeline_batch_size: usize,   // Pipeline 批量获取的批次大小
+    pub ack_timeout_batch_size: usize,    // 批量处理超时事件的批次大小
+    pub ack_timeout_concurrent_limit: usize, // 并发处理超时事件的最大数量
     // 离线推送队列
     pub offline_topic: String,
     pub dlq_topic: String,
+    // ACK Topic（从 Access Gateway 接收客户端 ACK）
+    pub ack_topic: String,
 }
 
 impl PushServerConfig {
@@ -190,6 +198,11 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(1);
+        
+        let ack_timeout_max_retries = env::var("PUSH_SERVER_ACK_TIMEOUT_MAX_RETRIES")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(3);
 
         // 离线推送队列
         let offline_topic = env::var("PUSH_SERVER_OFFLINE_TOPIC")
@@ -197,6 +210,30 @@ impl PushServerConfig {
         
         let dlq_topic = env::var("PUSH_SERVER_DLQ_TOPIC")
             .unwrap_or_else(|_| "flare.im.push.dlq".to_string());
+        
+        let ack_topic = env::var("PUSH_SERVER_ACK_TOPIC")
+            .unwrap_or_else(|_| "flare.im.push.acks".to_string());
+
+        // ACK 监控性能优化配置
+        let ack_scan_batch_size = env::var("PUSH_SERVER_ACK_SCAN_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500); // 每次 SCAN 最多 500 个 keys
+        
+        let ack_pipeline_batch_size = env::var("PUSH_SERVER_ACK_PIPELINE_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000); // Pipeline 每批最多 1000 个 keys
+        
+        let ack_timeout_batch_size = env::var("PUSH_SERVER_ACK_TIMEOUT_BATCH_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100); // 批量处理超时事件，每批 100 个
+        
+        let ack_timeout_concurrent_limit = env::var("PUSH_SERVER_ACK_TIMEOUT_CONCURRENT_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50); // 最多并发处理 50 个超时事件
 
         Self {
             kafka_bootstrap,
@@ -226,8 +263,14 @@ impl PushServerConfig {
             push_retry_backoff_multiplier,
             ack_timeout_seconds,
             ack_monitor_interval_seconds,
+            ack_timeout_max_retries,
+            ack_scan_batch_size,
+            ack_pipeline_batch_size,
+            ack_timeout_batch_size,
+            ack_timeout_concurrent_limit,
             offline_topic,
             dlq_topic,
+            ack_topic,
         }
     }
 }

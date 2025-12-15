@@ -3,16 +3,27 @@ use async_trait::async_trait;
 
 use anyhow::Result;
 use redis::{AsyncCommands, aio::ConnectionManager};
+use tracing::warn;
 
 use crate::domain::repository::SessionStateRepository;
+use crate::domain::service::MessagePersistenceDomainService;
 
 pub struct RedisSessionStateRepository {
     client: Arc<redis::Client>,
+    domain_service: Option<Arc<MessagePersistenceDomainService>>,
 }
 
 impl RedisSessionStateRepository {
     pub fn new(client: Arc<redis::Client>) -> Self {
-        Self { client }
+        Self { 
+            client,
+            domain_service: None,
+        }
+    }
+    
+    pub fn with_domain_service(mut self, domain_service: Option<Arc<MessagePersistenceDomainService>>) -> Self {
+        self.domain_service = domain_service;
+        self
     }
 
     async fn connection(&self) -> Result<ConnectionManager> {
@@ -76,13 +87,31 @@ impl SessionStateRepository for RedisSessionStateRepository {
             )
             .await?;
 
-        // unread logic: receiver_id/receiver_ids 已废弃，通过 session_id 确定接收者
-        // 此处需要通过 session 服务查询参与者，暂时保留逻辑但不执行
-        // TODO: 通过 session_id 查询参与者列表，然后更新 unread
-        // sender unread reset
+        // 重置发送者的未读数
         let _: () = conn
             .hset(&unread_key, &message.sender_id, 0i64)
             .await?;
+
+        // 通过 session_id 查询参与者列表，然后更新其他参与者的未读数
+        if let Some(domain_service) = &self.domain_service {
+            match domain_service.get_session_participants(session_id).await {
+                Ok(participant_ids) => {
+                    // 更新除发送者外的所有参与者的未读数
+                    for participant_id in participant_ids {
+                        if participant_id != message.sender_id {
+                            // 增加该参与者的未读数
+                            let current_unread: i64 = conn.hget(&unread_key, &participant_id).await.unwrap_or(0);
+                            let _: () = conn.hset(&unread_key, &participant_id, current_unread + 1).await?;
+                        }
+                    }
+                },
+                Err(e) => {
+                    warn!(error = ?e, session_id = %session_id, "Failed to get session participants");
+                }
+            }
+        } else {
+            warn!(session_id = %session_id, "Domain service not configured for session state repository");
+        }
 
         Ok(())
     }

@@ -11,6 +11,10 @@ pub mod metrics;
 pub mod service_names;
 pub mod tracing;
 pub mod utils;
+pub mod ack;
+
+// 重新导出 ACK 相关类型（AckServiceConfig 通过 ack::AckServiceConfig 访问）
+pub use ack::{AckManager, AckEvent, AckTimeoutEvent, AckType, AckStatus, ImportanceLevel, AckModule};
 
 pub use config::{
     AccessGatewayServiceConfig, ConfigManager, FlareAppConfig, KafkaClusterConfig,

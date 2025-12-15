@@ -3,10 +3,12 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
+use flare_proto::flare::push::v1::PushAckRequest;
 use flare_server_core::kafka::build_kafka_producer;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use async_trait::async_trait;
+use tracing::info;
 
 use crate::domain::repositories::PushEventPublisher;
 use crate::infrastructure::config::PushProxyConfig;
@@ -58,6 +60,30 @@ impl PushEventPublisher for KafkaPushEventPublisher {
             .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
             .await
             .map_err(|(err, _)| anyhow!("failed to enqueue push notification: {err}"))?;
+
+        Ok(())
+    }
+
+    async fn publish_ack(&self, request: &PushAckRequest) -> Result<()> {
+        let payload = request.encode_to_vec();
+        // 使用 message_id 作为 key，确保同一消息的 ACK 进入同一分区
+        let key = request.ack.as_ref()
+            .map(|ack| ack.message_id.as_str())
+            .unwrap_or("");
+        let record = FutureRecord::to(&self.config.ack_topic)
+            .payload(&payload)
+            .key(key);
+
+        self.producer
+            .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
+            .await
+            .map_err(|(err, _)| anyhow!("failed to enqueue push ACK: {err}"))?;
+
+        info!(
+            message_id = %request.ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or(""),
+            user_count = request.target_user_ids.len(),
+            "ACK published to Kafka"
+        );
 
         Ok(())
     }

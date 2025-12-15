@@ -150,12 +150,11 @@ pub trait HookAdapter: Send + Sync {
 impl HookAdapter for GrpcHookAdapter {
     async fn pre_send(
         &self,
-        ctx: &flare_im_core::HookContext,
-        draft: &mut flare_im_core::MessageDraft,
+        _ctx: &flare_im_core::HookContext,
+        _draft: &mut flare_im_core::MessageDraft,
     ) -> Result<flare_im_core::PreSendDecision> {
-        GrpcHookAdapter::pre_send(self, ctx, draft).await
+        GrpcHookAdapter::pre_send(self, _ctx, _draft).await
     }
-
     async fn post_send(
         &self,
         ctx: &flare_im_core::HookContext,
@@ -186,71 +185,71 @@ impl HookAdapter for GrpcHookAdapter {
 impl HookAdapter for WebhookHookAdapter {
     async fn pre_send(
         &self,
-        ctx: &flare_im_core::HookContext,
-        draft: &mut flare_im_core::MessageDraft,
+        _ctx: &flare_im_core::HookContext,
+        _draft: &mut flare_im_core::MessageDraft,
     ) -> Result<flare_im_core::PreSendDecision> {
         Ok(flare_im_core::PreSendDecision::Continue)
     }
 
     async fn post_send(
         &self,
-        ctx: &flare_im_core::HookContext,
-        record: &flare_im_core::MessageRecord,
-        draft: &flare_im_core::MessageDraft,
+        _ctx: &flare_im_core::HookContext,
+        _record: &flare_im_core::MessageRecord,
+        _draft: &flare_im_core::MessageDraft,
     ) -> Result<()> {
         Ok(())
     }
 
     async fn delivery(
         &self,
-        ctx: &flare_im_core::HookContext,
-        event: &flare_im_core::DeliveryEvent,
+        _ctx: &flare_im_core::HookContext,
+        _event: &flare_im_core::DeliveryEvent,
     ) -> Result<()> {
         Ok(())
     }
 
     async fn recall(
         &self,
-        ctx: &flare_im_core::HookContext,
-        event: &flare_im_core::RecallEvent,
+        _ctx: &flare_im_core::HookContext,
+        _event: &flare_im_core::RecallEvent,
     ) -> Result<flare_im_core::PreSendDecision> {
         Ok(flare_im_core::PreSendDecision::Continue)
     }
 }
-
 #[async_trait::async_trait]
 impl HookAdapter for LocalHookAdapter {
     async fn pre_send(
         &self,
-        ctx: &flare_im_core::HookContext,
-        draft: &mut flare_im_core::MessageDraft,
+        _ctx: &flare_im_core::HookContext,
+        _draft: &mut flare_im_core::MessageDraft,
     ) -> Result<flare_im_core::PreSendDecision> {
         Ok(flare_im_core::PreSendDecision::Continue)
     }
 
     async fn post_send(
         &self,
-        ctx: &flare_im_core::HookContext,
-        record: &flare_im_core::MessageRecord,
-        draft: &flare_im_core::MessageDraft,
+        _ctx: &flare_im_core::HookContext,
+        _record: &flare_im_core::MessageRecord,
+        _draft: &flare_im_core::MessageDraft,
     ) -> Result<()> {
         Ok(())
     }
 
     async fn delivery(
         &self,
-        ctx: &flare_im_core::HookContext,
-        event: &flare_im_core::DeliveryEvent,
+        _ctx: &flare_im_core::HookContext,
+        _event: &flare_im_core::DeliveryEvent,
     ) -> Result<()> {
         Ok(())
     }
 
     async fn recall(
         &self,
-        ctx: &flare_im_core::HookContext,
-        event: &flare_im_core::RecallEvent,
+        _ctx: &flare_im_core::HookContext,
+        _event: &flare_im_core::RecallEvent,
     ) -> Result<flare_im_core::PreSendDecision> {
         Ok(flare_im_core::PreSendDecision::Continue)
     }
 }
+
 

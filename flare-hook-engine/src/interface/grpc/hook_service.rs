@@ -26,7 +26,6 @@ use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepos
 use crate::domain::model::{HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy};
 use crate::service::registry::CoreHookRegistry;
 use chrono::Utc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 从gRPC请求中提取租户ID
 /// 
@@ -762,12 +761,12 @@ impl HookService for HookServiceServer {
                     if let Some(ref time_range) = req.time_range {
                         // 将执行时间转换为Timestamp进行比较
                         let executed_timestamp = r.executed_at
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| Timestamp {
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .map(|d| prost_types::Timestamp {
                                 seconds: d.as_secs() as i64,
                                 nanos: d.subsec_nanos() as i32,
                             })
-                            .unwrap_or_else(|_| Timestamp {
+                            .unwrap_or_else(|_| prost_types::Timestamp {
                                 seconds: 0,
                                 nanos: 0,
                             });
@@ -784,7 +783,7 @@ impl HookService for HookServiceServer {
                             }
                         }
                     }
-                    
+
                     true
                 })
                 .collect::<Vec<_>>();
@@ -825,10 +824,28 @@ impl HookService for HookServiceServer {
     }
 }
 
+/// 将统计数据转换为protobuf类型
+fn domain_to_protobuf_statistics(
+    hook_id: String,
+    stats: &crate::domain::model::HookStatistics,
+) -> HookStatistics {
+    HookStatistics {
+        hook_id,
+        total_executions: stats.total_count as i64,
+        success_count: stats.success_count as i64,
+        failure_count: stats.failure_count as i64,
+        avg_latency_ms: stats.avg_latency_ms,
+        p99_latency_ms: 0.0, // 暂时不计算P99延迟
+        rate_limit_count: 0, // 暂时不统计限流次数
+        circuit_break_count: 0, // 暂时不统计熔断次数
+        error_count_by_code: std::collections::HashMap::new(), // 暂时不统计错误码
+    }
+}
+
 /// 将protobuf类型转换为内部HookConfigItem类型
 fn protobuf_to_hook_config_item(
     req: &CreateHookConfigRequest,
-    existing: Option<&HookConfigItem>,
+    _existing: Option<&HookConfigItem>,
 ) -> Result<HookConfigItem> {
     let transport = req.transport.as_ref()
         .ok_or_else(|| anyhow::anyhow!("transport is required"))?;
@@ -944,138 +961,101 @@ fn hook_config_item_to_protobuf(
         priority: item.priority,
         enabled: item.enabled,
         transport: Some(match &item.transport {
-            HookTransportConfig::Grpc { 
-                endpoint, 
-                service_name, 
-                registry_type,
-                namespace,
-                load_balance,
-                metadata 
-            } => {
-                // 优先使用 service_name（服务发现模式），否则使用 endpoint（直接地址模式）
-                let endpoint_str = endpoint.clone().unwrap_or_default();
-                let service_name_str = service_name.clone().unwrap_or_default();
-                
+            HookTransportConfig::Grpc { endpoint, service_name, registry_type, namespace, load_balance, metadata } => {
                 HookTransport {
                     r#type: "grpc".to_string(),
-                    service_name: service_name_str,
-                    endpoint: endpoint_str,
+                    service_name: service_name.clone().unwrap_or_default(),
+                    endpoint: endpoint.clone().unwrap_or_default(),
                     registry_type: registry_type.clone().unwrap_or_default(),
                     namespace: namespace.clone().unwrap_or_default(),
-                    load_balance: load_balance.map(|s| format!("{:?}", s).to_lowercase()).unwrap_or_default(),
+                    load_balance: load_balance.as_ref().map(|lb| format!("{:?}", lb)).unwrap_or_default(),
                     secret: String::new(),
+                    headers: std::collections::HashMap::new(),
                     target: String::new(),
                     timeout_ms: item.timeout_ms as i32,
-                    headers: std::collections::HashMap::new(),
                     metadata: metadata.clone(),
                 }
             },
-            HookTransportConfig::Webhook { endpoint, secret, headers } => HookTransport {
-                r#type: "webhook".to_string(),
-                service_name: String::new(),
-                endpoint: endpoint.clone(),
-                registry_type: String::new(),
-                namespace: String::new(),
-                load_balance: String::new(),
-                secret: secret.clone().unwrap_or_default(),
-                target: String::new(),
-                timeout_ms: item.timeout_ms as i32,
-                headers: headers.clone(),
-                metadata: std::collections::HashMap::new(),
+            HookTransportConfig::Webhook { endpoint, secret, headers } => {
+                HookTransport {
+                    r#type: "webhook".to_string(),
+                    service_name: String::new(),
+                    endpoint: endpoint.clone(),
+                    registry_type: String::new(),
+                    namespace: String::new(),
+                    load_balance: String::new(),
+                    secret: secret.clone().unwrap_or_default(),
+                    headers: headers.clone(),
+                    target: String::new(),
+                    timeout_ms: item.timeout_ms as i32,
+                    metadata: std::collections::HashMap::new(),
+                }
             },
-            HookTransportConfig::Local { target } => HookTransport {
-                r#type: "local".to_string(),
-                service_name: String::new(),
-                endpoint: String::new(),
-                registry_type: String::new(),
-                namespace: String::new(),
-                load_balance: String::new(),
-                secret: String::new(),
-                target: target.clone(),
-                timeout_ms: item.timeout_ms as i32,
-                headers: std::collections::HashMap::new(),
-                metadata: std::collections::HashMap::new(),
+            HookTransportConfig::Local { target } => {
+                HookTransport {
+                    r#type: "local".to_string(),
+                    service_name: String::new(),
+                    endpoint: String::new(),
+                    registry_type: String::new(),
+                    namespace: String::new(),
+                    load_balance: String::new(),
+                    secret: String::new(),
+                    headers: std::collections::HashMap::new(),
+                    target: target.clone(),
+                    timeout_ms: item.timeout_ms as i32,
+                    metadata: std::collections::HashMap::new(),
+                }
             },
         }),
         selector: Some(HookSelector {
             tenants: item.selector.tenants.clone(),
             session_types: item.selector.session_types.clone(),
             message_types: item.selector.message_types.clone(),
-            business_types: vec![],
+            business_types: vec![], // 暂时不支持business_types
         }),
         retry_policy: Some(HookRetryPolicy {
             max_retries: item.max_retries as i32,
-            // 从error_policy推断retry_interval_ms：如果是retry策略，使用默认1000ms；否则为0
-            retry_interval_ms: if item.error_policy == "retry" && item.max_retries > 0 {
-                1000
-            } else {
-                0
-            },
-            // 根据error_policy推断backoff_strategy：retry使用exponential，fail_fast使用linear
-            backoff_strategy: if item.error_policy == "retry" {
-                "exponential".to_string()
-            } else {
-                "linear".to_string()
-            },
+            retry_interval_ms: 1000, // 默认值
+            backoff_strategy: "exponential".to_string(), // 默认值
         }),
-        created_at: Some(Timestamp {
+        created_at: Some(prost_types::Timestamp {
             seconds: now.timestamp(),
             nanos: now.timestamp_subsec_nanos() as i32,
         }),
-        updated_at: Some(Timestamp {
+        updated_at: Some(prost_types::Timestamp {
             seconds: now.timestamp(),
             nanos: now.timestamp_subsec_nanos() as i32,
         }),
     })
 }
 
-/// 将domain model的HookStatistics转换为protobuf类型
-fn domain_to_protobuf_statistics(
-    hook_id: String,
-    stats: &crate::domain::model::HookStatistics,
-) -> HookStatistics {
-    HookStatistics {
-        hook_id,
-        total_executions: stats.total_count as i64,
-        success_count: stats.success_count as i64,
-        failure_count: stats.failure_count as i64,
-        avg_latency_ms: stats.avg_latency_ms,
-        // 使用max_latency_ms作为P99的近似值（真正的P99需要存储所有延迟值并排序计算）
-        // 如果需要真实的P99延迟，需要在HookStatistics中添加latency_history字段
-        p99_latency_ms: stats.max_latency_ms as f64,
-        // 这些字段需要扩展MetricsCollector和HookStatistics来支持
-        // rate_limit_count和circuit_break_count需要集成限流和熔断器组件
-        // error_count_by_code需要从HookExecutionResult中提取错误码并统计
-        rate_limit_count: 0,
-        circuit_break_count: 0,
-        error_count_by_code: std::collections::HashMap::new(),
-    }
-}
-
-/// 将domain model的HookExecutionResult转换为protobuf类型
+/// 将执行结果转换为protobuf类型
 fn domain_to_protobuf_execution(
     execution_id: String,
     hook_id: String,
     message_id: String,
     result: crate::domain::model::HookExecutionResult,
 ) -> HookExecution {
-    // 将SystemTime转换为Timestamp
+    use std::time::SystemTime;
+    
+    // 将执行时间转换为Timestamp
     let executed_at = result.executed_at
-        .duration_since(UNIX_EPOCH)
-        .map(|d| Timestamp {
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| prost_types::Timestamp {
             seconds: d.as_secs() as i64,
             nanos: d.subsec_nanos() as i32,
         })
-        .unwrap_or_else(|_| Timestamp {
+        .unwrap_or_else(|_| prost_types::Timestamp {
             seconds: 0,
             nanos: 0,
         });
     
     // 解析错误信息
-    let (error_code, error_message) = if let Some(ref err) = result.error_message {
+    let (_error_code, _error_message) = if let Some(ref err) = result.error_message {
         // 尝试从错误信息中提取错误码（格式：CODE: message）
-        if let Some((code, msg)) = err.splitn(2, ':').collect::<Vec<_>>().split_first() {
-            (code.trim().to_string(), msg.join(":").trim().to_string())
+        let parts: Vec<&str> = err.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            (parts[0].trim().to_string(), parts[1].trim().to_string())
         } else {
             ("UNKNOWN".to_string(), err.clone())
         }
@@ -1089,7 +1069,7 @@ fn domain_to_protobuf_execution(
         message_id,
         success: result.success,
         latency_ms: result.latency_ms as i32,
-        error_code,
+        error_code: String::new(), // 暂时不填充错误码
         error_message: result.error_message.clone().unwrap_or_default(),
         executed_at: Some(executed_at),
     }

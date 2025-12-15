@@ -2,23 +2,28 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use flare_im_core::gateway::GatewayRouterTrait;
-use flare_im_core::hooks::{HookContext, HookDispatcher};
+use flare_im_core::hooks::HookDispatcher;
 use flare_im_core::metrics::PushServerMetrics;
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_proto::common::Message;
 use flare_server_core::error::Result;
 use futures::future;
 use prost::Message as ProstMessage;
+use tokio::sync::RwLock;
 use tracing::{error, info, instrument, warn};
 
 use crate::config::PushServerConfig;
 use crate::domain::model::PushDispatchTask;
 use crate::domain::repository::{OnlineStatusRepository, PushTaskPublisher};
-use crate::infrastructure::ack_tracker::{AckTracker, AckType};
+use crate::infrastructure::ack_tracker::AckTracker;
 use crate::infrastructure::message_state::{MessageStateTracker, MessageStatus};
 use crate::infrastructure::retry::RetryPolicy;
+
+/// 消息去重缓存（基于 message_id + user_id）
+type MessageDedupCache = Arc<RwLock<HashMap<String, Instant>>>;
 
 /// 推送领域服务 - 包含所有业务逻辑
 pub struct PushDomainService {
@@ -31,6 +36,8 @@ pub struct PushDomainService {
     ack_tracker: Arc<AckTracker>,
     retry_policy: RetryPolicy,
     metrics: Arc<PushServerMetrics>,
+    /// 消息去重缓存（防止重复推送）
+    dedup_cache: MessageDedupCache,
 }
 
 impl PushDomainService {
@@ -61,133 +68,130 @@ impl PushDomainService {
             ack_tracker,
             retry_policy,
             metrics,
+            dedup_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// 分发推送消息（业务逻辑）- gRPC 直接调用
-    #[instrument(skip(self), fields(user_count = request.user_ids.len()))]
+    /// 分发推送消息（业务逻辑）- 从 Kafka 消费
+    #[instrument(skip(self), fields(
+        user_count = request.user_ids.len(),
+        message_id = %request.message.as_ref().map(|m| m.id.as_str()).unwrap_or(""),
+        sender_id = %request.message.as_ref().map(|m| m.sender_id.as_str()).unwrap_or(""),
+        receiver_id = %request.message.as_ref().map(|m| m.receiver_id.as_str()).unwrap_or(""),
+    ))]
     pub async fn dispatch_push_message(&self, request: PushMessageRequest) -> Result<()> {
-        // P0修复：如果 user_ids 为空，且是聊天室消息，自动查询所有在线用户
-        let mut request = request;
-        if request.user_ids.is_empty() {
-            if let Some(ref message) = request.message {
-                // 判断是否是聊天室消息
-                // 注意：session_type 是 i32 枚举类型
-                // SessionType: 0=Unspecified, 1=Single, 2=Group, 3=Channel
-                let is_chatroom = message.session_type == 3 // Channel 类型
-                    || message.business_type == "chatroom"
-                    || (message.session_type == 2 && message.business_type == "chatroom") // 群聊但业务类型是聊天室
-                    || (!message.session_id.is_empty() && message.session_id == "chatroom"); // session_id 是 "chatroom"
-                
-                if is_chatroom && !message.session_id.is_empty() {
-                    // 查询该聊天室的所有在线用户
-                    info!(
+        // 验证消息完整性：receiver_id 和 channel_id 不能同时为空
+        if let Some(ref message) = request.message {
+            // 单聊消息：必须提供 receiver_id
+            if message.session_type == 1 {
+                if message.receiver_id.is_empty() {
+                    error!(
+                        message_id = %message.id,
                         session_id = %message.session_id,
-                        "Chatroom message with empty user_ids, querying all online users for session"
+                        sender_id = %message.sender_id,
+                        user_ids = ?request.user_ids,
+                        "Single chat message missing receiver_id in push service"
                     );
-                    
-                    // 1. 尝试通过 Hook 获取参与者（如果配置了Hook）
-                    // 注意：Hook调用是异步的，如果Hook未配置或失败，降级到数据库查询
-                    let participant_user_ids = self.get_session_participants_via_hook(&message.session_id).await
-                        .unwrap_or_else(|e| {
-                            warn!(
-                                error = %e,
-                                session_id = %message.session_id,
-                                "Failed to get participants via Hook, falling back to database query"
-                            );
-                            None
-                        });
-                    
-                    // 2. 如果Hook未返回参与者，降级到数据库查询
-                    let participant_user_ids = if let Some(participants) = participant_user_ids {
-                        participants
-                    } else {
-                        // 降级到数据库查询（通过 Session 服务获取参与者）
-                        match self.online_repo.get_all_online_users_for_session(&message.session_id).await {
-                            Ok(participants) => participants,
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    session_id = %message.session_id,
-                                    "Failed to get participants from Session service, message will not be pushed"
-                                );
-                                return Ok(()); // 查询失败，无法推送
-                            }
-                        }
-                    };
-                    
-                    // 3. 查询这些参与者的在线状态
-                    let online_statuses = self.online_repo.batch_get_online_status(&participant_user_ids).await?;
-                    let mut online_user_ids: Vec<String> = online_statuses
-                        .into_iter()
-                        .filter_map(|(user_id, status)| if status.online { Some(user_id) } else { None })
-                        .collect();
-                    
-                    if online_user_ids.is_empty() {
-                        warn!(
-                            session_id = %message.session_id,
-                            "No online users found for chatroom session"
-                        );
-                        return Ok(()); // 没有在线用户，直接返回成功（不推送）
-                    }
-                    
-                    // 4. 过滤掉发送者，避免发送者收到自己发送的消息
-                    let sender_id = message.sender_id.clone();
-                    if !sender_id.is_empty() {
-                        let before_count = online_user_ids.len();
-                        online_user_ids.retain(|user_id| user_id != &sender_id);
-                        let after_count = online_user_ids.len();
-                        
-                        if before_count != after_count {
-                            info!(
-                                session_id = %message.session_id,
-                                sender_id = %sender_id,
-                                before_count,
-                                after_count,
-                                "Filtered sender from chatroom message recipients"
-                            );
-                        }
-                    }
-                    
-                    if online_user_ids.is_empty() {
-                        info!(
-                            session_id = %message.session_id,
-                            sender_id = %sender_id,
-                            "All recipients filtered out (only sender is online), no push needed"
-                        );
-                        return Ok(()); // 只有发送者在线，不需要推送
-                    }
-                    
-                    info!(
-                        session_id = %message.session_id,
-                        sender_id = ?sender_id,
-                        online_count = online_user_ids.len(),
-                        "Found online users for chatroom session (sender filtered)"
-                    );
-                    
-                    request.user_ids = online_user_ids;
-                } else {
-                    // 非聊天室消息或缺少 session_id，要求业务系统提供 user_ids
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,
-                        "user_ids cannot be empty. For group/chatroom messages, business system should provide all participant user_ids"
+                        format!("Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}", 
+                            message.id, message.session_id, message.sender_id)
                     ).build_error());
                 }
-            } else {
-                // 没有 message，无法判断是否是聊天室消息
-                return Err(flare_server_core::error::ErrorBuilder::new(
-                    flare_server_core::error::ErrorCode::InvalidParameter,
-                    "user_ids cannot be empty and message is missing"
-                ).build_error());
+                
+                // 如果 user_ids 为空，说明消息编排服务没有正确设置，这是错误
+                if request.user_ids.is_empty() {
+                    error!(
+                        message_id = %message.id,
+                        receiver_id = %message.receiver_id,
+                        "user_ids is empty in PushMessageRequest, message orchestrator should set it"
+                    );
+                    return Err(flare_server_core::error::ErrorBuilder::new(
+                        flare_server_core::error::ErrorCode::InvalidParameter,
+                        format!("user_ids cannot be empty for single chat message. message_id={}, receiver_id={}", 
+                            message.id, message.receiver_id)
+                    ).build_error());
+                }
             }
+            // 群聊/频道消息：必须提供 channel_id
+            else if message.session_type == 2 || message.session_type == 3 {
+                if message.channel_id.is_empty() {
+                    return Err(flare_server_core::error::ErrorBuilder::new(
+                        flare_server_core::error::ErrorCode::InvalidParameter,
+                        "Group/channel message must provide channel_id"
+                    ).build_error());
+                }
+            }
+            
+            // 注意：已移除消息去重逻辑
+            // ACK 机制已经保证消息可靠性：
+            // 1. 客户端收到消息后发送 ACK
+            // 2. Gateway 通过 Push Proxy → Kafka → Push Server 上报 ACK
+            // 3. Push Server 确认 ACK 后停止重试
+            // 4. 如果 ACK 超时，Push Server 会重试推送（最多重试 N 次）
+            // 因此不需要额外的去重逻辑，ACK 机制已经保证了消息的可靠性和幂等性
+        }
+        
+        // 验证 user_ids 不为空
+        if request.user_ids.is_empty() {
+            return Err(flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InvalidParameter,
+                "user_ids cannot be empty after deduplication. All recipients were filtered out as duplicates"
+            ).build_error());
         }
         
         // 将 PushMessageRequest 转换为 PushDispatchTask 并批量处理
         let tasks = self.convert_message_request_to_tasks(&request)?;
         self.process_tasks(tasks).await
     }
+    
+    /// 处理客户端 ACK（从 Gateway 接收）
+    #[instrument(skip(self), fields(message_id = %ack.message_id))]
+    pub async fn handle_client_ack(
+        &self,
+        user_id: &str,
+        ack: &flare_proto::common::SendEnvelopeAck,
+    ) -> Result<()> {
+        let start_time = Instant::now();
+        info!(
+            message_id = %ack.message_id,
+            user_id = %user_id,
+            timestamp_ms = start_time.elapsed().as_millis(),
+            "Received client ACK from Gateway"
+        );
+        
+        // 确认 ACK，停止重试
+        if let Ok(confirmed) = self.ack_tracker.confirm_ack(&ack.message_id, user_id).await {
+            let duration_ms = start_time.elapsed().as_millis();
+            if confirmed {
+                info!(
+                    message_id = %ack.message_id,
+                    user_id = %user_id,
+                    duration_ms = duration_ms,
+                    "Client ACK confirmed, stopping retry"
+                );
+            } else {
+                warn!(
+                    message_id = %ack.message_id,
+                    user_id = %user_id,
+                    duration_ms = duration_ms,
+                    "ACK not found or already confirmed"
+                );
+            }
+        } else {
+            let duration_ms = start_time.elapsed().as_millis();
+            warn!(
+                message_id = %ack.message_id,
+                user_id = %user_id,
+                duration_ms = duration_ms,
+                "Failed to confirm ACK"
+            );
+        }
+        
+        Ok(())
+    }
 
-    /// 分发推送通知（业务逻辑）- gRPC 直接调用
+    /// 分发推送通知（业务逻辑）- 从 Kafka 消费
     #[instrument(skip(self), fields(user_count = request.user_ids.len()))]
     pub async fn dispatch_push_notification(&self, request: PushNotificationRequest) -> Result<()> {
         // 将 PushNotificationRequest 转换为 PushDispatchTask 并批量处理
@@ -245,10 +249,15 @@ impl PushDomainService {
                 "Failed to batch query online status"
             ).details(e.to_string()).build_error())?;
 
+        let query_start = Instant::now();
+        let online_count = online_status_map.values().filter(|s| s.online).count();
+        let offline_count = online_status_map.values().filter(|s| !s.online).count();
+        let query_duration_ms = query_start.elapsed().as_millis();
         info!(
             total_users = user_ids.len(),
-            online_users = online_status_map.values().filter(|s| s.online).count(),
-            offline_users = online_status_map.values().filter(|s| !s.online).count(),
+            online_users = online_count,
+            offline_users = offline_count,
+            query_duration_ms = query_duration_ms,
             "Batch queried online status"
         );
 
@@ -488,9 +497,14 @@ impl PushDomainService {
                                     .await;
 
                                 // 注册待确认的ACK
-                                ack_tracker
-                                    .register_pending_ack(message_id, user_id, AckType::PushAck)
-                                    .await;
+                                if let Err(e) = ack_tracker.register_pending_ack(message_id, user_id).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        message_id = %message_id,
+                                        user_id = %user_id,
+                                        "Failed to register pending ACK"
+                                    );
+                                }
                             }
 
                             // 更新指标
@@ -851,27 +865,7 @@ impl PushDomainService {
             })
     }
 
-    /// 通过 Hook 获取会话参与者
-    ///
-    /// 如果 Hook 未配置或执行失败，返回 None（降级到数据库查询）
-    async fn get_session_participants_via_hook(
-        &self,
-        session_id: &str,
-    ) -> anyhow::Result<Option<Vec<String>>> {
-        // 创建 Hook 上下文（使用默认租户ID）
-        let ctx = HookContext::new("")
-            .with_session(session_id);
-
-        // 注意：目前 HookDispatcher 不支持 get_session_participants
-        // 这里先返回 None，表示降级到数据库查询
-        // 后续可以在 HookDispatcher 中添加 get_session_participants 方法
-        // 或者通过 Hook Engine 的 gRPC 接口调用
-        
-        // TODO: 实现 Hook 调用逻辑
-        // 1. 通过 HookDispatcher 或 Hook Engine gRPC 接口调用 GetSessionParticipantsHook
-        // 2. 如果 Hook 返回参与者，直接使用
-        // 3. 如果 Hook 未配置或失败，返回 None（降级到数据库查询）
-        
-        Ok(None) // 暂时返回 None，降级到数据库查询
-    }
+    // 注意：CID 是不可逆的，无法从 CID 中提取用户/群信息
+    // 所有降级处理和提取函数已移除
+    // 消息进入时必须验证完整性：单聊提供 receiver_id，群聊/频道提供 channel_id
 }

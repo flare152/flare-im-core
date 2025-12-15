@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use flare_core::server::builder::flare::MessageListener;
 use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::domain::repository::SignalingGateway;
 use crate::infrastructure::messaging::message_router::MessageRouter;
@@ -48,8 +48,8 @@ pub struct LongConnectionHandler {
     session_service_client: Arc<Mutex<Option<flare_proto::session::session_service_client::SessionServiceClient<tonic::transport::Channel>>>>,
     session_service_discover: Arc<Mutex<Option<ServiceClient>>>,
     // 应用层服务
-    connection_app_service: Arc<ConnectionApplicationService>,
-    message_app_service: Arc<MessageApplicationService>,
+    pub connection_app_service: Arc<ConnectionApplicationService>,
+    pub message_app_service: Arc<MessageApplicationService>,
 }
 
 impl LongConnectionHandler {
@@ -64,6 +64,55 @@ impl LongConnectionHandler {
     ) -> Self {
         let server_handle = Arc::new(Mutex::new(None));
         let ack_sender = Arc::new(AckSender::new(server_handle.clone()));
+        
+        Self {
+            signaling_gateway,
+            gateway_id,
+            server_handle,
+            manager_trait: Arc::new(Mutex::new(None)),
+            ack_publisher,
+            message_router,
+            ack_sender,
+            metrics,
+            session_service_client: Arc::new(Mutex::new(None)),
+            session_service_discover: Arc::new(Mutex::new(None)),
+            connection_app_service,
+            message_app_service,
+        }
+    }
+    
+    /// 带占位符的新构造函数，用于解决循环依赖问题
+    pub fn new_with_placeholders(
+        signaling_gateway: Arc<dyn SignalingGateway>,
+        gateway_id: String,
+        ack_publisher: Option<Arc<dyn AckPublisher>>,
+        message_router: Option<Arc<MessageRouter>>,
+        metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
+    ) -> Self {
+        let server_handle = Arc::new(Mutex::new(None));
+        let ack_sender = Arc::new(AckSender::new(server_handle.clone()));
+        
+        // 创建临时的应用服务实例来打破循环依赖
+        let session_domain_service = Arc::new(crate::domain::service::session_domain_service::SessionDomainService::new(
+            signaling_gateway.clone(),
+            Arc::new(crate::domain::service::connection_quality_service::ConnectionQualityService::new()),
+            gateway_id.clone(),
+        ));
+        
+        let connection_app_service = Arc::new(ConnectionApplicationService::new(
+            session_domain_service.clone(),
+            Arc::new(crate::infrastructure::connection_query::ManagerConnectionQuery::new(Arc::new(flare_core::server::connection::ConnectionManager::new()))),
+            metrics.clone(),
+        ));
+        
+        let message_app_service = Arc::new(MessageApplicationService::new(
+            message_router.clone(),
+            ack_sender.clone(),
+            ack_publisher.clone(),
+            session_domain_service,
+            None, // session_service_client
+            gateway_id.clone(),
+        ));
         
         Self {
             signaling_gateway,
@@ -121,7 +170,17 @@ impl LongConnectionHandler {
     /// 
     /// 注意：Gateway 不存储会话信息，会话由 Signaling Online 管理
     /// 这里返回 None，session_id 应该从消息 payload 中提取
-    async fn get_session_id_for_connection(&self, _connection_id: &str) -> Option<String> {
+    async fn get_session_id_for_connection(&self, connection_id: &str) -> Option<String> {
+        // 从连接管理器中尝试获取会话ID
+        if let Some(ref manager) = *self.manager_trait.lock().await {
+            if let Some((_, conn_info)) = manager.get_connection(connection_id).await {
+                // 尝试从连接信息的元数据中获取会话ID
+                let metadata = &conn_info.metadata;
+                if let Some(session_id) = metadata.get("session_id") {
+                    return Some(session_id.clone());
+                }
+            }
+        }
         // Gateway 不维护会话信息，会话由 Signaling Online 管理
         // session_id 应该从消息 payload 中提取
         None
@@ -147,7 +206,7 @@ impl LongConnectionHandler {
 
     /// 刷新连接对应会话的心跳
     pub async fn refresh_session(&self, connection_id: &str) -> CoreResult<()> {
-        // Gateway 不维护会话信息，只获取 user_id 用于心跳
+        // Gateway 不维护会话信息，只获取 user_id 和 session_id 用于心跳
         let user_id = match self.user_id_for_connection(connection_id).await {
             Some(user_id) => user_id,
             None => {
@@ -155,10 +214,19 @@ impl LongConnectionHandler {
                 return Ok(());
             }
         };
+        
+        // 获取会话ID
+        let session_id = match self.get_session_id_for_connection(connection_id).await {
+            Some(session_id) => session_id,
+            None => {
+                // 没有会话ID，可能是连接还未完全建立，不记录错误
+                return Ok(());
+            }
+        };
 
         // 调用应用层服务刷新心跳，将 flare_server_core::error::Result 转换为 flare_core::common::error::Result
         self.connection_app_service
-            .refresh_session(connection_id, &user_id, "")
+            .refresh_session(connection_id, &user_id, &session_id)
             .await
             .map_err(|e| CoreFlareError::system(format!("Failed to refresh session: {}", e)))
     }
@@ -230,6 +298,90 @@ impl LongConnectionHandler {
         );
         Ok(())
     }
+
+    /// 推送数据包到指定连接
+    pub async fn push_packet_to_connection(
+        &self,
+        connection_id: &str,
+        packet: &flare_proto::common::ServerPacket,
+    ) -> CoreResult<()> {
+        let handle_guard = self.server_handle.lock().await;
+        let handle = match handle_guard.as_ref() {
+            Some(handle) => handle,
+            None => {
+                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+            }
+        };
+
+        // 将 ServerPacket 序列化为字节
+        let mut packet_data = Vec::new();
+        packet.encode(&mut packet_data)
+            .map_err(|e| CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e)))?;
+
+        // 创建推送命令
+        let cmd = MessageCommand {
+            r#type: 0, // 普通消息类型
+            message_id: generate_message_id(),
+            payload: packet_data,
+            metadata: Default::default(),
+            seq: 0,
+        };
+
+        let message_id = cmd.message_id.clone();
+        let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
+
+        handle.send_to(connection_id, &frame).await
+            .map_err(|e| CoreFlareError::system(format!("Failed to send packet: {}", e)))?;
+
+        debug!(
+            connection_id = %connection_id,
+            message_id = %message_id,
+            "ServerPacket pushed to connection"
+        );
+        Ok(())
+    }
+
+    /// 推送数据包到指定用户的所有连接
+    pub async fn push_packet_to_user(
+        &self,
+        user_id: &str,
+        packet: &flare_proto::common::ServerPacket,
+    ) -> CoreResult<()> {
+        let handle_guard = self.server_handle.lock().await;
+        let handle = match handle_guard.as_ref() {
+            Some(handle) => handle,
+            None => {
+                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+            }
+        };
+
+        // 将 ServerPacket 序列化为字节
+        let mut packet_data = Vec::new();
+        packet.encode(&mut packet_data)
+            .map_err(|e| CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e)))?;
+
+        // 创建推送命令
+        let cmd = MessageCommand {
+            r#type: 0, // 普通消息类型
+            message_id: generate_message_id(),
+            payload: packet_data,
+            metadata: Default::default(),
+            seq: 0,
+        };
+
+        let message_id = cmd.message_id.clone();
+        let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
+
+        handle.send_to_user(user_id, &frame).await
+            .map_err(|e| CoreFlareError::system(format!("Failed to send packet: {}", e)))?;
+
+        info!(
+            user_id = %user_id,
+            message_id = %message_id,
+            "ServerPacket pushed to user"
+        );
+        Ok(())
+    }
 }
 
 // 实现 MessageListener（用于 FlareServerBuilder）
@@ -267,24 +419,56 @@ impl ConnectionHandler for LongConnectionHandler {
 impl LongConnectionHandler {
     /// 处理消息帧的内部实现（协议适配层）
     async fn handle_frame_impl(&self, frame: &Frame, connection_id: &str) -> CoreResult<Option<Frame>> {
-        debug!(
-            "Received frame from connection {}: {:?}",
-            connection_id, frame
+        let start_time = std::time::Instant::now();
+        info!(
+            "[LongConnectionHandler] handle_frame_impl: 收到 Frame, connection_id={}, frame.message_id={}",
+            connection_id, frame.message_id
         );
 
         if let Some(cmd) = &frame.command {
             if let Some(CommandType::Message(msg_cmd)) = &cmd.r#type {
                 let message_type = msg_cmd.r#type;
+                debug!(
+                    "[LongConnectionHandler] handle_frame_impl: 消息类型={}, message_id={}, connection_id={}",
+                    message_type, msg_cmd.message_id, connection_id
+                );
 
                 // 处理客户端ACK消息（Type::Ack = 1）
                 if message_type == 1 {
+                    debug!(
+                        "[LongConnectionHandler] handle_frame_impl: 处理 ACK 消息, connection_id={}",
+                        connection_id
+                    );
                     self.handle_client_ack(msg_cmd, connection_id).await?;
                     return Ok(None);
                 }
 
                 // 处理普通消息（Type::Send = 0）
                 if message_type == 0 {
-                    self.handle_message_send(frame, msg_cmd, connection_id).await?;
+                    let message_id = msg_cmd.message_id.clone();
+                    debug!(
+                        connection_id = %connection_id,
+                        message_id = %message_id,
+                        "Processing message send request"
+                    );
+                    match self.handle_message_send(frame, msg_cmd, connection_id).await {
+                        Ok(_) => {
+                            debug!(
+                                connection_id = %connection_id,
+                                message_id = %message_id,
+                                "Message send request completed successfully"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                connection_id = %connection_id,
+                                message_id = %message_id,
+                                error = %e,
+                                "Message send request failed"
+                            );
+                            return Err(e);
+                        }
+                    }
                     if let Err(err) = self.refresh_session(connection_id).await {
                         warn!(?err, %connection_id, "failed to refresh session heartbeat");
                     }
@@ -366,6 +550,11 @@ impl LongConnectionHandler {
             }
         }
 
+        let duration_ms = start_time.elapsed().as_millis();
+        debug!(
+            "[LongConnectionHandler] handle_frame_impl: 处理完成, connection_id={}, frame.message_id={}, duration_ms={}",
+            connection_id, frame.message_id, duration_ms
+        );
         Ok(None)
     }
 
@@ -533,19 +722,64 @@ impl LongConnectionHandler {
         msg_cmd: &MessageCommand,
         connection_id: &str,
     ) -> CoreResult<()> {
+        debug!(
+            "[LongConnectionHandler] handle_message_send: 开始处理, connection_id={}, message_id={}",
+            connection_id, msg_cmd.message_id
+        );
+        
         let user_id = self
             .user_id_for_connection(connection_id)
             .await
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| {
+                warn!(
+                    "[LongConnectionHandler] handle_message_send: 无法获取 user_id, connection_id={}",
+                    connection_id
+                );
+                "unknown".to_string()
+            });
+
+        if user_id == "unknown" {
+            error!(
+                "[LongConnectionHandler] handle_message_send: user_id 为 unknown, connection_id={}, message_id={}",
+                connection_id, msg_cmd.message_id
+            );
+            return Err(CoreFlareError::system(format!(
+                "Cannot process message: user_id is unknown for connection_id={}",
+                connection_id
+            )));
+        }
+
+        debug!(
+            "[LongConnectionHandler] handle_message_send: user_id={}, connection_id={}, message_id={}",
+            user_id, connection_id, msg_cmd.message_id
+        );
 
         // 获取租户ID
         let tenant_id = self.get_tenant_id_for_connection(connection_id).await;
 
         // 委托给应用层服务处理
-        self.message_app_service
+        debug!(
+            "[LongConnectionHandler] handle_message_send: 准备调用 message_app_service.handle_message_send, connection_id={}, user_id={}, message_id={}",
+            connection_id, user_id, msg_cmd.message_id
+        );
+        match self.message_app_service
             .handle_message_send(connection_id, &user_id, msg_cmd, tenant_id.as_deref())
-            .await?;
-
+            .await
+        {
+            Ok(_) => {
+                debug!(
+                    "[LongConnectionHandler] handle_message_send: message_app_service.handle_message_send 成功, connection_id={}, user_id={}, message_id={}",
+                    connection_id, user_id, msg_cmd.message_id
+                );
         Ok(())
+            }
+            Err(e) => {
+                error!(
+                    "[LongConnectionHandler] handle_message_send: message_app_service.handle_message_send 失败, connection_id={}, user_id={}, message_id={}, error={}",
+                    connection_id, user_id, msg_cmd.message_id, e
+                );
+                Err(e)
+            }
+        }
     }
 }

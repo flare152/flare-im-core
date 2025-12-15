@@ -1,6 +1,7 @@
 //! 命令结构体定义（Command DTO）
 
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
+use flare_proto::flare::push::v1::PushAckRequest;
 
 /// 入队推送消息命令
 #[derive(Debug, Clone)]
@@ -14,4 +15,11 @@ pub struct EnqueueMessageCommand {
 pub struct EnqueueNotificationCommand {
     /// 原始请求
     pub request: PushNotificationRequest,
+}
+
+/// 入队 ACK 命令
+#[derive(Debug, Clone)]
+pub struct EnqueueAckCommand {
+    /// 原始请求
+    pub request: PushAckRequest,
 }

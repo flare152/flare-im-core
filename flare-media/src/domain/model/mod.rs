@@ -300,3 +300,42 @@ pub fn infer_file_category(file_type_hint: Option<&str>, mime_type: &str) -> Str
     category.to_string()
 }
 
+/// 媒体处理操作
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaOperation {
+    /// 操作类型
+    #[serde(rename = "type")]
+    pub r#type: String,
+    
+    /// 操作参数
+    pub parameters: std::collections::HashMap<String, serde_json::Value>,
+    
+    /// 输出格式
+    pub output_format: Option<String>,
+    
+    /// 质量参数
+    pub quality: Option<String>,
+}
+
+/// 媒体处理结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaProcessingResult {
+    /// 操作类型
+    pub operation_type: String,
+    
+    /// 输出URL
+    pub output_url: String,
+    
+    /// 输出文件大小（字节）
+    pub output_size: Option<u64>,
+    
+    /// 处理耗时（毫秒）
+    pub processing_time_ms: u64,
+    
+    /// 是否成功
+    pub success: bool,
+    
+    /// 错误消息
+    pub error_message: Option<String>,
+}
+

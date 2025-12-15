@@ -9,20 +9,23 @@ use flare_proto::push::{
     QueryPushStatusResponse, SchedulePushRequest, SchedulePushResponse,
     UpdateTemplateRequest, UpdateTemplateResponse,
 };
+use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
 use crate::application::commands::{EnqueueMessageCommand, EnqueueNotificationCommand};
 use crate::application::handlers::PushCommandHandler;
+use flare_im_core::hooks::HookDispatcher;
 
 #[derive(Clone)]
 pub struct PushGrpcHandler {
     command_handler: Arc<PushCommandHandler>,
+    hook_dispatcher: HookDispatcher,
 }
 
 impl PushGrpcHandler {
-    pub fn new(command_handler: Arc<PushCommandHandler>) -> Self {
-        Self { command_handler }
+    pub fn new(command_handler: Arc<PushCommandHandler>, hook_dispatcher: HookDispatcher) -> Self {
+        Self { command_handler, hook_dispatcher }
     }
 
     pub async fn push_message(
@@ -50,6 +53,21 @@ impl PushGrpcHandler {
             Ok(resp) => Ok(Response::new(resp)),
             Err(err) => {
                 error!(?err, "failed to enqueue push notification");
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    pub async fn push_ack(
+        &self,
+        request: Request<PushAckRequest>,
+    ) -> Result<Response<PushAckResponse>, Status> {
+        let req = request.into_inner();
+        let command = crate::application::commands::EnqueueAckCommand { request: req };
+        match self.command_handler.handle_enqueue_ack(command).await {
+            Ok(resp) => Ok(Response::new(resp)),
+            Err(err) => {
+                error!(?err, "failed to enqueue push ACK");
                 Err(Status::internal(err.to_string()))
             }
         }
@@ -128,4 +146,19 @@ impl PushService for PushGrpcHandler {
     ) -> Result<Response<QueryPushStatusResponse>, Status> {
         Err(Status::unimplemented("query_push_status not implemented yet"))
     }
+
+    // 注意：push_ack 方法需要 proto 代码重新生成后才能添加到 trait 中
+    // 等 proto 代码重新生成后（包含 PushAck RPC），取消下面的注释
+    async fn push_ack(
+        &self,
+        request: Request<PushAckRequest>,
+    ) -> Result<Response<PushAckResponse>, Status> {
+        info!(
+            "Push ACK request: {} users, message_id: {}",
+            request.get_ref().target_user_ids.len(),
+            request.get_ref().ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or("")
+        );
+        self.push_ack(request).await
+    }
+
 }

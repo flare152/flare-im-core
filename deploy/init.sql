@@ -181,16 +181,17 @@ CREATE TABLE messages (
     receiver_ids JSONB,                    -- 接收者ID列表
     content BYTEA,                         -- 消息内容（二进制）
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    extra JSONB DEFAULT '{}',             -- 扩展字段（消息类型、业务类型等）
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     
     -- 消息状态和元数据（可选字段，兼容现有代码）
     message_type TEXT,                     -- 消息类型（text, image, video等）
     content_type TEXT,                     -- 内容类型（MIME类型）
     business_type TEXT,                    -- 业务类型
-    status TEXT DEFAULT 'sent',            -- 消息状态（sending, sent, delivered, read, failed）
+    status TEXT DEFAULT 'sent',            -- 消息状态（created, sent, delivered, read, failed, recalled）
+    status_changed_at TIMESTAMP WITH TIME ZONE, -- 状态变更时间
     is_recalled BOOLEAN DEFAULT FALSE,     -- 是否已撤回
     recalled_at TIMESTAMP WITH TIME ZONE,  -- 撤回时间
+    recall_reason TEXT,                    -- 撤回原因
     is_burn_after_read BOOLEAN DEFAULT FALSE, -- 是否阅后即焚
     burn_after_seconds INTEGER,           -- 阅后即焚秒数
     visibility JSONB,                      -- 用户级别可见性 {user_id: status}
@@ -204,6 +205,23 @@ CREATE TABLE messages (
     expire_at TIMESTAMP WITH TIME ZONE,    -- 阅后即焚过期时间
     deleted_by_sender BOOLEAN DEFAULT FALSE, -- 是否被发送方删除（用于审计）
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, -- 更新时间（用于消息编辑、撤回等）
+    
+    -- ACK机制相关字段（优化后的ACK状态管理）
+    ack_status TEXT DEFAULT 'pending',         -- ACK状态（pending, received, processed）
+    ack_received BOOLEAN DEFAULT FALSE,         -- ACK是否已收到
+    ack_timestamp TIMESTAMP WITH TIME ZONE,     -- ACK时间戳
+    ack_user_ids JSONB,                        -- 已确认ACK的用户ID列表
+    
+    -- 消息操作历史记录（用于审计和追踪）
+    operation_history JSONB DEFAULT '[]'::jsonb, -- 操作历史记录 [{operation_type, operator_id, timestamp, metadata}]
+    
+    -- 与proto文件一致的额外字段
+    source TEXT,                           -- 消息来源（user, system, bot, admin）
+    tenant_id TEXT,                        -- 租户ID
+    attributes JSONB DEFAULT '{}'::jsonb,  -- 业务扩展字段
+    extra JSONB DEFAULT '{}'::jsonb,       -- 系统扩展字段
+    tags TEXT[] DEFAULT '{}',              -- 标签列表
+    offline_push_info JSONB,               -- 离线推送信息
     
     -- 复合主键：TimescaleDB要求分区列必须包含在主键中
     -- 使用 (timestamp, id) 顺序以优化时序查询性能
@@ -221,9 +239,11 @@ COMMENT ON COLUMN messages.extra IS '扩展字段（JSON格式）';
 COMMENT ON COLUMN messages.message_type IS '消息类型（text, image, video, audio, file等）';
 COMMENT ON COLUMN messages.content_type IS '内容类型（MIME类型）';
 COMMENT ON COLUMN messages.business_type IS '业务类型';
-COMMENT ON COLUMN messages.status IS '消息状态（sending, sent, delivered, read, failed）';
+COMMENT ON COLUMN messages.status IS '消息状态（created, sent, delivered, read, failed, recalled）';
+COMMENT ON COLUMN messages.status_changed_at IS '状态变更时间';
 COMMENT ON COLUMN messages.is_recalled IS '是否已撤回';
 COMMENT ON COLUMN messages.recalled_at IS '撤回时间';
+COMMENT ON COLUMN messages.recall_reason IS '撤回原因';
 COMMENT ON COLUMN messages.is_burn_after_read IS '是否阅后即焚';
 COMMENT ON COLUMN messages.burn_after_seconds IS '阅后即焚秒数';
 COMMENT ON COLUMN messages.visibility IS '用户级别可见性（JSON格式）';
@@ -235,6 +255,17 @@ COMMENT ON COLUMN messages.seq IS '会话内递增序号（用于消息顺序和
 COMMENT ON COLUMN messages.expire_at IS '阅后即焚过期时间';
 COMMENT ON COLUMN messages.deleted_by_sender IS '是否被发送方删除（用于审计）';
 COMMENT ON COLUMN messages.updated_at IS '更新时间（用于消息编辑、撤回等）';
+COMMENT ON COLUMN messages.ack_status IS 'ACK状态（pending, received, processed）';
+COMMENT ON COLUMN messages.ack_received IS 'ACK是否已收到';
+COMMENT ON COLUMN messages.ack_timestamp IS 'ACK时间戳';
+COMMENT ON COLUMN messages.ack_user_ids IS '已确认ACK的用户ID列表';
+COMMENT ON COLUMN messages.operation_history IS '操作历史记录（JSONB数组），包含操作类型、操作者、时间等信息';
+COMMENT ON COLUMN messages.source IS '消息来源（user, system, bot, admin）';
+COMMENT ON COLUMN messages.tenant_id IS '租户ID';
+COMMENT ON COLUMN messages.attributes IS '业务扩展字段';
+COMMENT ON COLUMN messages.extra IS '系统扩展字段';
+COMMENT ON COLUMN messages.tags IS '标签列表';
+COMMENT ON COLUMN messages.offline_push_info IS '离线推送信息';
 
 -- 消息表索引
 -- 注意：主键已包含 (timestamp, id)，无需单独创建 timestamp 和 id 索引
@@ -245,10 +276,18 @@ CREATE INDEX IF NOT EXISTS idx_messages_id_unique ON messages(id); -- 唯一索�
 CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type);
 CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS idx_messages_status_changed_at ON messages(status_changed_at) WHERE status_changed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_is_recalled ON messages(is_recalled);
 CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_expire_at ON messages(expire_at) WHERE expire_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_ack_status ON messages(ack_status) WHERE ack_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_ack_received ON messages(ack_received) WHERE ack_received = true;
+CREATE INDEX IF NOT EXISTS idx_messages_ack_timestamp ON messages(ack_timestamp) WHERE ack_timestamp IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_ack_user_ids ON messages USING GIN(ack_user_ids) WHERE ack_user_ids IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source) WHERE source IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_tenant_id ON messages(tenant_id) WHERE tenant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_tags ON messages USING GIN(tags) WHERE tags IS NOT NULL AND tags != '{}';
 
 -- 将消息表转换为 TimescaleDB 超表（Hypertable）
 -- COMMENT: 按时间分区，每个分区默认 1 天，用于高效存储和查询时序消息数据
@@ -283,6 +322,158 @@ CALL add_columnstore_policy('messages', after => INTERVAL '30 days');
 -- COMMENT: 90天后的数据可以归档到对象存储或删除
 -- SELECT add_retention_policy('messages', INTERVAL '90 days');
 
+-- ACK归档记录表（AckArchiveRecords）
+-- COMMENT: ACK归档记录表，用于审计和分析的ACK日志归档
+DROP TABLE IF EXISTS ack_archive_records CASCADE;
+CREATE TABLE ack_archive_records (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    ack_type TEXT NOT NULL,
+    ack_status TEXT NOT NULL,
+    timestamp BIGINT NOT NULL,
+    importance_level SMALLINT DEFAULT 1 CHECK (importance_level BETWEEN 1 AND 3),
+    metadata JSONB,
+    archived_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())
+);
+
+COMMENT ON TABLE ack_archive_records IS 'ACK归档记录表（用于审计和分析的ACK日志归档）';
+COMMENT ON COLUMN ack_archive_records.id IS '记录ID（自增主键）';
+COMMENT ON COLUMN ack_archive_records.message_id IS '消息ID';
+COMMENT ON COLUMN ack_archive_records.user_id IS '用户ID';
+COMMENT ON COLUMN ack_archive_records.ack_type IS 'ACK类型';
+COMMENT ON COLUMN ack_archive_records.ack_status IS 'ACK状态';
+COMMENT ON COLUMN ack_archive_records.timestamp IS '时间戳';
+COMMENT ON COLUMN ack_archive_records.importance_level IS '重要性等级：1-低，2-中，3-高';
+COMMENT ON COLUMN ack_archive_records.metadata IS '元数据';
+COMMENT ON COLUMN ack_archive_records.archived_at IS '归档时间';
+
+-- ACK归档记录表索引
+CREATE INDEX IF NOT EXISTS idx_ack_archive_message_id ON ack_archive_records (message_id);
+CREATE INDEX IF NOT EXISTS idx_ack_archive_user_id ON ack_archive_records (user_id);
+CREATE INDEX IF NOT EXISTS idx_ack_archive_timestamp_desc ON ack_archive_records (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ack_archive_importance_level ON ack_archive_records (importance_level);
+CREATE INDEX IF NOT EXISTS idx_ack_archive_message_user_type ON ack_archive_records (message_id, user_id, ack_type);
+
+-- 消息可靠性保障表（MessageReliability）
+-- COMMENT: 消息可靠性保障表，用于跟踪消息的发送、确认和重试状态
+DROP TABLE IF EXISTS message_reliability CASCADE;
+CREATE TABLE message_reliability (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,               -- 消息ID
+    session_id TEXT NOT NULL,               -- 会话ID
+    sender_id TEXT NOT NULL,                -- 发送者ID
+    recipient_ids JSONB,                    -- 接收者ID列表
+    send_attempts INTEGER DEFAULT 0,        -- 发送尝试次数
+    max_send_attempts INTEGER DEFAULT 3,    -- 最大发送尝试次数
+    last_send_attempt TIMESTAMP WITH TIME ZONE, -- 最后发送尝试时间
+    delivery_status TEXT DEFAULT 'pending', -- 投递状态（pending, delivered, failed）
+    confirmation_status TEXT DEFAULT 'pending', -- 确认状态（pending, confirmed, failed）
+    retry_count INTEGER DEFAULT 0,          -- 重试次数
+    max_retry_count INTEGER DEFAULT 5,      -- 最大重试次数
+    next_retry_at TIMESTAMP WITH TIME ZONE, -- 下次重试时间
+    error_code TEXT,                        -- 错误码
+    error_message TEXT,                     -- 错误信息
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 唯一约束：每个消息只能有一条记录
+    UNIQUE(message_id)
+);
+
+-- 系统监控指标表（SystemMetrics）
+-- COMMENT: 系统监控指标表，用于收集和存储系统性能指标
+DROP TABLE IF EXISTS system_metrics CASCADE;
+CREATE TABLE system_metrics (
+    id BIGSERIAL PRIMARY KEY,
+    metric_name TEXT NOT NULL,              -- 指标名称
+    metric_value DOUBLE PRECISION,          -- 指标值
+    metric_unit TEXT,                       -- 指标单位
+    metric_type TEXT,                       -- 指标类型（counter, gauge, histogram, summary）
+    service_name TEXT,                      -- 服务名称
+    node_id TEXT,                           -- 节点ID
+    tenant_id TEXT,                         -- 租户ID
+    tags JSONB,                             -- 标签
+    recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 记录时间
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+COMMENT ON TABLE message_reliability IS '消息可靠性保障表（用于跟踪消息的发送、确认和重试状态）';
+COMMENT ON COLUMN message_reliability.id IS '记录ID（自增主键）';
+COMMENT ON COLUMN message_reliability.message_id IS '消息ID';
+COMMENT ON COLUMN message_reliability.session_id IS '会话ID';
+COMMENT ON COLUMN message_reliability.sender_id IS '发送者ID';
+COMMENT ON COLUMN message_reliability.recipient_ids IS '接收者ID列表';
+COMMENT ON COLUMN message_reliability.send_attempts IS '发送尝试次数';
+COMMENT ON COLUMN message_reliability.max_send_attempts IS '最大发送尝试次数';
+COMMENT ON COLUMN message_reliability.last_send_attempt IS '最后发送尝试时间';
+COMMENT ON COLUMN message_reliability.delivery_status IS '投递状态（pending, delivered, failed）';
+COMMENT ON COLUMN message_reliability.confirmation_status IS '确认状态（pending, confirmed, failed）';
+COMMENT ON COLUMN message_reliability.retry_count IS '重试次数';
+COMMENT ON COLUMN message_reliability.max_retry_count IS '最大重试次数';
+COMMENT ON COLUMN message_reliability.next_retry_at IS '下次重试时间';
+COMMENT ON COLUMN message_reliability.error_code IS '错误码';
+COMMENT ON COLUMN message_reliability.error_message IS '错误信息';
+COMMENT ON COLUMN message_reliability.created_at IS '创建时间';
+COMMENT ON COLUMN message_reliability.updated_at IS '更新时间';
+
+COMMENT ON TABLE system_metrics IS '系统监控指标表（用于收集和存储系统性能指标）';
+COMMENT ON COLUMN system_metrics.id IS '记录ID（自增主键）';
+COMMENT ON COLUMN system_metrics.metric_name IS '指标名称';
+COMMENT ON COLUMN system_metrics.metric_value IS '指标值';
+COMMENT ON COLUMN system_metrics.metric_unit IS '指标单位';
+COMMENT ON COLUMN system_metrics.metric_type IS '指标类型（counter, gauge, histogram, summary）';
+COMMENT ON COLUMN system_metrics.service_name IS '服务名称';
+COMMENT ON COLUMN system_metrics.node_id IS '节点ID';
+COMMENT ON COLUMN system_metrics.tenant_id IS '租户ID';
+COMMENT ON COLUMN system_metrics.tags IS '标签';
+COMMENT ON COLUMN system_metrics.recorded_at IS '记录时间';
+COMMENT ON COLUMN system_metrics.created_at IS '创建时间';
+
+-- 消息可靠性保障表索引
+CREATE INDEX IF NOT EXISTS idx_message_reliability_message_id ON message_reliability(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_session_id ON message_reliability(session_id);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_sender_id ON message_reliability(sender_id);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_delivery_status ON message_reliability(delivery_status);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_confirmation_status ON message_reliability(confirmation_status);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_next_retry_at ON message_reliability(next_retry_at) WHERE next_retry_at IS NOT NULL;
+
+-- 系统监控指标表索引
+CREATE INDEX IF NOT EXISTS idx_system_metrics_metric_name ON system_metrics(metric_name);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_service_name ON system_metrics(service_name);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_node_id ON system_metrics(node_id);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_tenant_id ON system_metrics(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_recorded_at ON system_metrics(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_system_metrics_tags ON system_metrics USING GIN(tags) WHERE tags IS NOT NULL;
+
+-- 消息可靠性保障表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_message_reliability_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_message_reliability_updated_at
+    BEFORE UPDATE ON message_reliability
+    FOR EACH ROW
+    EXECUTE FUNCTION update_message_reliability_updated_at();
+
+-- 系统监控指标表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_system_metrics_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.created_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_system_metrics_updated_at
+    BEFORE INSERT ON system_metrics
+    FOR EACH ROW
+    EXECUTE FUNCTION update_system_metrics_updated_at();
+
 -- ============================================================================
 -- 3. 会话模块 (Session Module)
 -- ============================================================================
@@ -293,7 +484,7 @@ CALL add_columnstore_policy('messages', after => INTERVAL '30 days');
 DROP TABLE IF EXISTS sessions CASCADE;
 CREATE TABLE sessions (
     session_id TEXT PRIMARY KEY,
-    session_type TEXT NOT NULL,            -- 会话类型（single, group, customer等）
+    session_type TEXT NOT NULL,            -- 会话类型（single, group, channel等）
     business_type TEXT NOT NULL,          -- 业务类型
     display_name TEXT,                     -- 会话显示名称
     attributes JSONB,                     -- 会话属性（JSON格式）
@@ -306,12 +497,28 @@ CREATE TABLE sessions (
     -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
     last_message_id TEXT,                  -- 最后一条消息ID
     last_message_seq BIGINT,               -- 最后一条消息的seq（用于未读数计算）
-    is_destroyed BOOLEAN DEFAULT FALSE     -- 会话是否被解散（群聊）
+    is_destroyed BOOLEAN DEFAULT FALSE,    -- 会话是否被解散（群聊）
+    
+    -- 与proto文件一致的额外字段
+    description TEXT,                      -- 会话描述
+    avatar_url TEXT,                       -- 会话头像URL
+    owner_id TEXT,                         -- 会话拥有者ID
+    max_members INTEGER,                   -- 最大成员数
+    is_public BOOLEAN DEFAULT FALSE,       -- 是否公开会话
+    join_approval_required BOOLEAN DEFAULT FALSE, -- 加入是否需要审批
+    enable_history_browsing BOOLEAN DEFAULT TRUE, -- 是否允许浏览历史消息
+    enable_message_reactions BOOLEAN DEFAULT TRUE, -- 是否允许消息反应
+    enable_message_edit BOOLEAN DEFAULT TRUE, -- 是否允许编辑消息
+    enable_message_delete BOOLEAN DEFAULT TRUE, -- 是否允许删除消息
+    message_ttl_seconds INTEGER,           -- 消息生存时间（秒）
+    notification_level TEXT DEFAULT 'all', -- 通知级别（all, mention, none）
+    tags TEXT[] DEFAULT '{}',              -- 标签列表
+    custom_data JSONB DEFAULT '{}'::jsonb  -- 自定义数据
 );
 
 COMMENT ON TABLE sessions IS '会话表';
 COMMENT ON COLUMN sessions.session_id IS '会话唯一标识符';
-COMMENT ON COLUMN sessions.session_type IS '会话类型（single: 单聊, group: 群聊, customer: 客服等）';
+COMMENT ON COLUMN sessions.session_type IS '会话类型（single: 单聊, group: 群聊, channel: 频道）';
 COMMENT ON COLUMN sessions.business_type IS '业务类型';
 COMMENT ON COLUMN sessions.display_name IS '会话显示名称';
 COMMENT ON COLUMN sessions.attributes IS '会话属性（JSON格式）';
@@ -323,6 +530,20 @@ COMMENT ON COLUMN sessions.metadata IS '扩展元数据（JSON格式）';
 COMMENT ON COLUMN sessions.last_message_id IS '最后一条消息ID';
 COMMENT ON COLUMN sessions.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
 COMMENT ON COLUMN sessions.is_destroyed IS '会话是否被解散（群聊）';
+COMMENT ON COLUMN sessions.description IS '会话描述';
+COMMENT ON COLUMN sessions.avatar_url IS '会话头像URL';
+COMMENT ON COLUMN sessions.owner_id IS '会话拥有者ID';
+COMMENT ON COLUMN sessions.max_members IS '最大成员数';
+COMMENT ON COLUMN sessions.is_public IS '是否公开会话';
+COMMENT ON COLUMN sessions.join_approval_required IS '加入是否需要审批';
+COMMENT ON COLUMN sessions.enable_history_browsing IS '是否允许浏览历史消息';
+COMMENT ON COLUMN sessions.enable_message_reactions IS '是否允许消息反应';
+COMMENT ON COLUMN sessions.enable_message_edit IS '是否允许编辑消息';
+COMMENT ON COLUMN sessions.enable_message_delete IS '是否允许删除消息';
+COMMENT ON COLUMN sessions.message_ttl_seconds IS '消息生存时间（秒）';
+COMMENT ON COLUMN sessions.notification_level IS '通知级别（all, mention, none）';
+COMMENT ON COLUMN sessions.tags IS '标签列表';
+COMMENT ON COLUMN sessions.custom_data IS '自定义数据';
 
 -- 会话参与者表
 -- COMMENT: 会话参与者关系表，存储会话成员信息
@@ -330,7 +551,7 @@ DROP TABLE IF EXISTS session_participants CASCADE;
 CREATE TABLE session_participants (
     session_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    roles TEXT[],                         -- 角色列表（owner, admin, member等）
+    roles TEXT[],                         -- 角色列表（owner: 拥有者, admin: 管理员, member: 成员, guest: 访客, observer: 观察者）
     muted BOOLEAN DEFAULT FALSE,          -- 是否静音（向后兼容，建议使用 mute_until）
     pinned BOOLEAN DEFAULT FALSE,         -- 是否置顶
     attributes JSONB,                     -- 参与者属性（JSON格式）
@@ -352,7 +573,7 @@ CREATE TABLE session_participants (
 COMMENT ON TABLE session_participants IS '会话参与者表';
 COMMENT ON COLUMN session_participants.session_id IS '会话ID';
 COMMENT ON COLUMN session_participants.user_id IS '用户ID';
-COMMENT ON COLUMN session_participants.roles IS '角色列表（owner: 拥有者, admin: 管理员, member: 成员）';
+COMMENT ON COLUMN session_participants.roles IS '角色列表（owner: 拥有者, admin: 管理员, member: 成员, guest: 访客, observer: 观察者）';
 COMMENT ON COLUMN session_participants.muted IS '是否静音';
 COMMENT ON COLUMN session_participants.pinned IS '是否置顶';
 COMMENT ON COLUMN session_participants.attributes IS '参与者属性（JSON格式）';
@@ -414,6 +635,21 @@ CREATE TABLE message_state (
     UNIQUE(message_id, user_id)
 );
 
+-- 消息操作历史记录表（MessageOperationHistory）
+-- COMMENT: 消息操作历史记录表，记录对消息的所有操作（审计和追踪）
+DROP TABLE IF EXISTS message_operation_history CASCADE;
+CREATE TABLE message_operation_history (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    operation_type TEXT NOT NULL,           -- 操作类型（recall, edit, delete, read, forward等）
+    operator_id TEXT NOT NULL,              -- 操作者ID
+    target_user_id TEXT,                    -- 目标用户ID（可选，用于定向操作）
+    operation_data JSONB,                   -- 操作数据（根据操作类型不同而不同）
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    metadata JSONB DEFAULT '{}'::jsonb      -- 元数据（扩展字段）
+);
+
 COMMENT ON TABLE message_state IS '消息状态表（用户对消息的私有行为）';
 COMMENT ON COLUMN message_state.id IS '状态记录ID（自增主键）';
 COMMENT ON COLUMN message_state.message_id IS '消息ID';
@@ -425,11 +661,26 @@ COMMENT ON COLUMN message_state.deleted_at IS '删除时间';
 COMMENT ON COLUMN message_state.burn_after_read IS '是否阅后即焚';
 COMMENT ON COLUMN message_state.burned_at IS '焚毁时间';
 
+COMMENT ON TABLE message_operation_history IS '消息操作历史记录表（记录对消息的所有操作）';
+COMMENT ON COLUMN message_operation_history.id IS '操作记录ID（自增主键）';
+COMMENT ON COLUMN message_operation_history.message_id IS '消息ID';
+COMMENT ON COLUMN message_operation_history.operation_type IS '操作类型（recall, edit, delete, read, forward等）';
+COMMENT ON COLUMN message_operation_history.operator_id IS '操作者ID';
+COMMENT ON COLUMN message_operation_history.target_user_id IS '目标用户ID（可选，用于定向操作）';
+COMMENT ON COLUMN message_operation_history.operation_data IS '操作数据（根据操作类型不同而不同）';
+COMMENT ON COLUMN message_operation_history.timestamp IS '操作时间戳';
+COMMENT ON COLUMN message_operation_history.created_at IS '创建时间';
+COMMENT ON COLUMN message_operation_history.metadata IS '元数据（扩展字段）';
+
 -- 会话模块索引
 CREATE INDEX IF NOT EXISTS idx_sessions_business_type ON sessions(business_type, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_lifecycle_state ON sessions(lifecycle_state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_session_type ON sessions(session_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_owner_id ON sessions(owner_id) WHERE owner_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_is_public ON sessions(is_public) WHERE is_public = true;
+CREATE INDEX IF NOT EXISTS idx_sessions_notification_level ON sessions(notification_level);
+CREATE INDEX IF NOT EXISTS idx_sessions_tags ON sessions USING GIN(tags) WHERE tags IS NOT NULL AND tags != '{}';
 CREATE INDEX IF NOT EXISTS idx_session_participants_user_id ON session_participants(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_participants_session_id ON session_participants(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_participants_last_read_seq ON session_participants(last_read_msg_seq);
@@ -448,6 +699,69 @@ CREATE INDEX IF NOT EXISTS idx_message_state_is_read ON message_state(is_read) W
 CREATE INDEX IF NOT EXISTS idx_message_state_is_deleted ON message_state(is_deleted) WHERE is_deleted = true;
 CREATE INDEX IF NOT EXISTS idx_message_state_burned_at ON message_state(burned_at) WHERE burned_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_message_state_user_message ON message_state(user_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_message_operation_history_message_id ON message_operation_history(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_operation_history_operation_type ON message_operation_history(operation_type);
+CREATE INDEX IF NOT EXISTS idx_message_operation_history_operator_id ON message_operation_history(operator_id);
+CREATE INDEX IF NOT EXISTS idx_message_operation_history_timestamp ON message_operation_history(timestamp DESC);
+
+-- 消息ACK记录表（MessageAckRecords）
+-- COMMENT: 消息ACK记录表，记录所有ACK相关信息
+DROP TABLE IF EXISTS message_ack_records CASCADE;
+CREATE TABLE message_ack_records (
+    id BIGSERIAL PRIMARY KEY,
+    message_id TEXT NOT NULL,               -- 消息ID
+    user_id TEXT NOT NULL,                  -- 用户ID
+    ack_type TEXT NOT NULL,                 -- ACK类型（client, push, storage）
+    ack_status TEXT NOT NULL,               -- ACK状态（received, processed, failed）
+    ack_timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- ACK时间戳
+    device_id TEXT,                         -- 设备ID（可选）
+    client_msg_id TEXT,                     -- 客户端消息ID（可选）
+    error_code TEXT,                        -- 错误码（可选）
+    error_message TEXT,                     -- 错误信息（可选）
+    metadata JSONB DEFAULT '{}'::jsonb,     -- 元数据（扩展字段）
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 唯一约束：同一用户对同一消息的同一类型ACK只能有一条记录
+    UNIQUE(message_id, user_id, ack_type)
+);
+
+COMMENT ON TABLE message_ack_records IS '消息ACK记录表（记录所有ACK相关信息）';
+COMMENT ON COLUMN message_ack_records.id IS 'ACK记录ID（自增主键）';
+COMMENT ON COLUMN message_ack_records.message_id IS '消息ID';
+COMMENT ON COLUMN message_ack_records.user_id IS '用户ID';
+COMMENT ON COLUMN message_ack_records.ack_type IS 'ACK类型（client, push, storage）';
+COMMENT ON COLUMN message_ack_records.ack_status IS 'ACK状态（received, processed, failed）';
+COMMENT ON COLUMN message_ack_records.ack_timestamp IS 'ACK时间戳';
+COMMENT ON COLUMN message_ack_records.device_id IS '设备ID（可选）';
+COMMENT ON COLUMN message_ack_records.client_msg_id IS '客户端消息ID（可选）';
+COMMENT ON COLUMN message_ack_records.error_code IS '错误码（可选）';
+COMMENT ON COLUMN message_ack_records.error_message IS '错误信息（可选）';
+COMMENT ON COLUMN message_ack_records.metadata IS '元数据（扩展字段）';
+COMMENT ON COLUMN message_ack_records.created_at IS '创建时间';
+COMMENT ON COLUMN message_ack_records.updated_at IS '更新时间';
+
+-- 消息ACK记录表索引
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_message_id ON message_ack_records(message_id);
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_user_id ON message_ack_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_ack_type ON message_ack_records(ack_type);
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_ack_status ON message_ack_records(ack_status);
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_ack_timestamp ON message_ack_records(ack_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_message_ack_records_user_message ON message_ack_records(user_id, message_id);
+
+-- 消息ACK记录表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_message_ack_records_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_message_ack_records_updated_at
+    BEFORE UPDATE ON message_ack_records
+    FOR EACH ROW
+    EXECUTE FUNCTION update_message_ack_records_updated_at();
 
 -- ============================================================================
 -- 4. 话题模块 (Thread Module)
@@ -687,13 +1001,29 @@ COMMENT ON COLUMN messages_hourly_stats.unique_senders IS '唯一发送者数量
 
 -- 设置连续聚合的刷新策略
 -- COMMENT: 每小时刷新一次连续聚合视图，延迟3小时以确保数据完整性
--- 注意：TimescaleDB 2.x+ 使用 CALL 而不是 SELECT
-CALL add_continuous_aggregate_policy('messages_hourly_stats',
-    start_offset => INTERVAL '3 hours',
-    end_offset => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '1 hour',
-    if_not_exists => TRUE
-);
+-- 注意：不同版本的TimescaleDB可能使用不同的调用方式
+-- 使用 DO 块来处理可能的函数不存在的情况
+DO $$
+BEGIN
+    -- 尝试使用新版本的 CALL 语法
+    BEGIN
+        EXECUTE 'CALL add_continuous_aggregate_policy(''messages_hourly_stats'', 
+            start_offset => INTERVAL ''3 hours'',
+            end_offset => INTERVAL ''1 hour'', 
+            schedule_interval => INTERVAL ''1 hour'')';
+    EXCEPTION WHEN undefined_function OR syntax_error THEN
+        -- 如果 CALL 不支持，尝试使用 SELECT
+        BEGIN
+            PERFORM add_continuous_aggregate_policy('messages_hourly_stats',
+                start_offset => INTERVAL '3 hours',
+                end_offset => INTERVAL '1 hour',
+                schedule_interval => INTERVAL '1 hour');
+        EXCEPTION WHEN undefined_function THEN
+            -- 如果函数都不存在，跳过策略设置
+            RAISE NOTICE 'add_continuous_aggregate_policy function not available, skipping continuous aggregate policy setup';
+        END;
+    END;
+END $$;
 
 -- ============================================================================
 -- 8. 触发器（自动更新时间戳）
@@ -768,6 +1098,20 @@ CREATE TRIGGER trigger_message_state_updated_at
     BEFORE UPDATE ON message_state
     FOR EACH ROW
     EXECUTE FUNCTION update_message_state_updated_at();
+
+-- message_operation_history 表更新时间戳触发器
+CREATE OR REPLACE FUNCTION update_message_operation_history_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_message_operation_history_updated_at
+    BEFORE UPDATE ON message_operation_history
+    FOR EACH ROW
+    EXECUTE FUNCTION update_message_operation_history_updated_at();
 
 -- threads 表更新时间戳触发器
 CREATE OR REPLACE FUNCTION update_threads_updated_at()

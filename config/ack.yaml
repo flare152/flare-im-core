@@ -1,0 +1,33 @@
+# ACK模块配置文件
+
+# Redis配置
+redis:
+  # Redis连接URL
+  url: "redis://127.0.0.1:6379/"
+  # 默认过期时间（秒）
+  default_ttl: 3600
+
+# ACK服务配置
+service:
+  # 内存缓存容量
+  cache_capacity: 10000
+  # 批量处理间隔（毫秒）
+  batch_interval_ms: 100
+  # 批量处理大小
+  batch_size: 100
+
+# 归档配置
+archive:
+  # 归档缓冲区大小
+  buffer_size: 1000
+  # 归档间隔（秒）
+  archive_interval: 60
+
+# 性能调优
+performance:
+  # 是否启用ACK状态压缩
+  enable_compression: true
+  # ACK状态压缩阈值（字节）
+  compression_threshold: 1024
+  # 最大并发处理数
+  max_concurrent: 100

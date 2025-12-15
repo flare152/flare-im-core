@@ -14,7 +14,8 @@ path = "cmd/main.rs"
 flare-core = { workspace = true }
 flare-server-core = { workspace = true, features = ["discovery"] }
 flare-proto = { workspace = true }
-flare-im-core = { path = "../..", features = ["tracing", "discovery"] }
+flare-im-core = { path = "../..", features = ["discovery"] }
+flare-session = { path = "../../flare-session" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
@@ -37,4 +38,3 @@ base64 = { workspace = true }
 [lints.rust]
 # 允许 tracing feature（用于条件编译）
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("tracing"))'] }
-

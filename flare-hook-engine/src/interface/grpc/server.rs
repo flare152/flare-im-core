@@ -516,7 +516,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&context);
 
         // 获取PushPreSend Hook列表
         let hooks = self.registry.get_push_pre_send_hooks().await
@@ -559,7 +559,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<PushPostSendHookRequest>,
     ) -> Result<Response<PushPostSendHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let _record = req.record.ok_or_else(|| {
@@ -570,7 +570,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取PushPostSend Hook列表
         let hooks = self.registry.get_push_post_send_hooks().await
@@ -594,7 +594,6 @@ impl HookExtension for HookExtensionServer {
         for plan in execution_plans {
             tracing::debug!(
                 hook = %plan.name(),
-                tenant_id = %ctx.tenant_id,
                 "Executing PushPostSend hook"
             );
         }
@@ -610,7 +609,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<PushDeliveryHookRequest>,
     ) -> Result<Response<PushDeliveryHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let event = req.event.ok_or_else(|| {
@@ -618,7 +617,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取PushDelivery Hook列表
         let hooks = self.registry.get_push_delivery_hooks().await
@@ -660,7 +659,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserLoginHookRequest>,
     ) -> Result<Response<UserLoginHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let event = req.event.ok_or_else(|| {
@@ -668,7 +667,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserLogin Hook列表
         let hooks = self.registry.get_user_login_hooks().await
@@ -710,7 +709,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserLogoutHookRequest>,
     ) -> Result<Response<UserLogoutHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let event = req.event.ok_or_else(|| {
@@ -718,7 +717,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserLogout Hook列表
         let hooks = self.registry.get_user_logout_hooks().await
@@ -759,7 +758,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserOnlineHookRequest>,
     ) -> Result<Response<UserOnlineHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let event = req.event.ok_or_else(|| {
@@ -767,7 +766,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserOnline Hook列表
         let hooks = self.registry.get_user_online_hooks().await
@@ -808,7 +807,7 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserOfflineHookRequest>,
     ) -> Result<Response<UserOfflineHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
+        let _context = req.context.ok_or_else(|| {
             Status::invalid_argument("context is required")
         })?;
         let event = req.event.ok_or_else(|| {
@@ -816,7 +815,7 @@ impl HookExtension for HookExtensionServer {
         })?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserOffline Hook列表
         let hooks = self.registry.get_user_offline_hooks().await

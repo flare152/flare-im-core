@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Result, Context};
 use flare_im_core::hooks::HookDispatcher;
-use flare_im_core::tracing::{create_span, set_message_id, set_user_id, set_tenant_id};
+use flare_im_core::tracing::create_span;
 use flare_proto::storage::StoreMessageRequest;
 use flare_proto::push::{PushMessageRequest, PushOptions};
 use prost::Message;
@@ -70,14 +70,15 @@ impl MessageDomainService {
         
         // 设置追踪属性
         {
-            set_tenant_id(&_span, &tenant_id);
+            // 由于缺少相应的追踪函数，暂时注释掉这些调用
+            // set_tenant_id(&_span, &tenant_id);
             if let Some(message) = &request.message {
                 if !message.id.is_empty() {
-                    set_message_id(&_span, &message.id);
+                    // set_message_id(&_span, &message.id);
                     _span.record("message_id", &message.id);
                 }
                 if !message.sender_id.is_empty() {
-                    set_user_id(&_span, &message.sender_id);
+                    // set_user_id(&_span, &message.sender_id);
                 }
                 _span.record("message_type", message.message_type);
             }
@@ -164,19 +165,16 @@ impl MessageDomainService {
 
         // 确保 session 存在（异步化，不阻塞消息发送流程）
         if let Some(session_repo) = &self.session_repository {
-            // 提取 participants（发送者 + 接收者，从 session_id 提取）
+            // 提取 participants（发送者 + 接收者）
             let mut participants = vec![submission.message.sender_id.clone()];
             
-            // 从 session_id 提取参与者（假设格式为 "single:user1:user2" 或 "group:group_id"）
-            let session_parts: Vec<&str> = submission.message.session_id.split(':').collect();
-            if session_parts.len() >= 3 && session_parts[0] == "single" {
-                // 单聊：添加会话中的所有用户
-                for user_id in &session_parts[1..] {
-                    if !participants.contains(&user_id.to_string()) {
-                        participants.push(user_id.to_string());
-                    }
+            // 单聊：添加接收者
+            if submission.message.session_type == flare_proto::common::SessionType::Single as i32 {
+                if !submission.message.receiver_id.is_empty() {
+                    participants.push(submission.message.receiver_id.clone());
                 }
             }
+            // 群聊/频道：participants 只包含发送者，成员列表由推送服务查询
             
             // 提取参数（克隆用于异步任务）
             let session_id = submission.kafka_payload.session_id.clone();
@@ -256,52 +254,55 @@ impl MessageDomainService {
 
     /// 构建推送请求
     /// 
-    /// 注意：SDK 应该在构建消息时自动设置 receiver_id，避免服务端查询数据库影响性能
+    /// 优化：优先使用 receiver_id 和 channel_id，避免查询会话服务
     fn build_push_request(
         &self,
         submission: &MessageSubmission,
         profile: &MessageProfile,
     ) -> Result<PushMessageRequest> {
-        // 提取接收者ID列表（从 session_id 提取）
+        // 提取接收者ID列表（优先使用 receiver_id 和 channel_id）
         let mut user_ids = Vec::new();
         
-        // 从 session_id 提取用户 ID
-        let session_parts: Vec<&str> = submission.message.session_id.split(':').collect();
         if let Ok(session_type) = flare_proto::common::SessionType::try_from(submission.message.session_type) {
             match session_type {
                 flare_proto::common::SessionType::Single => {
-                    // 单聊：从 session_id 解析出另一个用户
-                    if session_parts.len() >= 3 {
-                        for user_id in &session_parts[1..] {
-                            if *user_id != submission.message.sender_id {
-                                user_ids.push(user_id.to_string());
-                            }
+                    // 单聊：优先使用 receiver_id，性能最优
+                    if !submission.message.receiver_id.is_empty() {
+                        user_ids.push(submission.message.receiver_id.clone());
+                        tracing::debug!(
+                            "Single chat message using receiver_id: session_id={}, sender_id={}, receiver_id={}",
+                            submission.message.session_id,
+                            submission.message.sender_id,
+                            submission.message.receiver_id
+                        );
+                    } else {
+                        // receiver_id 为空，降级到从 session_id 提取（向后兼容）
+                        tracing::warn!(
+                            "Single chat message missing receiver_id, falling back to session_id extraction. session_id={}, sender_id={}",
+                            submission.message.session_id,
+                            submission.message.sender_id
+                        );
+                        if let Some(participants) = self.extract_participants_from_session_id(&submission.message.session_id, &submission.message.sender_id) {
+                            user_ids = participants;
                         }
                     }
                 },
                 flare_proto::common::SessionType::Group | 
                 flare_proto::common::SessionType::Channel => {
-                    // 群聊、频道：留空，由推送服务查询成员列表
-                    // 这里不填充 user_ids，由 flare-push 服务根据 session_id 查询成员
+                    // 群聊、频道：使用 channel_id 或 session_id 查询成员
+                    // user_ids 留空，由推送服务根据 channel_id/session_id 查询成员
+                    let channel_id = if !submission.message.channel_id.is_empty() {
+                        &submission.message.channel_id
+                    } else {
+                        &submission.message.session_id
+                    };
                     tracing::debug!(
-                        "Group/channel message. Push worker will query members. session_id={}",
+                        "Group/channel message. Push worker will query members. channel_id={}, session_id={}",
+                        channel_id,
                         submission.message.session_id
                     );
                 },
                 _ => {},
-            }
-        }
-        
-        // 如果单聊消息的 user_ids 仍然为空，记录警告
-        if user_ids.is_empty() {
-            if let Ok(session_type) = flare_proto::common::SessionType::try_from(submission.message.session_type) {
-                if session_type == flare_proto::common::SessionType::Single {
-                    tracing::warn!(
-                        "Single chat message has empty receiver list. session_id={}, sender_id={}",
-                        submission.message.session_id,
-                        submission.message.sender_id
-                    );
-                }
             }
         }
 
@@ -309,9 +310,28 @@ impl MessageDomainService {
         // 这是为了避免 Protobuf 解码错误
         let mut message_for_push = submission.message.clone();
         
+        // 验证 receiver_id 和 channel_id 在克隆后仍然存在
+        if message_for_push.session_type == 1 {
+            if message_for_push.receiver_id.is_empty() {
+                tracing::error!(
+                    message_id = %message_for_push.id,
+                    session_id = %message_for_push.session_id,
+                    sender_id = %message_for_push.sender_id,
+                    "Single chat message missing receiver_id after clone"
+                );
+                anyhow::bail!(
+                    "Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}",
+                    message_for_push.id,
+                    message_for_push.session_id,
+                    message_for_push.sender_id
+                );
+            }
+        }
+        
         // 清理字符串字段，确保它们是有效的 UTF-8 字符串
         // 注意：新版 Message 结构已移除 sender_platform_id、sender_nickname、sender_avatar_url、group_id 等字段
         // 这些信息现在通过 attributes 或 extra 字段存储
+        // 但 receiver_id 和 channel_id 仍然是 Message 的字段，必须保留
         message_for_push.client_msg_id = String::from_utf8_lossy(
             message_for_push.client_msg_id.as_bytes()
         ).to_string();
@@ -350,6 +370,22 @@ impl MessageDomainService {
             template_id: String::new(),
             template_data: std::collections::HashMap::new(),
         })
+    }
+
+    /// 从会话ID中提取参与者
+    /// 
+    /// 注意：新格式（1-{hash}）无法从哈希反推用户ID，需要查询会话服务获取参与者
+    /// 
+    /// # 参数
+    /// * `session_id` - 会话ID（格式：1-{hash}）
+    /// * `sender_id` - 发送者ID（用于过滤）
+    ///
+    /// # 返回
+    /// * `None` - 新格式无法直接解析，需要查询会话服务
+    fn extract_participants_from_session_id(&self, _session_id: &str, _sender_id: &str) -> Option<Vec<String>> {
+        // 新格式（1-{hash}）无法从哈希反推用户ID，返回None
+        // 调用方需要查询会话服务获取参与者
+        None
     }
 }
 

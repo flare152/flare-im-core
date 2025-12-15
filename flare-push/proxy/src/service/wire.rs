@@ -13,9 +13,12 @@ use crate::infrastructure::config::PushProxyConfig;
 use crate::infrastructure::messaging::kafka_publisher::KafkaPushEventPublisher;
 use crate::interfaces::grpc::handler::PushGrpcHandler;
 
+use flare_im_core::hooks::HookDispatcher;
+
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
     pub handler: PushGrpcHandler,
+    pub hook_dispatcher: HookDispatcher,
 }
 
 /// 构建应用上下文
@@ -44,18 +47,21 @@ pub async fn initialize(
         crate::infrastructure::validator::RequestValidatorImpl::new()
     );
     
-    // 4. 构建领域服务
+    // 4. 初始化 Hook 调度器
+    let hook_dispatcher = HookDispatcher::new(flare_im_core::hooks::GlobalHookRegistry::get());
+    
+    // 5. 构建领域服务
     let domain_service = Arc::new(PushDomainService::new(
         publisher,
         validator,
+        hook_dispatcher.clone(),
     ));
     
-    // 5. 构建命令处理器
-    let command_handler = Arc::new(PushCommandHandler::new(domain_service));
+    // 6. 构建命令处理器
+    let command_handler = Arc::new(PushCommandHandler::new(domain_service, hook_dispatcher.clone()));
     
-    // 6. 构建 gRPC 处理器
-    let handler = PushGrpcHandler::new(command_handler);
+    // 7. 构建 gRPC 处理器
+    let handler = PushGrpcHandler::new(command_handler, hook_dispatcher.clone());
     
-    Ok(ApplicationContext { handler })
+    Ok(ApplicationContext { handler, hook_dispatcher })
 }
-

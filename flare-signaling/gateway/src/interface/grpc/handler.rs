@@ -8,7 +8,6 @@ use crate::application::handlers::{
     BatchPushMessageCommand, PushMessageCommand, PushMessageService,
 };
 use crate::application::handlers::{ConnectionQueryService, QueryUserConnectionsQuery};
-use crate::interface::gateway::UnifiedGatewayHandler;
 use flare_proto::access_gateway::access_gateway_server::AccessGateway;
 use flare_proto::access_gateway::{
     BatchPushMessageRequest, BatchPushMessageResponse, PushMessageRequest, PushMessageResponse,
@@ -16,9 +15,8 @@ use flare_proto::access_gateway::{
 };
 use flare_proto::signaling::online::signaling_service_server::SignalingService;
 use flare_proto::signaling::online::*;
-use async_trait::async_trait;
 use tonic::{Request, Response, Status};
-use tracing::info;
+use tracing::{info, debug, warn};
 
 /// UnifiedGateway gRPC 处理器
 ///
@@ -83,20 +81,24 @@ impl SignalingService for UnifiedGatewayGrpcHandler {
 pub struct AccessGatewayHandler {
     push_service: Arc<PushMessageService>,
     connection_query_service: Arc<ConnectionQueryService>,
+    subscription_service: Arc<crate::domain::service::SubscriptionService>,
+    connection_handler: Arc<crate::interface::connection::LongConnectionHandler>,
 }
-
 impl AccessGatewayHandler {
     pub fn new(
         push_service: Arc<PushMessageService>,
         connection_query_service: Arc<ConnectionQueryService>,
+        subscription_service: Arc<crate::domain::service::SubscriptionService>,
+        connection_handler: Arc<crate::interface::connection::LongConnectionHandler>,
     ) -> Self {
         Self {
             push_service,
             connection_query_service,
+            subscription_service,
+            connection_handler,
         }
     }
 }
-
 #[tonic::async_trait]
 impl AccessGateway for AccessGatewayHandler {
     async fn push_message(
@@ -175,18 +177,89 @@ impl AccessGateway for AccessGatewayHandler {
             ack.message_id
         );
         
-        // TODO: 实现 ACK 推送逻辑
+        // 实现 ACK 推送逻辑
         // 将 ACK 封装为 ServerPacket 推送给目标用户
+        let mut push_results = Vec::new();
+        
+        // 为每个目标用户构建推送结果
+        for user_id in &req.target_user_ids {
+            // 构建 ACK 数据包
+            let ack_packet = flare_proto::common::ServerPacket {
+                payload: Some(flare_proto::common::server_packet::Payload::SendAck(flare_proto::common::SendEnvelopeAck {
+                    message_id: ack.message_id.clone(),
+                    status: if ack.status == flare_proto::common::AckStatus::Success as i32 {
+                        flare_proto::common::AckStatus::Success as i32
+                    } else {
+                        flare_proto::common::AckStatus::Failed as i32
+                    },
+                    error_code: ack.error_code,
+                    error_message: ack.error_message.clone(),
+                })),
+            };
+            
+            // 通过连接管理器推送 ACK 数据包
+            match self.connection_handler.push_packet_to_user(user_id, &ack_packet).await {
+                Ok(_) => {
+                    push_results.push(flare_proto::access_gateway::PushResult {
+                        user_id: user_id.clone(),
+                        status: flare_proto::access_gateway::PushStatus::Success as i32,
+                        success_count: 1,
+                        failure_count: 0,
+                        error_message: String::new(),
+                        pushed_at: Some(prost_types::Timestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        }),
+                    });
+                    
+                    tracing::debug!(
+                        message_id = %ack.message_id,
+                        user_id = %user_id,
+                        "ACK pushed successfully"
+                    );
+                }
+                Err(e) => {
+                    push_results.push(flare_proto::access_gateway::PushResult {
+                        user_id: user_id.clone(),
+                        status: flare_proto::access_gateway::PushStatus::Failed as i32,
+                        success_count: 0,
+                        failure_count: 1,
+                        error_message: format!("Failed to push ACK: {}", e),
+                        pushed_at: Some(prost_types::Timestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        }),
+                    });
+                    
+                    tracing::warn!(
+                        error = %e,
+                        message_id = %ack.message_id,
+                        user_id = %user_id,
+                        "Failed to push ACK"
+                    );
+                }
+            }
+        }
+        
+        let success_count = push_results.iter().filter(|r| r.status == flare_proto::access_gateway::PushStatus::Success as i32).count() as i32;
+        let failure_count = push_results.iter().filter(|r| r.status == flare_proto::access_gateway::PushStatus::Failed as i32).count() as i32;
+        
         Ok(Response::new(PushMessageResponse {
             request_id: req.request_id,
-            results: vec![],
+            results: push_results,
             status: Some(flare_proto::RpcStatus {
                 code: flare_proto::common::ErrorCode::Ok as i32,
-                message: "ACK push not yet implemented".to_string(),
+                message: format!("ACK push completed: {} success, {} failures", success_count, failure_count),
                 details: vec![],
                 context: None,
             }),
-            statistics: None,
+            statistics: Some(flare_proto::access_gateway::PushStatistics {
+                total_users: req.target_user_ids.len() as i32,
+                online_users: success_count,
+                offline_users: failure_count,
+                success_count,
+                failure_count,
+            }),
         }))
     }
 
@@ -203,18 +276,81 @@ impl AccessGateway for AccessGatewayHandler {
             custom.r#type
         );
         
-        // TODO: 实现自定义数据推送逻辑
+        // 实现自定义数据推送逻辑
         // 将 CustomPushData 封装为 ServerPacket 推送给目标用户
+        let mut push_results = Vec::new();
+        let mut success_count = 0;
+        let mut failure_count = 0;
+        
+        // 为每个目标用户构建并推送自定义数据包
+        for user_id in &req.target_user_ids {
+            // 构建 ServerPacket，包含自定义推送数据
+            let packet = flare_proto::common::ServerPacket {
+                payload: Some(flare_proto::common::server_packet::Payload::CustomPushData(custom.clone())),
+            };
+            
+            // 推送数据包到用户
+            match self.connection_handler.push_packet_to_user(user_id, &packet).await {
+                Ok(_) => {
+                    success_count += 1;
+                    push_results.push(flare_proto::access_gateway::PushResult {
+                        user_id: user_id.clone(),
+                        status: flare_proto::access_gateway::PushStatus::Success as i32,
+                        success_count: 1,
+                        failure_count: 0,
+                        error_message: String::new(),
+                        pushed_at: Some(prost_types::Timestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        }),
+                    });
+                    
+                    debug!(
+                        user_id = %user_id,
+                        custom_type = %custom.r#type,
+                        "Custom push data sent successfully"
+                    );
+                }
+                Err(err) => {
+                    failure_count += 1;
+                    push_results.push(flare_proto::access_gateway::PushResult {
+                        user_id: user_id.clone(),
+                        status: flare_proto::access_gateway::PushStatus::Failed as i32,
+                        success_count: 0,
+                        failure_count: 1,
+                        error_message: err.to_string(),
+                        pushed_at: Some(prost_types::Timestamp {
+                            seconds: chrono::Utc::now().timestamp(),
+                            nanos: 0,
+                        }),
+                    });
+                    
+                    warn!(
+                        error = %err,
+                        user_id = %user_id,
+                        custom_type = %custom.r#type,
+                        "Failed to push custom data to user"
+                    );
+                }
+            }
+        }
+        
         Ok(Response::new(PushMessageResponse {
             request_id: req.request_id,
-            results: vec![],
+            results: push_results,
             status: Some(flare_proto::RpcStatus {
                 code: flare_proto::common::ErrorCode::Ok as i32,
-                message: "Custom push not yet implemented".to_string(),
+                message: format!("Custom push completed: {} success, {} failures", success_count, failure_count),
                 details: vec![],
                 context: None,
             }),
-            statistics: None,
+            statistics: Some(flare_proto::access_gateway::PushStatistics {
+                total_users: req.target_user_ids.len() as i32,
+                online_users: success_count,
+                offline_users: failure_count,
+                success_count,
+                failure_count,
+            }),
         }))
     }
 
@@ -225,16 +361,35 @@ impl AccessGateway for AccessGatewayHandler {
         let req = request.into_inner();
         info!("Subscribe request: user_id={}", req.user_id);
         
-        // TODO: 实现订阅逻辑
-        Ok(Response::new(flare_proto::access_gateway::SubscribeResponse {
-            granted: vec![],
-            status: Some(flare_proto::RpcStatus {
-                code: flare_proto::common::ErrorCode::Ok as i32,
-                message: "Subscribe not yet implemented".to_string(),
-                details: vec![],
-                context: None,
-            }),
-        }))
+        // 实现订阅逻辑
+        match self.subscription_service.subscribe(&req.user_id, &req.subscriptions).await {
+            Ok(granted_subscriptions) => {
+                info!(
+                    user_id = %req.user_id,
+                    count = granted_subscriptions.len(),
+                    "User subscribed to topics successfully"
+                );
+                
+                Ok(Response::new(flare_proto::access_gateway::SubscribeResponse {
+                    granted: granted_subscriptions,
+                    status: Some(flare_proto::RpcStatus {
+                        code: flare_proto::common::ErrorCode::Ok as i32,
+                        message: "Subscribed successfully".to_string(),
+                        details: vec![],
+                        context: None,
+                    }),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_id = %req.user_id,
+                    "Failed to subscribe to topics"
+                );
+                
+                Err(Status::internal(format!("Failed to subscribe: {}", e)))
+            }
+        }
     }
 
     async fn unsubscribe(
@@ -244,29 +399,113 @@ impl AccessGateway for AccessGatewayHandler {
         let req = request.into_inner();
         info!("Unsubscribe request: user_id={}", req.user_id);
         
-        // TODO: 实现取消订阅逻辑
-        Ok(Response::new(flare_proto::access_gateway::UnsubscribeResponse {
-            status: Some(flare_proto::RpcStatus {
-                code: flare_proto::common::ErrorCode::Ok as i32,
-                message: "Unsubscribe not yet implemented".to_string(),
-                details: vec![],
-                context: None,
-            }),
-        }))
+        // 实现取消订阅逻辑
+        match self.subscription_service.unsubscribe(&req.user_id, &req.topics).await {
+            Ok(_) => {
+                info!(
+                    user_id = %req.user_id,
+                    count = req.topics.len(),
+                    "User unsubscribed from topics successfully"
+                );
+                
+                Ok(Response::new(flare_proto::access_gateway::UnsubscribeResponse {
+                    status: Some(flare_proto::RpcStatus {
+                        code: flare_proto::common::ErrorCode::Ok as i32,
+                        message: "Unsubscribed successfully".to_string(),
+                        details: vec![],
+                        context: None,
+                    }),
+                }))
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_id = %req.user_id,
+                    "Failed to unsubscribe from topics"
+                );
+                
+                Err(Status::internal(format!("Failed to unsubscribe: {}", e)))
+            }
+        }
     }
 
     async fn publish_signal(
         &self,
         request: Request<flare_proto::access_gateway::PublishSignalRequest>,
     ) -> Result<Response<flare_proto::access_gateway::PublishSignalResponse>, Status> {
-        let _req = request.into_inner();
+        let req = request.into_inner();
         info!("PublishSignal request received");
         
-        // TODO: 实现发布信令逻辑
+        // 实现发布信令逻辑
+        // 1. 从请求中提取信令信封
+        let envelope = req.envelope.ok_or_else(|| Status::invalid_argument("envelope is required"))?;
+        
+        // 2. 获取订阅了指定主题的所有用户
+        let subscribers = self.subscription_service.get_topic_subscribers(&envelope.topic).await
+            .map_err(|e| {
+                tracing::error!(error = %e, topic = %envelope.topic, "Failed to get topic subscribers");
+                Status::internal(format!("Failed to get topic subscribers: {}", e))
+            })?;
+        
+        // 3. 如果指定了目标用户，则只向这些用户推送
+        let target_users = if !envelope.targets.is_empty() {
+            // 过滤出既在目标列表中又订阅了主题的用户
+            subscribers.into_iter().filter(|user_id| envelope.targets.contains(user_id)).collect()
+        } else {
+            // 否则向所有订阅者推送
+            subscribers
+        };
+        
+        // 4. 构建信令消息载荷
+        let signal_payload = flare_proto::common::ServerPacket {
+            payload: Some(flare_proto::common::server_packet::Payload::CustomPushData(
+                flare_proto::common::CustomPushData {
+                    r#type: "signal".to_string(),
+                    payload: envelope.payload.clone(),
+                    metadata: envelope.metadata.clone(),
+                }
+            )),
+        };
+        
+        // 5. 向每个目标用户推送信令消息
+        let mut success_count = 0;
+        let mut failure_count = 0;
+        
+        for user_id in &target_users {
+            match self.connection_handler.push_packet_to_user(user_id, &signal_payload).await {
+                Ok(_) => {
+                    success_count += 1;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        topic = %envelope.topic,
+                        "Signal published successfully"
+                    );
+                }
+                Err(err) => {
+                    failure_count += 1;
+                    tracing::warn!(
+                        error = %err,
+                        user_id = %user_id,
+                        topic = %envelope.topic,
+                        "Failed to publish signal to user"
+                    );
+                }
+            }
+        }
+        
+        info!(
+            topic = %envelope.topic,
+            from = %envelope.from,
+            target_count = target_users.len(),
+            success_count = success_count,
+            failure_count = failure_count,
+            "Signal published to subscribers"
+        );
+        
         Ok(Response::new(flare_proto::access_gateway::PublishSignalResponse {
             status: Some(flare_proto::RpcStatus {
                 code: flare_proto::common::ErrorCode::Ok as i32,
-                message: "PublishSignal not yet implemented".to_string(),
+                message: format!("Signal published: {} success, {} failures", success_count, failure_count),
                 details: vec![],
                 context: None,
             }),

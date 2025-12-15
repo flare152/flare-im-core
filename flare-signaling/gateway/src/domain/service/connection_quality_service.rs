@@ -231,17 +231,6 @@ impl ConnectionQualityService {
             now.duration_since(metrics.last_update) < self.expiration
         });
     }
-
-    /// 导出为 Proto ConnectionQuality
-    pub fn to_proto(metrics: &ConnectionQualityMetrics) -> flare_proto::common::ConnectionQuality {
-        flare_proto::common::ConnectionQuality {
-            rtt_ms: metrics.rtt_ms,
-            packet_loss_rate: metrics.packet_loss_rate,
-            last_measure_ts: metrics.last_update.elapsed().as_millis() as i64,
-            network_type: metrics.network_type.clone(),
-            signal_strength: 0,  // TODO: 从设备上报获取
-        }
-    }
 }
 
 impl Default for ConnectionQualityService {
