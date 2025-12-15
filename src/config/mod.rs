@@ -382,7 +382,32 @@ pub struct PushServerServiceConfig {
     /// Hook 配置目录
     #[serde(default)]
     pub hook_config_dir: Option<String>,
+    /// ACK 服务配置（从业务模块配置中读取，不再使用独立的 ack.yaml）
+    #[serde(default)]
+    pub ack: Option<AckServiceConfigSection>,
 }
+
+/// ACK 服务配置段（集成到业务模块配置中）
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AckServiceConfigSection {
+    /// Redis 默认过期时间（秒）
+    #[serde(default = "default_ack_redis_ttl")]
+    pub redis_ttl: u64,
+    /// 内存缓存容量
+    #[serde(default = "default_ack_cache_capacity")]
+    pub cache_capacity: usize,
+    /// 批量处理间隔（毫秒）
+    #[serde(default = "default_ack_batch_interval_ms")]
+    pub batch_interval_ms: u64,
+    /// 批量处理大小
+    #[serde(default = "default_ack_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_ack_redis_ttl() -> u64 { 3600 }
+fn default_ack_cache_capacity() -> usize { 10000 }
+fn default_ack_batch_interval_ms() -> u64 { 100 }
+fn default_ack_batch_size() -> usize { 100 }
 
 /// 推送工作服务配置
 #[derive(Debug, Clone, Deserialize, Default)]

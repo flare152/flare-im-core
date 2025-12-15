@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use flare_proto::session::session_service_client::SessionServiceClient as SessionServiceClientProto;
 use flare_proto::session::{UpdateSessionRequest, UpdateSessionResponse};
-use flare_proto::common::{RequestContext, ActorContext, ActorType};
+use flare_proto::common::{RequestContext, ActorContext};
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;

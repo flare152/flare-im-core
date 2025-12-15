@@ -75,7 +75,7 @@ gateway_deployment_mode = "single_region"
 # local_gateway_id = "gateway-beijing-1"
 
 # ============================================
-# 推送重试配置
+# 推送重试配置（Gateway 推送失败重试）
 # ============================================
 
 # 最大重试次数
@@ -89,6 +89,16 @@ push_retry_max_delay_ms = 5000
 
 # 重试退避乘数
 push_retry_backoff_multiplier = 2.0
+
+# ============================================
+# ACK 超时重试配置（区别于推送重试，避免 Kafka 阻塞）
+# ============================================
+
+# ACK 超时重试初始延迟（毫秒，较短，避免阻塞 Kafka）
+ack_retry_initial_delay_ms = 50
+
+# ACK 超时重试最大延迟（毫秒，较短，避免阻塞 Kafka）
+ack_retry_max_delay_ms = 1000
 
 # ============================================
 # ACK 超时配置
@@ -125,3 +135,20 @@ dlq_topic = "flare.im.push.dlq"
 
 # ACK Topic（从 Push Proxy 消费客户端 ACK）
 ack_topic = "flare.im.push.acks"
+
+# ============================================
+# ACK 服务配置（集成到 Push Server 配置中）
+# ============================================
+
+[services.push_server.ack]
+# Redis 默认过期时间（秒）
+redis_ttl = 3600
+
+# 内存缓存容量
+cache_capacity = 10000
+
+# 批量处理间隔（毫秒）
+batch_interval_ms = 100
+
+# 批量处理大小
+batch_size = 100

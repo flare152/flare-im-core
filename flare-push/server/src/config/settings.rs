@@ -46,6 +46,14 @@ pub struct PushServerConfig {
     pub ack_pipeline_batch_size: usize,   // Pipeline 批量获取的批次大小
     pub ack_timeout_batch_size: usize,    // 批量处理超时事件的批次大小
     pub ack_timeout_concurrent_limit: usize, // 并发处理超时事件的最大数量
+    // ACK 服务配置（从业务模块配置中读取）
+    pub ack_redis_ttl: u64,                // Redis 默认过期时间（秒）
+    pub ack_cache_capacity: usize,         // 内存缓存容量
+    pub ack_batch_interval_ms: u64,        // 批量处理间隔（毫秒）
+    pub ack_batch_size: usize,             // 批量处理大小
+    // ACK 超时重试配置（区别于推送重试，避免 Kafka 阻塞）
+    pub ack_retry_initial_delay_ms: u64,   // ACK 超时重试初始延迟（毫秒，较短）
+    pub ack_retry_max_delay_ms: u64,        // ACK 超时重试最大延迟（毫秒，较短）
     // 离线推送队列
     pub offline_topic: String,
     pub dlq_topic: String,
@@ -235,6 +243,35 @@ impl PushServerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(50); // 最多并发处理 50 个超时事件
 
+        // ACK 服务配置（从业务模块配置中读取）
+        let ack_redis_ttl = service.ack.as_ref()
+            .map(|ack| ack.redis_ttl)
+            .unwrap_or(3600);
+        
+        let ack_cache_capacity = service.ack.as_ref()
+            .map(|ack| ack.cache_capacity)
+            .unwrap_or(10000);
+        
+        let ack_batch_interval_ms = service.ack.as_ref()
+            .map(|ack| ack.batch_interval_ms)
+            .unwrap_or(100);
+        
+        let ack_batch_size = service.ack.as_ref()
+            .map(|ack| ack.batch_size)
+            .unwrap_or(100);
+
+        // ACK 超时重试配置（区别于推送重试，避免 Kafka 阻塞）
+        // ACK 超时重试应该更快，避免阻塞 Kafka 消费
+        let ack_retry_initial_delay_ms = env::var("PUSH_SERVER_ACK_RETRY_INITIAL_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50); // 50ms，比推送重试更快
+        
+        let ack_retry_max_delay_ms = env::var("PUSH_SERVER_ACK_RETRY_MAX_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000); // 1秒，比推送重试更短，避免阻塞 Kafka
+
         Self {
             kafka_bootstrap,
             consumer_group,
@@ -268,6 +305,12 @@ impl PushServerConfig {
             ack_pipeline_batch_size,
             ack_timeout_batch_size,
             ack_timeout_concurrent_limit,
+            ack_redis_ttl,
+            ack_cache_capacity,
+            ack_batch_interval_ms,
+            ack_batch_size,
+            ack_retry_initial_delay_ms,
+            ack_retry_max_delay_ms,
             offline_topic,
             dlq_topic,
             ack_topic,

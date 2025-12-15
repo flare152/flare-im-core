@@ -10,7 +10,6 @@ pub mod traits;
 use crate::ack::redis_manager::RedisAckManager;
 use crate::ack::service::AckService;
 use crate::ack::metrics::AckMetrics;
-use prometheus::Registry;
 use std::sync::Arc;
 use async_trait::async_trait;
 
@@ -25,6 +24,8 @@ pub struct AckModule {
     pub service: Arc<AckService>,
     /// Redis管理器
     pub redis_manager: Arc<RedisAckManager>,
+    /// 监控指标（暴露给外部使用）
+    pub metrics: Arc<AckMetrics>,
 }
 
 // 重新导出类型，方便外部使用
@@ -39,9 +40,9 @@ impl AckModule {
     pub async fn new(
         ack_config: crate::ack::config::AckServiceConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // 创建监控指标
-        let registry = Registry::new();
-        let metrics = Arc::new(AckMetrics::new(&registry)?);
+        // 使用全局的 Prometheus Registry（与其他服务指标统一）
+        use crate::metrics::REGISTRY;
+        let metrics = Arc::new(AckMetrics::new(&REGISTRY)?);
 
         // 创建ACK服务
         let service = Arc::new(AckService::new(ack_config, metrics.clone()).await?);
@@ -52,6 +53,7 @@ impl AckModule {
         Ok(Self {
             service,
             redis_manager,
+            metrics, // 暴露 metrics 供外部使用
         })
     }
 

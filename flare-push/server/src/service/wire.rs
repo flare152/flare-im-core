@@ -171,12 +171,15 @@ pub async fn initialize(
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .context("Failed to create Redis pool")?;
     
-    // 11. 初始化统一的 ACK 模块
-    let ack_config = AckServiceConfig::default();
-    // 覆盖 Redis URL
+    // 11. 初始化统一的 ACK 模块（从业务模块配置中读取）
     let ack_config = AckServiceConfig {
         redis_url: server_config.redis_url.clone(),
-        ..ack_config
+        redis_ttl: server_config.ack_redis_ttl,
+        cache_capacity: server_config.ack_cache_capacity,
+        batch_interval_ms: server_config.ack_batch_interval_ms,
+        batch_size: server_config.ack_batch_size,
+        // 使用默认的业务场景配置（可以根据需要从配置文件读取）
+        ..AckServiceConfig::default()
     };
     let ack_module = Arc::new(
         AckModule::new(ack_config).await
