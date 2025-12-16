@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use flare_server_core::runtime::ServiceRuntime;
 
@@ -15,26 +15,23 @@ pub struct ApplicationBootstrap;
 impl ApplicationBootstrap {
     /// 运行应用的主入口点
     pub async fn run() -> Result<()> {
-        use flare_im_core::{load_config, ServiceHelper};
-        
+        use flare_im_core::{ServiceHelper, load_config};
+
         // 加载应用配置
         let app_config = load_config(Some("config"));
         let service_config = app_config.media_service();
-        
+
         info!("Parsing server address...");
-        let address: SocketAddr = ServiceHelper::parse_server_addr(
-            app_config,
-            &service_config.runtime,
-            "flare-media",
-        )
-        .context("invalid media server address")?;
+        let address: SocketAddr =
+            ServiceHelper::parse_server_addr(app_config, &service_config.runtime, "flare-media")
+                .context("invalid media server address")?;
         info!(address = %address, "Server address parsed successfully");
-        
+
         // 使用 Wire 风格的依赖注入构建应用上下文
         let context = wire::initialize(app_config).await?;
-        
+
         info!("ApplicationBootstrap created successfully");
-        
+
         // 运行服务
         Self::run_with_context(context, address).await
     }
@@ -67,7 +64,7 @@ impl ApplicationBootstrap {
                             port = %address_clone.port(),
                             "✅ Media gRPC service is listening"
                         );
-                        
+
                         // 同时监听 Ctrl+C 和关闭通道
                         tokio::select! {
                             _ = tokio::signal::ctrl_c() => {
@@ -83,28 +80,30 @@ impl ApplicationBootstrap {
             });
 
         // 运行服务（带服务注册）
-        runtime.run_with_registration(|addr| {
-            Box::pin(async move {
-                // 注册服务（使用常量）
-                use flare_im_core::service_names::MEDIA;
-                match flare_im_core::discovery::register_service_only(MEDIA, addr, None).await {
-                    Ok(Some(registry)) => {
-                        info!("✅ Service registered: {}", MEDIA);
-                        Ok(Some(registry))
+        runtime
+            .run_with_registration(|addr| {
+                Box::pin(async move {
+                    // 注册服务（使用常量）
+                    use flare_im_core::service_names::MEDIA;
+                    match flare_im_core::discovery::register_service_only(MEDIA, addr, None).await {
+                        Ok(Some(registry)) => {
+                            info!("✅ Service registered: {}", MEDIA);
+                            Ok(Some(registry))
+                        }
+                        Ok(None) => {
+                            info!("Service discovery not configured, skipping registration");
+                            Ok(None)
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "❌ Service registration failed"
+                            );
+                            Err(format!("Service registration failed: {}", e).into())
+                        }
                     }
-                    Ok(None) => {
-                        info!("Service discovery not configured, skipping registration");
-                        Ok(None)
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            "❌ Service registration failed"
-                        );
-                        Err(format!("Service registration failed: {}", e).into())
-                    }
-                }
+                })
             })
-        }).await
+            .await
     }
 }

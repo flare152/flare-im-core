@@ -1,5 +1,5 @@
 //! 类型转换工具
-//! 
+//!
 //! 注意：communication_core.proto 已删除
 //! 如果需要转换功能，应该使用对应的proto类型
 

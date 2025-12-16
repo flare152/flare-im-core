@@ -3,21 +3,23 @@
 use std::sync::Arc;
 
 use flare_im_core::error::Result;
-use tracing::instrument;
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
+use tracing::instrument;
 
-use crate::application::queries::{QueryMessageQuery, QueryMessagesQuery, SearchMessagesQuery, QueryMessagesResult};
+use crate::application::queries::{
+    QueryMessageQuery, QueryMessagesQuery, QueryMessagesResult, SearchMessagesQuery,
+};
 use crate::domain::service::MessageDomainService;
 
 /// 消息查询处理器（编排层）
-/// 
+///
 /// 架构设计：
 /// - 作为编排层，负责请求转发和响应封装
 /// - 集成 StorageReaderService 进行实际查询
 /// - 支持缓存策略和降级处理
 /// - 提供统一的错误处理和链路追踪
 pub struct MessageQueryHandler {
-    _domain_service: Arc<MessageDomainService>,  // 保留用于未来扩展
+    _domain_service: Arc<MessageDomainService>, // 保留用于未来扩展
     storage_client: Option<Arc<StorageReaderServiceClient<tonic::transport::Channel>>>,
 }
 
@@ -26,28 +28,33 @@ impl MessageQueryHandler {
         domain_service: Arc<MessageDomainService>,
         storage_client: Option<Arc<StorageReaderServiceClient<tonic::transport::Channel>>>,
     ) -> Self {
-        Self { 
+        Self {
             _domain_service: domain_service,
             storage_client,
         }
     }
 
     /// 查询单条消息
-    /// 
+    ///
     /// 实现策略：
     /// 1. 通过 StorageReaderService 查询
     /// 2. 保证数据一致性，不降级处理
-    /// 
+    ///
     /// 性能考虑：
     /// - 通过 message_id 主键查询，性能最优
     /// - 支持会话权限验证，防止越权访问
     #[instrument(skip(self), fields(message_id = %query.message_id, session_id = %query.session_id))]
-    pub async fn query_message(&self, query: QueryMessageQuery) -> Result<flare_proto::common::Message> {
-        let storage_client = self.storage_client.as_ref()
-            .ok_or_else(|| flare_im_core::error::FlareError::system("StorageReaderService not configured"))?;
+    pub async fn query_message(
+        &self,
+        query: QueryMessageQuery,
+    ) -> Result<flare_proto::common::Message> {
+        let storage_client = self.storage_client.as_ref().ok_or_else(|| {
+            flare_im_core::error::FlareError::system("StorageReaderService not configured")
+        })?;
 
         // 构建查询请求
-        let request = flare_proto::storage::GetMessageRequest {            message_id: query.message_id.clone(),
+        let request = flare_proto::storage::GetMessageRequest {
+            message_id: query.message_id.clone(),
             context: Some(flare_proto::common::RequestContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 trace: None,
@@ -87,40 +94,49 @@ impl MessageQueryHandler {
 
         // 调用存储服务
         let client = storage_client.as_ref();
-        let response = client.clone().get_message(request).await
-            .map_err(|e| flare_im_core::error::FlareError::system(&format!("Failed to query message: {}", e)))?;
+        let response = client.clone().get_message(request).await.map_err(|e| {
+            flare_im_core::error::FlareError::system(&format!("Failed to query message: {}", e))
+        })?;
         let response = response.into_inner();
-        
+
         // 检查响应状态
         if let Some(status) = &response.status {
             if status.code != flare_proto::common::ErrorCode::Ok as i32 {
                 return Err(flare_im_core::error::FlareError::system(&format!(
-                    "Query message failed: {}", status.message
+                    "Query message failed: {}",
+                    status.message
                 )));
             }
         }
 
         // 返回消息内容
         response.message.ok_or_else(|| {
-            flare_im_core::error::FlareError::system(&format!("Message not found: {}", query.message_id))
+            flare_im_core::error::FlareError::system(&format!(
+                "Message not found: {}",
+                query.message_id
+            ))
         })
     }
 
     /// 查询消息列表
-    /// 
+    ///
     /// 实现策略：
     /// 1. 基于时间范围和游标的高效分页查询
     /// 2. 支持按序列号查询（性能更优）
     /// 3. 自动处理会话权限验证
-    /// 
+    ///
     /// 分页策略：
     /// - 使用 cursor-based 分页，避免深度分页问题
     /// - 支持时间范围过滤，提高查询效率
     /// - 默认限制查询条数，防止大数据量查询
     #[instrument(skip(self), fields(session_id = %query.session_id))]
-    pub async fn query_messages(&self, query: QueryMessagesQuery) -> Result<Vec<flare_proto::common::Message>> {
-        let storage_client = self.storage_client.as_ref()
-            .ok_or_else(|| flare_im_core::error::FlareError::system("StorageReaderService not configured"))?;
+    pub async fn query_messages(
+        &self,
+        query: QueryMessagesQuery,
+    ) -> Result<Vec<flare_proto::common::Message>> {
+        let storage_client = self.storage_client.as_ref().ok_or_else(|| {
+            flare_im_core::error::FlareError::system("StorageReaderService not configured")
+        })?;
 
         // 构建查询请求
         let request = flare_proto::storage::QueryMessagesRequest {
@@ -175,16 +191,18 @@ impl MessageQueryHandler {
 
         // 调用存储服务
         let client = storage_client.as_ref();
-        let response = client.clone().query_messages(request).await
-            .map_err(|e| flare_im_core::error::FlareError::system(&format!("Failed to query messages: {}", e)))?;
+        let response = client.clone().query_messages(request).await.map_err(|e| {
+            flare_im_core::error::FlareError::system(&format!("Failed to query messages: {}", e))
+        })?;
 
         let response = response.into_inner();
-        
+
         // 检查响应状态
         if let Some(status) = &response.status {
             if status.code != flare_proto::common::ErrorCode::Ok as i32 {
                 return Err(flare_im_core::error::FlareError::system(&format!(
-                    "Query messages failed: {}", status.message
+                    "Query messages failed: {}",
+                    status.message
                 )));
             }
         }
@@ -193,20 +211,24 @@ impl MessageQueryHandler {
         Ok(response.messages)
     }
     /// 带分页的查询消息列表
-    /// 
+    ///
     /// 实现策略：
     /// 1. 基于时间范围和游标的高效分页查询
     /// 2. 支持按序列号查询（性能更优）
     /// 3. 自动处理会话权限验证
-    /// 
+    ///
     /// 分页策略：
     /// - 使用 cursor-based 分页，避免深度分页问题
     /// - 支持时间范围过滤，提高查询效率
     /// - 默认限制查询条数，防止大数据量查询
     #[instrument(skip(self), fields(session_id = %query.session_id))]
-    pub async fn query_messages_with_pagination(&self, query: QueryMessagesQuery) -> Result<QueryMessagesResult> {
-        let storage_client = self.storage_client.as_ref()
-            .ok_or_else(|| flare_im_core::error::FlareError::system("StorageReaderService not configured"))?;
+    pub async fn query_messages_with_pagination(
+        &self,
+        query: QueryMessagesQuery,
+    ) -> Result<QueryMessagesResult> {
+        let storage_client = self.storage_client.as_ref().ok_or_else(|| {
+            flare_im_core::error::FlareError::system("StorageReaderService not configured")
+        })?;
 
         // 构建查询请求
         let request = flare_proto::storage::QueryMessagesRequest {
@@ -261,16 +283,18 @@ impl MessageQueryHandler {
 
         // 调用存储服务
         let client = storage_client.as_ref();
-        let response = client.clone().query_messages(request).await
-            .map_err(|e| flare_im_core::error::FlareError::system(&format!("Failed to query messages: {}", e)))?;
+        let response = client.clone().query_messages(request).await.map_err(|e| {
+            flare_im_core::error::FlareError::system(&format!("Failed to query messages: {}", e))
+        })?;
 
         let response = response.into_inner();
-        
+
         // 检查响应状态
         if let Some(status) = &response.status {
             if status.code != flare_proto::common::ErrorCode::Ok as i32 {
                 return Err(flare_im_core::error::FlareError::system(&format!(
-                    "Query messages failed: {}", status.message
+                    "Query messages failed: {}",
+                    status.message
                 )));
             }
         }
@@ -284,29 +308,31 @@ impl MessageQueryHandler {
     }
 
     /// 搜索消息
-    /// 
+    ///
     /// 实现策略：
     /// 1. 支持全文搜索和关键词匹配
     /// 2. 支持多会话搜索或单会话搜索
     /// 3. 使用索引优化搜索性能
-    /// 
+    ///
     /// 搜索优化：
     /// - 基于 PostgreSQL 的全文搜索索引
     /// - 支持搜索结果排序和高亮显示
     /// - 限制搜索范围，提高响应速度
     #[instrument(skip(self), fields(keyword = %query.keyword))]
-    pub async fn search_messages(&self, query: SearchMessagesQuery) -> Result<Vec<flare_proto::common::Message>> {
-        let storage_client = self.storage_client.as_ref()
-            .ok_or_else(|| flare_im_core::error::FlareError::system("StorageReaderService not configured"))?;
+    pub async fn search_messages(
+        &self,
+        query: SearchMessagesQuery,
+    ) -> Result<Vec<flare_proto::common::Message>> {
+        let storage_client = self.storage_client.as_ref().ok_or_else(|| {
+            flare_im_core::error::FlareError::system("StorageReaderService not configured")
+        })?;
 
         // 构建搜索过滤器
-        let filters = vec![
-            flare_proto::common::FilterExpression {
-                field: "content".to_string(),
-                op: flare_proto::common::FilterOperator::Contains as i32,
-                values: vec![query.keyword.clone()],
-            },
-        ];
+        let filters = vec![flare_proto::common::FilterExpression {
+            field: "content".to_string(),
+            op: flare_proto::common::FilterOperator::Contains as i32,
+            values: vec![query.keyword.clone()],
+        }];
 
         // 如果有 session_id，添加会话过滤
         let mut all_filters = filters;
@@ -372,24 +398,24 @@ impl MessageQueryHandler {
                     seconds: 0,
                     nanos: 0,
                 }),
-                end_time: Some(prost_types::Timestamp::from(
-                    std::time::SystemTime::now()
-                )),
+                end_time: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
             }),
         };
 
         // 调用存储服务
         let mut client = storage_client.as_ref().clone();
-        let response = client.search_messages(request).await
-            .map_err(|e| flare_im_core::error::FlareError::system(&format!("Failed to search messages: {}", e)))?;
+        let response = client.search_messages(request).await.map_err(|e| {
+            flare_im_core::error::FlareError::system(&format!("Failed to search messages: {}", e))
+        })?;
 
         let response = response.into_inner();
-        
+
         // 检查响应状态
         if let Some(status) = &response.status {
             if status.code != flare_proto::common::ErrorCode::Ok as i32 {
                 return Err(flare_im_core::error::FlareError::system(&format!(
-                    "Search messages failed: {}", status.message
+                    "Search messages failed: {}",
+                    status.message
                 )));
             }
         }
@@ -398,4 +424,3 @@ impl MessageQueryHandler {
         Ok(response.messages)
     }
 }
-

@@ -22,16 +22,17 @@ pub mod init;
 // 统一服务发现模块已移动到 flare-server-core
 // 通过 re-export 提供访问
 pub use flare_server_core::discovery::{
-    DiscoveryBackend, DiscoveryConfig, DiscoveryFactory, ServiceDiscover, ServiceDiscoverUpdater,
-    ServiceInstance, ServiceRegistry, BackendType, LoadBalanceStrategy, NamespaceConfig, VersionConfig,
-    TagFilter, InstanceMetadata, ServiceClient, ChannelService, HealthCheckConfig,
+    BackendType, ChannelService, DiscoveryBackend, DiscoveryConfig, DiscoveryFactory,
+    HealthCheckConfig, InstanceMetadata, LoadBalanceStrategy, NamespaceConfig, ServiceClient,
+    ServiceDiscover, ServiceDiscoverUpdater, ServiceInstance, ServiceRegistry, TagFilter,
+    VersionConfig,
 };
 
 // Re-exports
 pub use init::{
-    init_from_app_config, init_from_config, init_from_registry_config,
-    register_service_only, register_service_from_config, register_service_from_registry_config,
     create_discover, create_discover_from_config, create_discover_from_registry_config,
+    init_from_app_config, init_from_config, init_from_registry_config,
+    register_service_from_config, register_service_from_registry_config, register_service_only,
 };
 
 // 类型别名，方便使用

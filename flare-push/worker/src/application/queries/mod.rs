@@ -23,4 +23,3 @@ pub struct QueryPushStatisticsQuery {
     /// 推送渠道过滤（可选）
     pub channel: Option<String>,
 }
-

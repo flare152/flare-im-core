@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 /// ACK 状态值
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -53,9 +53,8 @@ pub trait AckPublisher: Send + Sync {
     async fn publish_ack(&self, event: &AckAuditEvent) -> Result<()>;
 }
 
-
 /// gRPC ACK 发布器（轻量，推荐）
-/// 
+///
 /// Gateway 作为接入层，通过 gRPC 直接上报到 AccessGateway 服务
 /// 优势：
 /// - ✅ 无需 Kafka 依赖，部署更轻量
@@ -65,14 +64,22 @@ pub struct GrpcAckPublisher {
     /// AccessGateway 服务名称（用于服务发现）
     service_name: String,
     /// gRPC 客户端（懒加载）
-    client: Arc<Mutex<Option<flare_proto::access_gateway::access_gateway_client::AccessGatewayClient<tonic::transport::Channel>>>>,
+    client: Arc<
+        Mutex<
+            Option<
+                flare_proto::access_gateway::access_gateway_client::AccessGatewayClient<
+                    tonic::transport::Channel,
+                >,
+            >,
+        >,
+    >,
     /// 服务发现客户端（懒加载）
     service_client: Arc<Mutex<Option<flare_server_core::discovery::ServiceClient>>>,
 }
 
 impl GrpcAckPublisher {
     /// 创建 gRPC ACK 发布器
-    /// 
+    ///
     /// # 参数
     /// * `service_name` - AccessGateway 服务名称（用于服务发现）
     pub fn new(service_name: String) -> Self {
@@ -82,16 +89,20 @@ impl GrpcAckPublisher {
             service_client: Arc::new(Mutex::new(None)),
         }
     }
-    
+
     /// 确保 gRPC 客户端已初始化（懒加载）
     async fn ensure_client(
         &self,
-    ) -> Result<flare_proto::access_gateway::access_gateway_client::AccessGatewayClient<tonic::transport::Channel>> {
+    ) -> Result<
+        flare_proto::access_gateway::access_gateway_client::AccessGatewayClient<
+            tonic::transport::Channel,
+        >,
+    > {
         let mut client_guard = self.client.lock().await;
         if let Some(client) = client_guard.as_ref() {
             return Ok(client.clone());
         }
-        
+
         // 使用服务发现获取 Channel
         let mut service_client_guard = self.service_client.lock().await;
         if service_client_guard.is_none() {
@@ -99,30 +110,43 @@ impl GrpcAckPublisher {
             let discover = flare_im_core::discovery::create_discover(&self.service_name)
                 .await
                 .map_err(|e| {
-                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "access gateway service unavailable")
-                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
-                        .build_error()
+                    ErrorBuilder::new(
+                        ErrorCode::ServiceUnavailable,
+                        "access gateway service unavailable",
+                    )
+                    .details(format!(
+                        "Failed to create service discover for {}: {}",
+                        self.service_name, e
+                    ))
+                    .build_error()
                 })?;
-            
+
             if let Some(discover) = discover {
-                *service_client_guard = Some(flare_server_core::discovery::ServiceClient::new(discover));
+                *service_client_guard =
+                    Some(flare_server_core::discovery::ServiceClient::new(discover));
             } else {
-                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "access gateway service unavailable")
-                    .details("Service discovery not configured")
-                    .build_error());
+                return Err(ErrorBuilder::new(
+                    ErrorCode::ServiceUnavailable,
+                    "access gateway service unavailable",
+                )
+                .details("Service discovery not configured")
+                .build_error());
             }
         }
-        
+
         let service_client = service_client_guard.as_mut().unwrap();
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "access gateway service unavailable")
-                    .details(format!("Failed to get channel: {}", e))
-                    .build_error()
-            })?;
-        
+        let channel = service_client.get_channel().await.map_err(|e| {
+            ErrorBuilder::new(
+                ErrorCode::ServiceUnavailable,
+                "access gateway service unavailable",
+            )
+            .details(format!("Failed to get channel: {}", e))
+            .build_error()
+        })?;
+
         debug!("Got channel for access gateway service from service discovery");
-        let client = flare_proto::access_gateway::access_gateway_client::AccessGatewayClient::new(channel);
+        let client =
+            flare_proto::access_gateway::access_gateway_client::AccessGatewayClient::new(channel);
         *client_guard = Some(client.clone());
         Ok(client)
     }
@@ -141,7 +165,7 @@ impl AckPublisher for GrpcAckPublisher {
             error_code: event.ack.error_code.unwrap_or(0),
             error_message: event.ack.error_message.clone().unwrap_or_default(),
         };
-        
+
         let request = flare_proto::access_gateway::PushAckRequest {
             context: None, // 可以根据需要填充
             tenant: None,  // 可以根据需要填充
@@ -150,7 +174,7 @@ impl AckPublisher for GrpcAckPublisher {
             metadata: std::collections::HashMap::new(), // 可以根据需要填充
             request_id: format!("ack-{}", uuid::Uuid::new_v4()), // 生成唯一的请求ID
         };
-        
+
         // 发送 gRPC 请求到 AccessGateway Service
         match self.ensure_client().await {
             Ok(client) => {

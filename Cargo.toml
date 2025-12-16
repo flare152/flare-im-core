@@ -130,6 +130,10 @@ aws-config = "1"
 # 测试工具
 tokio-test = "0.4"
 
+# 新增的依赖，用于统一管理
+parking_lot = "0.12"
+image = "0.24"
+
 [package]
 name = "flare-im-core"
 version.workspace = true
@@ -192,19 +196,3 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 prost = "0.14"
 redis = { workspace = true }
 sqlx = { workspace = true }
-
-[[bench]]
-name = "message_orchestrator_bench"
-harness = false
-
-[[bench]]
-name = "storage_writer_bench"
-harness = false
-
-[[bench]]
-name = "push_server_bench"
-harness = false
-
-[[bench]]
-name = "ack_performance_bench"
-harness = false

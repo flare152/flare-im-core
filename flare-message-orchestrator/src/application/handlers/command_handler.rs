@@ -31,38 +31,45 @@ impl MessageCommandHandler {
     #[instrument(skip(self))]
     pub async fn handle_store_message(&self, command: StoreMessageCommand) -> Result<String> {
         let start = Instant::now();
-        
+
         // 提取租户ID和消息类型用于指标标签（在移动之前）
-        let tenant_id = command.request.tenant.as_ref()
+        let tenant_id = command
+            .request
+            .tenant
+            .as_ref()
             .map(|t| t.tenant_id.as_str())
             .unwrap_or("unknown")
             .to_string();
-        
-        let message_type = command.request.message.as_ref()
-            .map(|m| {
-                match m.message_type {
-                    0 => "normal",
-                    _ => "notification",
-                }
+
+        let message_type = command
+            .request
+            .message
+            .as_ref()
+            .map(|m| match m.message_type {
+                0 => "normal",
+                _ => "notification",
             })
             .unwrap_or("normal")
             .to_string();
-        
+
         let result = self
             .domain_service
             .orchestrate_message_storage(command.request, true)
             .await;
-        
+
         // 记录指标
         let duration = start.elapsed();
-        self.metrics.messages_sent_duration_seconds.observe(duration.as_secs_f64());
-        
+        self.metrics
+            .messages_sent_duration_seconds
+            .observe(duration.as_secs_f64());
+
         if result.is_ok() {
-            self.metrics.messages_sent_total
+            self.metrics
+                .messages_sent_total
                 .with_label_values(&[message_type, tenant_id])
                 .inc();
         }
-        
+
         result
     }
 
@@ -73,38 +80,45 @@ impl MessageCommandHandler {
         command: StoreMessageCommand,
     ) -> Result<String> {
         let start = Instant::now();
-        
+
         // 提取租户ID和消息类型用于指标标签（在移动之前）
-        let tenant_id = command.request.tenant.as_ref()
+        let tenant_id = command
+            .request
+            .tenant
+            .as_ref()
             .map(|t| t.tenant_id.as_str())
             .unwrap_or("unknown")
             .to_string();
-        
-        let message_type = command.request.message.as_ref()
-            .map(|m| {
-                match m.message_type {
-                    0 => "normal",
-                    _ => "notification",
-                }
+
+        let message_type = command
+            .request
+            .message
+            .as_ref()
+            .map(|m| match m.message_type {
+                0 => "normal",
+                _ => "notification",
             })
             .unwrap_or("normal")
             .to_string();
-        
+
         let result = self
             .domain_service
             .orchestrate_message_storage(command.request, false)
             .await;
-        
+
         // 记录指标
         let duration = start.elapsed();
-        self.metrics.messages_sent_duration_seconds.observe(duration.as_secs_f64());
-        
+        self.metrics
+            .messages_sent_duration_seconds
+            .observe(duration.as_secs_f64());
+
         if result.is_ok() {
-            self.metrics.messages_sent_total
+            self.metrics
+                .messages_sent_total
                 .with_label_values(&[&message_type, &tenant_id])
                 .inc();
         }
-        
+
         result
     }
 
@@ -131,4 +145,3 @@ impl MessageCommandHandler {
         Ok(message_ids)
     }
 }
-

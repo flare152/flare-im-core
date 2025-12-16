@@ -146,7 +146,8 @@ impl MediaService {
         if let Ok(metadata) = fs::metadata(&chunk_path).await {
             if metadata.len() as i64 == chunk_len {
                 // chunk already uploaded, refresh session expiry
-                session.expires_at = Utc::now() + Duration::seconds(self.config.chunk_ttl_seconds.max(60));
+                session.expires_at =
+                    Utc::now() + Duration::seconds(self.config.chunk_ttl_seconds.max(60));
                 store.upsert_session(&session).await?;
                 return Ok(MultipartUploadSession {
                     upload_id: session.upload_id.clone(),
@@ -364,7 +365,10 @@ impl MediaService {
             let mut primary_url = String::new();
 
             if object_repo.use_presigned_urls() {
-                match object_repo.presign_object(&path, self.config.default_ttl).await {
+                match object_repo
+                    .presign_object(&path, self.config.default_ttl)
+                    .await
+                {
                     Ok(value) => primary_url = value,
                     Err(err) => {
                         tracing::error!(object_path = &path, error = %err, "生成预签名URL失败，回退到直链");
@@ -583,8 +587,11 @@ impl MediaService {
                         }
                     }
                     if cdn_url.is_empty() {
-                        if let Some(cdn_base) =
-                            self.config.cdn_base_url.clone().or_else(|| repo.cdn_base_url())
+                        if let Some(cdn_base) = self
+                            .config
+                            .cdn_base_url
+                            .clone()
+                            .or_else(|| repo.cdn_base_url())
                         {
                             cdn_url = Self::build_full_url(&cdn_base, &object_path);
                         }
@@ -606,8 +613,11 @@ impl MediaService {
                     }
 
                     if cdn_url.is_empty() {
-                        if let Some(cdn_base) =
-                            self.config.cdn_base_url.clone().or_else(|| repo.cdn_base_url())
+                        if let Some(cdn_base) = self
+                            .config
+                            .cdn_base_url
+                            .clone()
+                            .or_else(|| repo.cdn_base_url())
                         {
                             cdn_url = Self::build_full_url(&cdn_base, &object_path);
                         }
@@ -991,15 +1001,22 @@ impl MediaService {
     }
 
     /// 准备上传上下文数据（从 protobuf 元数据提取并处理业务逻辑）
-    /// 
+    ///
     /// 这是领域服务方法，负责将应用层的 protobuf 类型转换为领域模型所需的数据
     /// 返回包含所有数据的结构，调用者需要构建 UploadContext（因为 UploadContext 需要生命周期参数）
     pub fn prepare_upload_context_data<'a>(
         &self,
         metadata: &'a flare_proto::media::UploadFileMetadata,
-    ) -> (String, String, HashMap<String, String>, Option<&'a str>, Option<&'a str>, Option<&'a str>) {
+    ) -> (
+        String,
+        String,
+        HashMap<String, String>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+    ) {
         let file_id = Uuid::new_v4().to_string();
-        
+
         let mut extra_metadata = metadata.metadata.clone();
 
         if !metadata.namespace.is_empty() {
@@ -1040,17 +1057,26 @@ impl MediaService {
             .entry(FILE_CATEGORY_METADATA_KEY.to_string())
             .or_insert_with(|| file_category.clone());
 
-        (file_id, file_category, extra_metadata, trace_id, namespace, business_tag)
+        (
+            file_id,
+            file_category,
+            extra_metadata,
+            trace_id,
+            namespace,
+            business_tag,
+        )
     }
 
     /// 准备分片上传初始化（从 protobuf 请求构建 MultipartUploadInit）
-    /// 
+    ///
     /// 这是领域服务方法，负责将应用层的 protobuf 类型转换为领域模型
     pub fn prepare_multipart_upload_init(
         &self,
         request: &flare_proto::media::InitiateMultipartUploadRequest,
     ) -> Result<MultipartUploadInit> {
-        let metadata = request.metadata.as_ref()
+        let metadata = request
+            .metadata
+            .as_ref()
             .ok_or_else(|| anyhow!("multipart metadata missing"))?;
 
         let desired_chunk_size = if request.desired_chunk_size > 0 {

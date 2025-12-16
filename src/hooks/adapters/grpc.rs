@@ -444,9 +444,9 @@ fn build_request_context(ctx: &HookContext) -> Option<ProtoRequestContext> {
                     }
                 })
                 .collect(),
-            priority: 0,  // 【新增】默认为 Unspecified
-            token_version: 0,  // 【新增】默认为 0
-            connection_quality: None,  // 【新增】默认为 None
+            priority: 0,              // 【新增】默认为 Unspecified
+            token_version: 0,         // 【新增】默认为 0
+            connection_quality: None, // 【新增】默认为 None
         })
     };
 
@@ -548,9 +548,13 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
         .session_type
         .as_deref()
         .map(|t| match t.to_ascii_lowercase().as_str() {
-            "single" | "session_type_single" | "1" => flare_proto::common::SessionType::Single as i32,
+            "single" | "session_type_single" | "1" => {
+                flare_proto::common::SessionType::Single as i32
+            }
             "group" | "session_type_group" | "2" => flare_proto::common::SessionType::Group as i32,
-            "channel" | "session_type_channel" | "3" => flare_proto::common::SessionType::Channel as i32,
+            "channel" | "session_type_channel" | "3" => {
+                flare_proto::common::SessionType::Channel as i32
+            }
             _ => flare_proto::common::SessionType::Unspecified as i32,
         })
         .unwrap_or(flare_proto::common::SessionType::Unspecified as i32);
@@ -568,7 +572,9 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
             "location" => flare_proto::common::MessageType::Location as i32,
             "card" => flare_proto::common::MessageType::Card as i32,
             "notification" => flare_proto::common::MessageType::Notification as i32,
-            "binary" | "attachment" | "message_type_binary" => flare_proto::common::MessageType::Custom as i32, // 二进制消息映射到 Custom
+            "binary" | "attachment" | "message_type_binary" => {
+                flare_proto::common::MessageType::Custom as i32
+            } // 二进制消息映射到 Custom
             "custom" | "message_type_custom" => flare_proto::common::MessageType::Custom as i32,
             _ => flare_proto::common::MessageType::Unspecified as i32,
         })

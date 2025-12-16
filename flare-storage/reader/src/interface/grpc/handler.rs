@@ -1,21 +1,20 @@
 use std::sync::Arc;
 
-use flare_proto::storage::*;
-use flare_proto::storage::storage_reader_service_server::StorageReaderService;
+use chrono::{TimeZone, Utc};
 use flare_proto::common::OperationType;
+use flare_proto::storage::storage_reader_service_server::StorageReaderService;
+use flare_proto::storage::*;
 use tonic::{Request, Response, Status};
 use tracing::error;
-use chrono::{TimeZone, Utc};
 
 use crate::application::commands::{
-    ClearSessionCommand, DeleteMessageCommand, DeleteMessageForUserCommand,
-    ExportMessagesCommand, MarkReadCommand, RecallMessageCommand, SetMessageAttributesCommand,
+    ClearSessionCommand, DeleteMessageCommand, DeleteMessageForUserCommand, ExportMessagesCommand,
+    MarkReadCommand, RecallMessageCommand, SetMessageAttributesCommand,
 };
+use crate::application::handlers::{MessageStorageCommandHandler, MessageStorageQueryHandler};
 use crate::application::queries::{
-    GetMessageQuery, ListMessageTagsQuery, QueryMessagesQuery, QueryMessagesBySeqQuery, SearchMessagesQuery,
-};
-use crate::application::handlers::{
-    MessageStorageCommandHandler, MessageStorageQueryHandler,
+    GetMessageQuery, ListMessageTagsQuery, QueryMessagesBySeqQuery, QueryMessagesQuery,
+    SearchMessagesQuery,
 };
 
 #[derive(Clone)]
@@ -56,11 +55,15 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             },
         };
 
-        match self.query_handler.handle_query_messages_with_pagination(query).await {
+        match self
+            .query_handler
+            .handle_query_messages_with_pagination(query)
+            .await
+        {
             Ok(result) => {
                 let message_count = result.messages.len() as i32;
                 let has_more = message_count >= req.limit;
-                
+
                 Ok(Response::new(QueryMessagesResponse {
                     messages: result.messages,
                     next_cursor: result.next_cursor.clone(),
@@ -117,13 +120,15 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                     .unwrap_or_default();
                 let has_more = message_count >= req.limit;
 
-                Ok(Response::new(flare_proto::storage::QueryMessagesBySeqResponse {
-                    messages,
-                    next_cursor: next_cursor.clone(),
-                    has_more,
-                    last_seq: last_seq.unwrap_or(0),
-                    status: Some(flare_server_core::error::ok_status()),
-                }))
+                Ok(Response::new(
+                    flare_proto::storage::QueryMessagesBySeqResponse {
+                        messages,
+                        next_cursor: next_cursor.clone(),
+                        has_more,
+                        last_seq: last_seq.unwrap_or(0),
+                        status: Some(flare_server_core::error::ok_status()),
+                    },
+                ))
             }
             Err(err) => {
                 error!(error = ?err, "Failed to query messages by seq");
@@ -217,7 +222,11 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             permanent: req.permanent,
         };
 
-        match self.command_handler.handle_delete_message_for_user(command).await {
+        match self
+            .command_handler
+            .handle_delete_message_for_user(command)
+            .await
+        {
             Ok(deleted_count) => Ok(Response::new(DeleteMessageForUserResponse {
                 success: deleted_count > 0,
                 deleted_count: deleted_count as i32,
@@ -235,21 +244,27 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<ClearSessionRequest>,
     ) -> Result<Response<ClearSessionResponse>, Status> {
         let req = request.into_inner();
-        
+
         // 解析 clear_before_time
         let clear_before_time = match req.clear_type() {
             flare_proto::storage::ClearType::ClearAll => None,
             flare_proto::storage::ClearType::ClearBeforeMessage => {
                 // 需要先查询消息的时间戳
                 if req.clear_before_message_id.is_empty() {
-                    return Err(Status::invalid_argument("clear_before_message_id is required"));
+                    return Err(Status::invalid_argument(
+                        "clear_before_message_id is required",
+                    ));
                 }
                 // 查询消息时间戳
-                match self.query_handler.handle_get_message_timestamp(&req.clear_before_message_id).await {
+                match self
+                    .query_handler
+                    .handle_get_message_timestamp(&req.clear_before_message_id)
+                    .await
+                {
                     Ok(Some(timestamp)) => Some(timestamp),
                     Ok(None) => {
                         return Err(Status::not_found(format!(
-                            "Message not found: {}", 
+                            "Message not found: {}",
                             req.clear_before_message_id
                         )));
                     }
@@ -259,13 +274,12 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                     }
                 }
             }
-            flare_proto::storage::ClearType::ClearBeforeTime => {
-                req.clear_before_time.as_ref().and_then(|ts| {
-                    chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                })
-            }
+            flare_proto::storage::ClearType::ClearBeforeTime => req
+                .clear_before_time
+                .as_ref()
+                .and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)),
         };
-        
+
         let command = ClearSessionCommand {
             session_id: req.session_id,
             user_id: Some(req.user_id),
@@ -329,7 +343,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<SearchMessagesRequest>,
     ) -> Result<Response<SearchMessagesResponse>, Status> {
         let req = request.into_inner();
-        
+
         // 解析时间范围
         let (start_time, end_time) = if let Some(time_range) = &req.time_range {
             let start = time_range
@@ -349,11 +363,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             filters: req.filters,
             start_time: start_time.map(|dt| dt.timestamp()).unwrap_or(0),
             end_time: end_time.map(|dt| dt.timestamp()).unwrap_or(0),
-            limit: req
-                .pagination
-                .as_ref()
-                .map(|p| p.limit)
-                .unwrap_or(200),
+            limit: req.pagination.as_ref().map(|p| p.limit).unwrap_or(200),
         };
 
         match self.query_handler.handle_search_messages(query).await {
@@ -380,7 +390,8 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<SetMessageAttributesRequest>,
     ) -> Result<Response<SetMessageAttributesResponse>, Status> {
         let req = request.into_inner();
-        let attributes_map: std::collections::HashMap<String, String> = req.attributes.into_iter().collect();
+        let attributes_map: std::collections::HashMap<String, String> =
+            req.attributes.into_iter().collect();
         let command = SetMessageAttributesCommand {
             message_id: req.message_id.clone(),
             attributes: attributes_map.clone(),
@@ -429,7 +440,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             "thread" | "thread_reply" => OperationType::ThreadReply as i32,
             _ => OperationType::Unspecified as i32,
         };
-        
+
         let operation = flare_proto::common::MessageOperation {
             operation_type: operation_type_enum,
             target_message_id: req.message_id.clone(),
@@ -445,7 +456,10 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             metadata: {
                 let mut meta = std::collections::HashMap::new();
                 // 记录变更的属性键列表
-                meta.insert("keys".to_string(), attributes_map.keys().cloned().collect::<Vec<_>>().join(","));
+                meta.insert(
+                    "keys".to_string(),
+                    attributes_map.keys().cloned().collect::<Vec<_>>().join(","),
+                );
                 meta
             },
             extensions: Vec::new(), // 添加必填字段
@@ -495,12 +509,14 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         let req = request.into_inner();
         let command = ExportMessagesCommand {
             session_id: req.session_id,
-            start_time: req.time_range.as_ref().and_then(|tr| {
-                tr.start_time.as_ref().map(|ts| ts.seconds)
-            }),
-            end_time: req.time_range.as_ref().and_then(|tr| {
-                tr.end_time.as_ref().map(|ts| ts.seconds)
-            }),
+            start_time: req
+                .time_range
+                .as_ref()
+                .and_then(|tr| tr.start_time.as_ref().map(|ts| ts.seconds)),
+            end_time: req
+                .time_range
+                .as_ref()
+                .and_then(|tr| tr.end_time.as_ref().map(|ts| ts.seconds)),
             limit: None, // ExportMessagesRequest 可能没有 limit 字段
         };
 
@@ -521,9 +537,9 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<AddOrRemoveReactionRequest>,
     ) -> Result<Response<AddOrRemoveReactionResponse>, Status> {
         use flare_proto::storage::AddOrRemoveReactionResponse;
-        
+
         let req = request.into_inner();
-        
+
         // 通过 command_handler 处理反应操作
         let reactions = self.command_handler
             .handle_add_or_remove_reaction(
@@ -537,7 +553,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 error!(error = ?e, message_id = %req.message_id, "Failed to add or remove reaction");
                 Status::internal(format!("Failed to add or remove reaction: {}", e))
             })?;
-        
+
         Ok(Response::new(AddOrRemoveReactionResponse {
             success: true,
             reactions,

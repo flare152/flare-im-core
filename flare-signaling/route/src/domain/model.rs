@@ -15,4 +15,3 @@ impl Route {
         Self { svid, endpoint }
     }
 }
-

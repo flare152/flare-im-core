@@ -52,4 +52,3 @@ pub struct ConnectionInfo {
     pub connected_at: Option<DateTime<Utc>>,
     pub last_active_at: Option<DateTime<Utc>>,
 }
-

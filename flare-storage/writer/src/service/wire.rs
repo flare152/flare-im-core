@@ -11,13 +11,13 @@ use crate::application::handlers::MessagePersistenceCommandHandler;
 use crate::config::StorageWriterConfig;
 use crate::domain::repository::{
     AckPublisher, ArchiveStoreRepository, HotCacheRepository, MediaAttachmentVerifier,
-    MessageIdempotencyRepository, SessionStateRepository,
-    UserSyncCursorRepository, WalCleanupRepository,
+    MessageIdempotencyRepository, SessionStateRepository, UserSyncCursorRepository,
+    WalCleanupRepository,
 };
-use crate::domain::service::{MessagePersistenceDomainService, MessageOperationDomainService};
+use crate::domain::repository::{SeqGenerator, SessionUpdateRepository};
+use crate::domain::service::{MessageOperationDomainService, MessagePersistenceDomainService};
 use crate::infrastructure::external::media::MediaAttachmentClient;
 use crate::infrastructure::messaging::ack_publisher::KafkaAckPublisher;
-use crate::domain::repository::{SeqGenerator, SessionUpdateRepository};
 use crate::infrastructure::persistence::postgres_store::PostgresMessageStore;
 use crate::infrastructure::persistence::redis_cache::RedisHotCacheRepository;
 use crate::infrastructure::persistence::redis_idempotency::RedisIdempotencyRepository;
@@ -28,9 +28,8 @@ use crate::infrastructure::persistence::user_cursor::RedisUserCursorRepository;
 use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerator};
 use crate::interface::messaging::consumer::StorageWriterConsumer;
 use flare_im_core::metrics::StorageWriterMetrics;
-use flare_server_core::kafka::build_kafka_producer;
-use flare_server_core::ServiceClient; // 添加ServiceClient导入
-
+use flare_server_core::ServiceClient;
+use flare_server_core::kafka::build_kafka_producer; // 添加ServiceClient导入
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -52,42 +51,43 @@ pub async fn initialize(
     // 1. 加载存储写入器配置
     let config = Arc::new(
         StorageWriterConfig::from_app_config(app_config)
-            .context("Failed to load storage writer service configuration")?
+            .context("Failed to load storage writer service configuration")?,
     );
-    
+
     // 2. 创建 ACK 发布者（可选）
     let ack_publisher = build_ack_publisher(&config)?;
-    
+
     // 4. 创建 Redis 客户端（可选）
     let redis_client = build_redis_client(&config);
-    
+
     // 5. 创建媒体附件验证器（可选）
     let media_verifier = config.media_service_endpoint.as_ref().map(|endpoint| {
         Arc::new(MediaAttachmentClient::new(endpoint.clone()))
             as Arc<dyn MediaAttachmentVerifier + Send + Sync>
     });
-    
+
     // 6. 创建幂等性仓储（可选）
     let idempotency_repo = redis_client.as_ref().map(|client| {
         Arc::new(RedisIdempotencyRepository::new(client.clone(), &config))
             as Arc<dyn MessageIdempotencyRepository + Send + Sync>
     });
-    
+
     // 7. 创建热缓存仓储（可选）
     let hot_cache_repo = redis_client.as_ref().map(|client| {
         Arc::new(RedisHotCacheRepository::new(client.clone(), &config))
             as Arc<dyn HotCacheRepository + Send + Sync>
     });
-    
+
     // 8. 创建 WAL 清理仓储（可选）
     let wal_cleanup_repo = match (&redis_client, &config.wal_hash_key) {
         (Some(client), Some(key)) => Some(Arc::new(RedisWalCleanupRepository::new(
             client.clone(),
             key.clone(),
-        )) as Arc<dyn WalCleanupRepository + Send + Sync>),
+        ))
+            as Arc<dyn WalCleanupRepository + Send + Sync>),
         _ => None,
     };
-    
+
     // 9. 创建归档存储仓储（PostgreSQL，可选）
     let archive_repo: Option<Arc<dyn ArchiveStoreRepository + Send + Sync>> =
         match PostgresMessageStore::new(&config).await {
@@ -100,95 +100,97 @@ pub async fn initialize(
                 None
             }
         };
-    
+
     // 11. 创建会话状态仓储（可选）
     let mut session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>> =
-        redis_client.as_ref().map(|client| {
-            Arc::new(RedisSessionStateRepository::new(client.clone())) as Arc<_>
-        });
-    
+        redis_client
+            .as_ref()
+            .map(|client| Arc::new(RedisSessionStateRepository::new(client.clone())) as Arc<_>);
+
     // 12. 创建用户游标仓储（可选）
-    let user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>> =
-        redis_client.as_ref().map(|client| {
-            Arc::new(RedisUserCursorRepository::new(client.clone())) as Arc<_>
-        });
-    
+    let user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>> = redis_client
+        .as_ref()
+        .map(|client| Arc::new(RedisUserCursorRepository::new(client.clone())) as Arc<_>);
+
     // 13. 创建 Seq 生成器（可选）
-    let seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>> = match (&redis_client, &archive_repo) {
-        (Some(redis), Some(archive)) => {
-            // 尝试从 PostgresMessageStore 获取 pool
-            if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                Some(Arc::new(RedisSeqGenerator::new(
-                    redis.clone(),
-                    Some(Arc::new(pg_store.pool().clone())),
-                )) as Arc<dyn SeqGenerator + Send + Sync>)
-            } else {
-                // 只有 Redis，没有 PostgreSQL
-                Some(Arc::new(RedisSeqGenerator::new(
-                    redis.clone(),
-                    None,
-                )) as Arc<dyn SeqGenerator + Send + Sync>)
+    let seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>> =
+        match (&redis_client, &archive_repo) {
+            (Some(redis), Some(archive)) => {
+                // 尝试从 PostgresMessageStore 获取 pool
+                if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
+                    Some(Arc::new(RedisSeqGenerator::new(
+                        redis.clone(),
+                        Some(Arc::new(pg_store.pool().clone())),
+                    ))
+                        as Arc<dyn SeqGenerator + Send + Sync>)
+                } else {
+                    // 只有 Redis，没有 PostgreSQL
+                    Some(Arc::new(RedisSeqGenerator::new(redis.clone(), None))
+                        as Arc<dyn SeqGenerator + Send + Sync>)
+                }
             }
-        }
-        (None, Some(archive)) => {
-            // 只有 PostgreSQL，使用 DatabaseSeqGenerator
-            if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                Some(Arc::new(DatabaseSeqGenerator::new(
-                    Arc::new(pg_store.pool().clone()),
-                )) as Arc<dyn SeqGenerator + Send + Sync>)
-            } else {
-                None
+            (None, Some(archive)) => {
+                // 只有 PostgreSQL，使用 DatabaseSeqGenerator
+                if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
+                    Some(
+                        Arc::new(DatabaseSeqGenerator::new(Arc::new(pg_store.pool().clone())))
+                            as Arc<dyn SeqGenerator + Send + Sync>,
+                    )
+                } else {
+                    None
+                }
             }
-        }
-        _ => None,
-    };
-    
+            _ => None,
+        };
+
     // 14. 创建 Session 更新仓储（可选，需要 PostgreSQL）
     let session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>> =
         archive_repo.as_ref().and_then(|archive| {
             if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                Some(Arc::new(PostgresSessionRepository::new(
-                    Arc::new(pg_store.pool().clone()),
-                )) as Arc<dyn SessionUpdateRepository + Send + Sync>)
+                Some(Arc::new(PostgresSessionRepository::new(Arc::new(
+                    pg_store.pool().clone(),
+                )))
+                    as Arc<dyn SessionUpdateRepository + Send + Sync>)
             } else {
                 None
             }
         });
-    
+
     // 15. 初始化指标收集（应用层关注点）
     let metrics = Arc::new(StorageWriterMetrics::new());
-    
+
     // 16. 创建 Session 服务客户端（用于获取会话参与者列表）
     let session_client: Option<Arc<tokio::sync::Mutex<ServiceClient>>> = {
         use flare_im_core::service_names::{SESSION, get_service_name};
         let session_service = get_service_name(SESSION);
-        
+
         // 添加超时保护，避免服务发现阻塞整个启动过程
         let discover_result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            flare_im_core::discovery::create_discover(&session_service)
-        ).await;
-        
+            flare_im_core::discovery::create_discover(&session_service),
+        )
+        .await;
+
         match discover_result {
             Ok(Ok(Some(discover))) => {
                 let service_client = ServiceClient::new(discover);
                 Some(Arc::new(tokio::sync::Mutex::new(service_client)))
-            },
+            }
             Ok(Ok(None)) => {
                 tracing::warn!("Session service discovery returned None");
                 None
-            },
+            }
             Ok(Err(e)) => {
                 tracing::warn!(error = ?e, "Failed to create session service discovery");
                 None
-            },
+            }
             Err(_) => {
                 tracing::warn!("Session service discovery timeout");
                 None
             }
         }
     };
-    
+
     // 17. 创建领域服务（不包含指标，符合 DDD 原则）
     // 注意：根据设计文档，只使用 PostgreSQL 作为归档存储，Redis 作为缓存
     let domain_service = Arc::new(MessagePersistenceDomainService::new(
@@ -205,36 +207,34 @@ pub async fn initialize(
         session_update_repo,
         session_client, // 添加session_client参数
     ));
-        
+
     // 更新session_state_repo，注入domain_service
     if let Some(repo) = &mut session_state_repo {
         // 由于Rust的所有权机制，我们需要重新构建session_state_repo
         if let Some(client) = redis_client {
-            *repo = Arc::new(RedisSessionStateRepository::new(client.clone()).with_domain_service(Some(domain_service.clone())));
+            *repo = Arc::new(
+                RedisSessionStateRepository::new(client.clone())
+                    .with_domain_service(Some(domain_service.clone())),
+            );
         }
     }
-        
+
     // 17. 创建操作消息领域服务
-    let operation_service = Arc::new(MessageOperationDomainService::new(
-        archive_repo,
-    ));
-    
+    let operation_service = Arc::new(MessageOperationDomainService::new(archive_repo));
+
     // 18. 创建命令处理器（应用层负责指标记录）
     let command_handler = Arc::new(MessagePersistenceCommandHandler::new(
         domain_service,
         operation_service,
         metrics.clone(),
     ));
-    
+
     // 16. 构建 Kafka 消费者（使用统一的构建器，与 push-server 完全一致）
-    let consumer = StorageWriterConsumer::new(
-        config.clone(),
-        command_handler.clone(),
-        metrics.clone(),
-    )
-    .await
-    .context("Failed to create StorageWriterConsumer")?;
-    
+    let consumer =
+        StorageWriterConsumer::new(config.clone(), command_handler.clone(), metrics.clone())
+            .await
+            .context("Failed to create StorageWriterConsumer")?;
+
     Ok(ApplicationContext { consumer })
 }
 
@@ -244,9 +244,11 @@ fn build_ack_publisher(
 ) -> Result<Option<Arc<dyn AckPublisher + Send + Sync>>> {
     if let Some(topic) = &config.kafka_ack_topic {
         // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
-        let producer = build_kafka_producer(config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig)
-            .context("Failed to create Kafka producer for ACK")?;
-        
+        let producer = build_kafka_producer(
+            config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig
+        )
+        .context("Failed to create Kafka producer for ACK")?;
+
         let producer = Arc::new(producer);
         let publisher: Arc<dyn AckPublisher + Send + Sync> = Arc::new(KafkaAckPublisher::new(
             producer,
@@ -271,4 +273,3 @@ fn build_redis_client(config: &Arc<StorageWriterConfig>) -> Option<Arc<redis::Cl
         }
     })
 }
-

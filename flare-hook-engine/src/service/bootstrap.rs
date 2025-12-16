@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use tracing::{info, error};
+use tracing::{error, info};
 
 use flare_server_core::runtime::ServiceRuntime;
 
@@ -47,11 +47,11 @@ pub struct ApplicationBootstrap;
 impl ApplicationBootstrap {
     /// 运行应用的主入口点
     pub async fn run(config: HookEngineConfig) -> Result<()> {
-        use flare_im_core::{load_config, ServiceHelper};
-        
+        use flare_im_core::{ServiceHelper, load_config};
+
         // 加载应用配置
         let app_config = load_config(Some("config"));
-        
+
         // 解析服务器地址（使用默认端口 50110）
         let default_port = 50110;
         let address: SocketAddr = format!(
@@ -62,12 +62,12 @@ impl ApplicationBootstrap {
         .parse()
         .context("invalid hook-engine server address")?;
         info!(address = %address, "Server address parsed successfully");
-        
+
         // 使用 Wire 风格的依赖注入构建应用上下文
         let context = wire::initialize(config).await?;
-        
+
         info!("ApplicationBootstrap created successfully");
-        
+
         // 运行服务
         Self::run_with_context(context, address).await
     }
@@ -89,7 +89,7 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let hook_extension_service = context.hook_extension_service;
         let hook_service = context.hook_service;
-        
+
         let runtime = ServiceRuntime::new("hook-engine", address)
             .add_spawn_with_shutdown("hook-engine-grpc", move |shutdown_rx| async move {
                 // 构建服务器（使用链式调用）
@@ -99,7 +99,7 @@ impl ApplicationBootstrap {
                             hook_extension_service
                         ),
                     );
-                
+
                 // 注册HookService服务（如果可用）
                 if let Some(hook_service) = hook_service {
                     server_builder = server_builder.add_service(
@@ -109,7 +109,7 @@ impl ApplicationBootstrap {
                     );
                     info!("HookService registered");
                 }
-                
+
                 server_builder
                     .serve_with_shutdown(address_clone, async move {
                         info!(
@@ -117,7 +117,7 @@ impl ApplicationBootstrap {
                             port = %address_clone.port(),
                             "✅ Hook Engine gRPC service is listening"
                         );
-                        
+
                         // 同时监听 Ctrl+C 和关闭通道
                         tokio::select! {
                             _ = tokio::signal::ctrl_c() => {
@@ -133,29 +133,32 @@ impl ApplicationBootstrap {
             });
 
         // 运行服务（带服务注册）
-        runtime.run_with_registration(|addr| {
-            Box::pin(async move {
-                // 注册服务（使用常量）
-                use flare_im_core::service_names::HOOK_ENGINE;
-                match flare_im_core::discovery::register_service_only(HOOK_ENGINE, addr, None).await {
-                    Ok(Some(registry)) => {
-                        info!("✅ Service registered: {}", HOOK_ENGINE);
-                        Ok(Some(registry))
+        runtime
+            .run_with_registration(|addr| {
+                Box::pin(async move {
+                    // 注册服务（使用常量）
+                    use flare_im_core::service_names::HOOK_ENGINE;
+                    match flare_im_core::discovery::register_service_only(HOOK_ENGINE, addr, None)
+                        .await
+                    {
+                        Ok(Some(registry)) => {
+                            info!("✅ Service registered: {}", HOOK_ENGINE);
+                            Ok(Some(registry))
+                        }
+                        Ok(None) => {
+                            info!("Service discovery not configured, skipping registration");
+                            Ok(None)
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "❌ Service registration failed"
+                            );
+                            Err(format!("Service registration failed: {}", e).into())
+                        }
                     }
-                    Ok(None) => {
-                        info!("Service discovery not configured, skipping registration");
-                        Ok(None)
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            "❌ Service registration failed"
-                        );
-                        Err(format!("Service registration failed: {}", e).into())
-                    }
-                }
+                })
             })
-        }).await
+            .await
     }
 }
-

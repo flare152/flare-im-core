@@ -25,6 +25,8 @@ pub mod interface;
 pub mod service;
 
 // Re-export commonly used types
-pub use domain::model::{ExecutionMode, HookConfig, HookExecutionPlan, HookExecutionResult, HookStatistics};
+pub use domain::model::{
+    ExecutionMode, HookConfig, HookExecutionPlan, HookExecutionResult, HookStatistics,
+};
 pub use infrastructure::config::{ConfigLoader, ConfigWatcher};
 pub use service::ApplicationBootstrap;

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
-use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::common::Message;
+use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::storage::StoreMessageRequest;
 use serde_json::json;
 
@@ -54,7 +54,7 @@ pub fn build_hook_context(
     {
         ctx.request_metadata
             .insert("request_id".into(), request_id.clone());
-        
+
         if let Some(trace_ctx) = trace.as_ref() {
             ctx.request_metadata
                 .insert("span_id".into(), trace_ctx.span_id.clone());
@@ -66,17 +66,17 @@ pub fn build_hook_context(
                 ctx.tags.insert(k.clone(), v.clone());
             }
         }
-        
+
         if let Some(device_ctx) = device.as_ref() {
             ctx.request_metadata
                 .insert("client_ip".into(), device_ctx.ip_address.clone());
         }
-        
+
         if !user_agent.is_empty() {
             ctx.request_metadata
                 .insert("user_agent".into(), user_agent.clone());
         }
-        
+
         // 将 attributes 添加到 ctx.tags
         for (k, v) in attributes {
             ctx.tags.insert(k.clone(), v.clone());
@@ -97,12 +97,13 @@ pub fn build_hook_context(
         let message_type_label = detect_message_type(message);
         ctx.sender_id = non_empty(message.sender_id.clone());
         // session_type 是 i32 枚举，转换为字符串
-        let session_type_str = match flare_proto::common::SessionType::try_from(message.session_type) {
-            Ok(flare_proto::common::SessionType::Single) => "single".to_string(),
-            Ok(flare_proto::common::SessionType::Group) => "group".to_string(),
-            Ok(flare_proto::common::SessionType::Channel) => "channel".to_string(),
-            _ => "unknown".to_string(),
-        };
+        let session_type_str =
+            match flare_proto::common::SessionType::try_from(message.session_type) {
+                Ok(flare_proto::common::SessionType::Single) => "single".to_string(),
+                Ok(flare_proto::common::SessionType::Group) => "group".to_string(),
+                Ok(flare_proto::common::SessionType::Channel) => "channel".to_string(),
+                _ => "unknown".to_string(),
+            };
         ctx.session_type = non_empty(session_type_str.clone());
         ctx.message_type = Some(message_type_label.to_string());
 
@@ -112,13 +113,13 @@ pub fn build_hook_context(
         ctx.attributes
             .entry("session_type".into())
             .or_insert(session_type_str.clone());
-        
+
         // 提取接收者信息（优先使用 receiver_id 和 channel_id）
         // 单聊：使用 receiver_id
         if message.session_type == flare_proto::common::SessionType::Single as i32 {
             if !message.receiver_id.is_empty() {
-        ctx.attributes
-            .entry("receiver_id".into())
+                ctx.attributes
+                    .entry("receiver_id".into())
                     .or_insert(message.receiver_id.clone());
                 ctx.attributes
                     .entry("receiver_ids".into())
@@ -157,7 +158,9 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     // MessageDraft::new 需要 Vec<u8>，但 message.content 是 Option<MessageContent>
     // 使用 prost 序列化 MessageContent，或使用空向量
     use prost::Message as ProstMessage;
-    let content_bytes = message.content.as_ref()
+    let content_bytes = message
+        .content
+        .as_ref()
         .map(|c| {
             let mut buf = Vec::new();
             c.encode(&mut buf).unwrap_or_default();
@@ -181,7 +184,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     metadata
         .entry("business_type".into())
         .or_insert(message.business_type.clone());
-    
+
     // session_type 是 i32 枚举，需要转换为字符串
     let session_type_str = match flare_proto::common::SessionType::try_from(message.session_type) {
         Ok(flare_proto::common::SessionType::Single) => "single".to_string(),
@@ -196,7 +199,9 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         .entry("message_type".into())
         .or_insert(message_type_label.to_string());
     // content_type 从 MessageContent 推断
-    let content_type_label = message.content.as_ref()
+    let content_type_label = message
+        .content
+        .as_ref()
         .map(|c| match &c.content {
             Some(flare_proto::common::message_content::Content::Text(_)) => "text",
             Some(flare_proto::common::message_content::Content::Image(_)) => "image",
@@ -222,7 +227,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     metadata
         .entry("sender_id".into())
         .or_insert(message.sender_id.clone());
-    
+
     // 提取接收者信息（优先使用 receiver_id 和 channel_id）
     // 单聊：使用 receiver_id
     let receiver_list = if message.session_type == flare_proto::common::SessionType::Single as i32 {
@@ -234,7 +239,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     } else {
         Vec::new()
     };
-    
+
     metadata
         .entry("receiver_id".into())
         .or_insert(receiver_list.first().cloned().unwrap_or_default());
@@ -245,14 +250,14 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         } else {
             receiver_list.join(",")
         });
-    
+
     // 群聊/频道：使用 channel_id
     if !message.channel_id.is_empty() {
         metadata
             .entry("channel_id".into())
             .or_insert(message.channel_id.clone());
     }
-    
+
     draft.metadata = metadata;
 
     draft.extra("session_id", json!(request.session_id));
@@ -267,7 +272,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         let mut request_context_json = json!({
             "request_id": request_ctx.request_id,
         });
-        
+
         if let Some(trace_ctx) = request_ctx.trace.as_ref() {
             if !trace_ctx.trace_id.is_empty() {
                 request_context_json["trace_id"] = json!(trace_ctx.trace_id);
@@ -276,12 +281,12 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
                 request_context_json["span_id"] = json!(trace_ctx.span_id);
             }
         }
-        
+
         // 将 attributes 添加到 JSON
         if !request_ctx.attributes.is_empty() {
             request_context_json["attributes"] = json!(request_ctx.attributes);
         }
-        
+
         draft.extra("request_context", request_context_json);
     }
 
@@ -362,13 +367,17 @@ pub fn build_message_record(
     };
     metadata.insert("session_type".into(), session_type_str.to_string());
     // 推断 content_type
-    let content_type = message.content.as_ref()
+    let content_type = message
+        .content
+        .as_ref()
         .map(|c| match &c.content {
             Some(flare_proto::common::message_content::Content::Text(_)) => "text/plain",
             Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
             Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
             Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
-            Some(flare_proto::common::message_content::Content::File(_)) => "application/octet-stream",
+            Some(flare_proto::common::message_content::Content::File(_)) => {
+                "application/octet-stream"
+            }
             Some(flare_proto::common::message_content::Content::Location(_)) => "location",
             Some(flare_proto::common::message_content::Content::Card(_)) => "card",
             Some(flare_proto::common::message_content::Content::Notification(_)) => "notification",
@@ -449,9 +458,9 @@ pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookCo
 }
 
 fn detect_message_type(message: &Message) -> &'static str {
-    use std::convert::TryFrom;
     use flare_proto::common::MessageType;
-    
+    use std::convert::TryFrom;
+
     // 优先从 extra 中获取 message_type 标签
     if let Some(label) = message.extra.get("message_type") {
         return match label.as_str() {
@@ -471,7 +480,7 @@ fn detect_message_type(message: &Message) -> &'static str {
             _ => "custom",
         };
     }
-    
+
     // 从 MessageType 枚举推断（支持所有消息类型）
     match MessageType::try_from(message.message_type) {
         // 基础消息类型
@@ -513,11 +522,15 @@ fn detect_message_type(message: &Message) -> &'static str {
                     Some(flare_proto::common::message_content::Content::File(_)) => "file",
                     Some(flare_proto::common::message_content::Content::Location(_)) => "location",
                     Some(flare_proto::common::message_content::Content::Card(_)) => "card",
-                    Some(flare_proto::common::message_content::Content::Notification(_)) => "notification",
+                    Some(flare_proto::common::message_content::Content::Notification(_)) => {
+                        "notification"
+                    }
                     Some(flare_proto::common::message_content::Content::Custom(_)) => "custom",
                     Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
                     Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
-                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
+                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
+                        "system_event"
+                    }
                     Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
                     Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
                     None => "unknown",

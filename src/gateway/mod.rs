@@ -6,4 +6,3 @@
 pub mod router;
 
 pub use router::{GatewayRouter, GatewayRouterConfig, GatewayRouterError, GatewayRouterTrait};
-

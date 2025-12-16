@@ -3,21 +3,15 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use flare_proto::signaling::online::{
-    HeartbeatResponse, LoginResponse, LogoutResponse,
-};
-use flare_proto::access_gateway::{
-    PublishSignalResponse, SubscribeResponse, UnsubscribeResponse,
-};
+use flare_proto::access_gateway::{PublishSignalResponse, SubscribeResponse, UnsubscribeResponse};
+use flare_proto::signaling::online::{HeartbeatResponse, LoginResponse, LogoutResponse};
 use tracing::instrument;
 
 use crate::application::commands::{
     HeartbeatCommand, LoginCommand, LogoutCommand, PublishSignalCommand, SubscribeCommand,
     UnsubscribeCommand,
 };
-use crate::domain::service::{
-    OnlineStatusDomainService, SubscriptionDomainService,
-};
+use crate::domain::service::{OnlineStatusDomainService, SubscriptionDomainService};
 
 /// 在线状态命令处理器（编排层）
 pub struct OnlineCommandHandler {
@@ -39,17 +33,13 @@ impl OnlineCommandHandler {
     /// 处理登录命令
     #[instrument(skip(self), fields(user_id = %command.request.user_id, device_id = %command.request.device_id))]
     pub async fn handle_login(&self, command: LoginCommand) -> Result<LoginResponse> {
-        self.online_domain_service
-            .login(command.request)
-            .await
+        self.online_domain_service.login(command.request).await
     }
 
     /// 处理登出命令
     #[instrument(skip(self), fields(user_id = %command.request.user_id, session_id = %command.request.session_id))]
     pub async fn handle_logout(&self, command: LogoutCommand) -> Result<LogoutResponse> {
-        self.online_domain_service
-            .logout(command.request)
-            .await
+        self.online_domain_service.logout(command.request).await
     }
 
     /// 处理心跳命令
@@ -94,4 +84,3 @@ impl OnlineCommandHandler {
             .await
     }
 }
-

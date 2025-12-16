@@ -17,22 +17,22 @@ pub struct DeviceRouteInfo {
     pub device_id: String,
     pub gateway_id: String,
     pub session_id: String,
-    
+
     // 设备优先级（0=未指定, 1=低, 2=普通, 3=高, 4=关键）
     pub device_priority: i32,
-    
+
     // 链接质量指标
     pub rtt_ms: i64,
     pub packet_loss_rate: f64,
-    pub quality_score: f64,  // 综合评分 0-100
-    
+    pub quality_score: f64, // 综合评分 0-100
+
     // 最后更新时间
     pub last_update_ts: i64,
 }
 
 impl DeviceRouteInfo {
     /// 计算质量评分（0-100）
-    /// 
+    ///
     /// 评分规则：
     /// - RTT < 50ms: 基础分 90-100
     /// - RTT 50-100ms: 基础分 70-90
@@ -41,17 +41,17 @@ impl DeviceRouteInfo {
     /// - 丢包率每 1% 扣 10 分
     pub fn calculate_quality_score(rtt_ms: i64, packet_loss_rate: f64) -> f64 {
         let rtt_score = if rtt_ms < 50 {
-            100.0 - (rtt_ms as f64 / 5.0)  // 90-100
+            100.0 - (rtt_ms as f64 / 5.0) // 90-100
         } else if rtt_ms < 100 {
-            90.0 - ((rtt_ms - 50) as f64 / 2.5)  // 70-90
+            90.0 - ((rtt_ms - 50) as f64 / 2.5) // 70-90
         } else if rtt_ms < 200 {
-            70.0 - ((rtt_ms - 100) as f64 / 3.33)  // 40-70
+            70.0 - ((rtt_ms - 100) as f64 / 3.33) // 40-70
         } else {
-            40.0 - ((rtt_ms - 200).min(200) as f64 / 5.0)  // 0-40
+            40.0 - ((rtt_ms - 200).min(200) as f64 / 5.0) // 0-40
         };
-        
-        let loss_penalty = packet_loss_rate * 1000.0;  // 每 1% 扣 10 分
-        
+
+        let loss_penalty = packet_loss_rate * 1000.0; // 每 1% 扣 10 分
+
         (rtt_score - loss_penalty).max(0.0).min(100.0)
     }
 }
@@ -81,7 +81,7 @@ impl DeviceRouter {
         packet_loss_rate: f64,
     ) {
         let quality_score = DeviceRouteInfo::calculate_quality_score(rtt_ms, packet_loss_rate);
-        
+
         let device_info = DeviceRouteInfo {
             user_id: user_id.clone(),
             device_id: device_id.clone(),
@@ -93,17 +93,17 @@ impl DeviceRouter {
             quality_score,
             last_update_ts: chrono::Utc::now().timestamp_millis(),
         };
-        
+
         let mut routes = self.device_routes.write().await;
         let user_devices = routes.entry(user_id.clone()).or_insert_with(Vec::new);
-        
+
         // 更新或添加设备
         if let Some(existing) = user_devices.iter_mut().find(|d| d.device_id == device_id) {
             *existing = device_info;
         } else {
             user_devices.push(device_info);
         }
-        
+
         debug!(
             user_id = %user_id,
             device_id = %device_id,
@@ -124,7 +124,7 @@ impl DeviceRouter {
     }
 
     /// 选择最优设备（基于优先级和链接质量）
-    /// 
+    ///
     /// 选择策略：
     /// 1. 首先按设备优先级排序（Critical > High > Normal > Low）
     /// 2. 同优先级内按质量评分排序
@@ -132,11 +132,11 @@ impl DeviceRouter {
     pub async fn select_best_device(&self, user_id: &str) -> Option<DeviceRouteInfo> {
         let routes = self.device_routes.read().await;
         let user_devices = routes.get(user_id)?;
-        
+
         if user_devices.is_empty() {
             return None;
         }
-        
+
         let mut sorted_devices = user_devices.clone();
         sorted_devices.sort_by(|a, b| {
             // 首先按优先级降序
@@ -148,9 +148,9 @@ impl DeviceRouter {
                 other => other,
             }
         });
-        
+
         let best = sorted_devices.into_iter().next()?;
-        
+
         info!(
             user_id = %user_id,
             device_id = %best.device_id,
@@ -159,12 +159,12 @@ impl DeviceRouter {
             quality_score = best.quality_score,
             "Best device selected"
         );
-        
+
         Some(best)
     }
 
     /// 选择高优先级设备列表
-    /// 
+    ///
     /// 返回所有 High (3) 和 Critical (4) 优先级的设备
     pub async fn select_high_priority_devices(&self, user_id: &str) -> Vec<DeviceRouteInfo> {
         let routes = self.device_routes.read().await;
@@ -172,10 +172,10 @@ impl DeviceRouter {
             Some(devices) => devices,
             None => return Vec::new(),
         };
-        
+
         user_devices
             .iter()
-            .filter(|d| d.device_priority >= 3)  // High 或 Critical
+            .filter(|d| d.device_priority >= 3) // High 或 Critical
             .cloned()
             .collect()
     }
@@ -187,7 +187,7 @@ impl DeviceRouter {
             Some(devices) => devices,
             None => return Vec::new(),
         };
-        
+
         user_devices
             .iter()
             .filter(|d| {
@@ -208,11 +208,11 @@ impl DeviceRouter {
     pub async fn cleanup_expired(&self, expiration_ms: i64) {
         let mut routes = self.device_routes.write().await;
         let now = chrono::Utc::now().timestamp_millis();
-        
+
         for (_user_id, devices) in routes.iter_mut() {
             devices.retain(|d| now - d.last_update_ts < expiration_ms);
         }
-        
+
         // 移除没有设备的用户
         routes.retain(|_, devices| !devices.is_empty());
     }

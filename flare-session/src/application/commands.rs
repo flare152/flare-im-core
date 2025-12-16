@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::domain::model::{
-    ConflictResolutionPolicy, DeviceState, SessionParticipant, SessionVisibility,
-    SessionLifecycleState,
+    ConflictResolutionPolicy, DeviceState, SessionLifecycleState, SessionParticipant,
+    SessionVisibility,
 };
 
 /// 批量确认命令
@@ -75,4 +75,3 @@ pub struct UpdateSessionCommand {
     pub visibility: Option<SessionVisibility>,
     pub lifecycle_state: Option<SessionLifecycleState>,
 }
-

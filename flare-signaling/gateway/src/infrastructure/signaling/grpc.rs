@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use anyhow::Context;
+use async_trait::async_trait;
 use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
 use flare_proto::signaling::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, HeartbeatRequest, HeartbeatResponse,
     LoginRequest, LoginResponse, LogoutRequest, LogoutResponse,
 };
-use flare_server_core::error::{ErrorBuilder, ErrorCode, InfraResult, InfraResultExt, Result};
 use flare_server_core::discovery::ServiceClient;
+use flare_server_core::error::{ErrorBuilder, ErrorCode, InfraResult, InfraResultExt, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
@@ -50,36 +50,43 @@ impl GrpcSignalingGateway {
             let discover = flare_im_core::discovery::create_discover(&self.service_name)
                 .await
                 .map_err(|e| {
-                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
-                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
-                        .build_error()
+                    ErrorBuilder::new(
+                        ErrorCode::ServiceUnavailable,
+                        "signaling service unavailable",
+                    )
+                    .details(format!(
+                        "Failed to create service discover for {}: {}",
+                        self.service_name, e
+                    ))
+                    .build_error()
                 })?;
-            
+
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
                 return Err(anyhow::anyhow!("Service discovery not configured").into());
             }
         }
-        
-        let service_client = service_client_guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Service client not initialized")
+
+        let service_client = service_client_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Service client not initialized"))?;
+        let channel = service_client.get_channel().await.map_err(|e| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
+                .details(format!("Failed to get channel: {}", e))
+                .build_error()
         })?;
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
-                    .details(format!("Failed to get channel: {}", e))
-                    .build_error()
-            })?;
-        
-        tracing::debug!("Got channel for {} from service discovery", self.service_name);
+
+        tracing::debug!(
+            "Got channel for {} from service discovery",
+            self.service_name
+        );
 
         let client = SignalingServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }
 }
-
 
 #[async_trait]
 impl SignalingGateway for GrpcSignalingGateway {

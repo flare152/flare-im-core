@@ -1,12 +1,14 @@
 //! 消息存储领域服务 - 包含所有业务逻辑实现
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use flare_im_core::utils::{TimelineMetadata, extract_timeline_from_extra, timestamp_to_datetime, extract_seq_from_message};
+use flare_im_core::utils::{
+    TimelineMetadata, extract_seq_from_message, extract_timeline_from_extra, timestamp_to_datetime,
+};
 use flare_proto::common::{Message, VisibilityStatus};
 use prost_types::Timestamp;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tracing::instrument;
 
 use crate::domain::model::MessageUpdate;
@@ -62,7 +64,8 @@ pub struct QueryMessagesResult {
 pub struct MessageStorageDomainService {
     storage: Arc<dyn MessageStorage + Send + Sync>,
     visibility_storage: Option<Arc<dyn VisibilityStorage + Send + Sync>>,
-    message_state_repo: Option<Arc<dyn crate::domain::repository::MessageStateRepository + Send + Sync>>,
+    message_state_repo:
+        Option<Arc<dyn crate::domain::repository::MessageStateRepository + Send + Sync>>,
     config: MessageStorageDomainConfig,
 }
 
@@ -70,7 +73,9 @@ impl MessageStorageDomainService {
     pub fn new(
         storage: Arc<dyn MessageStorage + Send + Sync>,
         visibility_storage: Option<Arc<dyn VisibilityStorage + Send + Sync>>,
-        message_state_repo: Option<Arc<dyn crate::domain::repository::MessageStateRepository + Send + Sync>>,
+        message_state_repo: Option<
+            Arc<dyn crate::domain::repository::MessageStateRepository + Send + Sync>,
+        >,
         config: MessageStorageDomainConfig,
     ) -> Self {
         Self {
@@ -124,7 +129,12 @@ impl MessageStorageDomainService {
 
         let total_size = self
             .storage
-            .count_messages(session_id, None, Some(start_dt_for_count), Some(end_dt_for_count))
+            .count_messages(
+                session_id,
+                None,
+                Some(start_dt_for_count),
+                Some(end_dt_for_count),
+            )
             .await
             .map_err(|e| anyhow!("Failed to count messages: {}", e))?;
 
@@ -204,8 +214,7 @@ impl MessageStorageDomainService {
                 .last()
                 .and_then(|msg| {
                     // 从 extra 字段提取 seq（使用工具函数）
-                    extract_seq_from_message(msg)
-                        .map(|seq| format!("seq:{}:{}", seq, msg.id))
+                    extract_seq_from_message(msg).map(|seq| format!("seq:{}:{}", seq, msg.id))
                 })
                 .unwrap_or_default()
         } else {
@@ -364,11 +373,7 @@ impl MessageStorageDomainService {
         };
 
         // 检查撤回时间限制
-        let message_timestamp = message
-            .timestamp
-            .as_ref()
-            .map(|ts| ts.seconds)
-            .unwrap_or(0);
+        let message_timestamp = message.timestamp.as_ref().map(|ts| ts.seconds).unwrap_or(0);
         let now = Utc::now().timestamp();
         let elapsed = now - message_timestamp;
 
@@ -462,12 +467,12 @@ impl MessageStorageDomainService {
 
         // 更新消息状态为 Read（如果当前状态是 Sent 或 Delivered）
         use flare_proto::common::MessageStatus;
-        let current_status: MessageStatus = std::convert::TryFrom::try_from(message.status)
-            .unwrap_or(MessageStatus::Unspecified);
+        let current_status: MessageStatus =
+            std::convert::TryFrom::try_from(message.status).unwrap_or(MessageStatus::Unspecified);
         let new_status = match current_status {
             MessageStatus::Sent | MessageStatus::Delivered => Some(MessageStatus::Read as i32),
             MessageStatus::Read => None, // 已经是 Read 状态，不需要更新
-            _ => None, // 其他状态（如 Created、Failed）不自动更新为 Read
+            _ => None,                   // 其他状态（如 Created、Failed）不自动更新为 Read
         };
 
         let update = MessageUpdate {
@@ -497,7 +502,7 @@ impl MessageStorageDomainService {
                     "Failed to write to message_state table, but message read_by is updated"
                 );
             }
-            
+
             // 如果是阅后即焚消息，同时标记为已焚毁
             if burned_at.is_some() {
                 if let Err(e) = message_state_repo.mark_as_burned(message_id, user_id).await {
@@ -561,7 +566,10 @@ impl MessageStorageDomainService {
 
         // 同时写入 message_state 表
         if let Some(message_state_repo) = &self.message_state_repo {
-            if let Err(e) = message_state_repo.mark_as_deleted(message_id, user_id).await {
+            if let Err(e) = message_state_repo
+                .mark_as_deleted(message_id, user_id)
+                .await
+            {
                 tracing::warn!(
                     error = %e,
                     message_id = %message_id,
@@ -590,7 +598,7 @@ impl MessageStorageDomainService {
     }
 
     /// 添加或移除反应
-    /// 
+    ///
     /// 功能：
     /// 1. 获取当前消息的反应列表
     /// 2. 根据操作类型添加或移除用户反应
@@ -605,18 +613,19 @@ impl MessageStorageDomainService {
     ) -> Result<Vec<flare_proto::common::Reaction>> {
         use chrono::Utc;
         use prost_types::Timestamp;
-        
+
         // 1. 获取当前消息
-        let current = self.storage
+        let current = self
+            .storage
             .get_message(message_id)
             .await
             .map_err(|e| anyhow!("Failed to get message for reaction: {}", e))?;
-        
+
         let message = current.ok_or_else(|| anyhow!("Message not found: {}", message_id))?;
-        
+
         // 2. 获取当前反应列表
         let mut reactions = message.reactions.clone();
-        
+
         // 3. 查找或创建反应
         let reaction_index = reactions.iter().position(|r| r.emoji == emoji);
         let now = Utc::now();
@@ -624,7 +633,7 @@ impl MessageStorageDomainService {
             seconds: now.timestamp(),
             nanos: now.timestamp_subsec_nanos() as i32,
         });
-        
+
         if is_add {
             // 添加反应
             if let Some(index) = reaction_index {
@@ -652,25 +661,25 @@ impl MessageStorageDomainService {
                 reaction.user_ids.retain(|id| id != user_id);
                 reaction.count = reaction.user_ids.len() as i32;
                 reaction.last_updated = timestamp.clone();
-                
+
                 // 如果没有用户了，移除这个反应
                 if reaction.user_ids.is_empty() {
                     reactions.remove(index);
                 }
             }
         }
-        
+
         // 4. 更新消息
         let updates = MessageUpdate {
             reactions: Some(reactions.clone()),
             ..Default::default()
         };
-        
+
         self.storage
             .update_message(message_id, updates)
             .await
             .map_err(|e| anyhow!("Failed to update reactions: {}", e))?;
-        
+
         Ok(reactions)
     }
 
@@ -737,4 +746,3 @@ impl MessageStorageDomainService {
         Ok(cleared_count)
     }
 }
-

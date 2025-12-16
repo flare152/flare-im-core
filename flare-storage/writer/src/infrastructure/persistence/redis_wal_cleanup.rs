@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use anyhow::Result;
 use redis::{AsyncCommands, aio::ConnectionManager};
@@ -16,7 +16,6 @@ impl RedisWalCleanupRepository {
         Self { client, wal_key }
     }
 }
-
 
 #[async_trait]
 impl WalCleanupRepository for RedisWalCleanupRepository {

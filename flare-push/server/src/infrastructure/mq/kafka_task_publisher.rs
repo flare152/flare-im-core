@@ -1,15 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use async_trait::async_trait;
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::kafka::build_kafka_producer;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use serde_json::{to_vec, json};
+use serde_json::{json, to_vec};
 
+use crate::config::PushServerConfig;
 use crate::domain::model::PushDispatchTask;
 use crate::domain::repository::PushTaskPublisher;
-use crate::config::PushServerConfig;
 
 pub struct KafkaPushTaskPublisher {
     config: Arc<PushServerConfig>,
@@ -19,15 +19,17 @@ pub struct KafkaPushTaskPublisher {
 impl KafkaPushTaskPublisher {
     pub fn new(config: Arc<PushServerConfig>) -> Result<Self> {
         // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
-        let producer = build_kafka_producer(config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig)
-            .map_err(|err| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "failed to create kafka producer",
-                )
-                .details(err.to_string())
-                .build_error()
-            })?;
+        let producer = build_kafka_producer(
+            config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig
+        )
+        .map_err(|err| {
+            ErrorBuilder::new(
+                ErrorCode::ServiceUnavailable,
+                "failed to create kafka producer",
+            )
+            .details(err.to_string())
+            .build_error()
+        })?;
 
         Ok(Self {
             config,
@@ -35,7 +37,6 @@ impl KafkaPushTaskPublisher {
         })
     }
 }
-
 
 #[async_trait]
 impl PushTaskPublisher for KafkaPushTaskPublisher {
@@ -64,10 +65,10 @@ impl PushTaskPublisher for KafkaPushTaskPublisher {
 
         Ok(())
     }
-    
+
     async fn publish_offline_batch(&self, tasks: &[PushDispatchTask]) -> Result<()> {
         let timeout = Duration::from_millis(self.config.kafka_timeout_ms);
-        
+
         // 批量发送离线推送任务
         for task in tasks {
             let payload = to_vec(task).map_err(|err| {
@@ -98,7 +99,7 @@ impl PushTaskPublisher for KafkaPushTaskPublisher {
 
         Ok(())
     }
-    
+
     async fn publish_to_dlq(
         &self,
         task: &PushDispatchTask,
@@ -114,12 +115,9 @@ impl PushTaskPublisher for KafkaPushTaskPublisher {
         });
 
         let payload = to_vec(&dlq_record).map_err(|err| {
-            ErrorBuilder::new(
-                ErrorCode::SerializationError,
-                "failed to encode dlq record",
-            )
-            .details(err.to_string())
-            .build_error()
+            ErrorBuilder::new(ErrorCode::SerializationError, "failed to encode dlq record")
+                .details(err.to_string())
+                .build_error()
         })?;
 
         let record = FutureRecord::to(&self.config.dlq_topic)
@@ -130,9 +128,12 @@ impl PushTaskPublisher for KafkaPushTaskPublisher {
             .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
             .await
             .map_err(|(err, _)| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "failed to enqueue dlq record")
-                    .details(err.to_string())
-                    .build_error()
+                ErrorBuilder::new(
+                    ErrorCode::ServiceUnavailable,
+                    "failed to enqueue dlq record",
+                )
+                .details(err.to_string())
+                .build_error()
             })?;
 
         Ok(())

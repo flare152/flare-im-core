@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::registry::HookRegistry;
-use super::types::{DeliveryEvent, GetSessionParticipantsHook, HookContext, MessageDraft, MessageRecord, RecallEvent};
+use super::types::{HookContext, MessageDraft, MessageRecord, PreSendDecision};
 
 /// Hook 调度器，封装常用执行入口
 #[derive(Clone)]
@@ -16,20 +16,39 @@ impl HookDispatcher {
         Self { registry }
     }
 
-    pub fn registry(&self) -> &Arc<HookRegistry> {
-        &self.registry
+    /// 调用获取会话参与者的Hook
+    pub async fn invoke_get_session_participants(
+        &self,
+        _ctx: &HookContext,
+        _session_id: &str,
+    ) -> Result<Option<Vec<String>>> {
+        // 在Hook注册表中查找GetSessionParticipantsHook类型的Hook
+        // 这里简化实现，实际应该遍历注册表查找合适的Hook
+        Ok(None)
     }
 
-    /// 检查Hook系统是否可用
-    pub fn is_available(&self) -> bool {
-        // Hook系统总是可用的，因为我们有注册表
-        true
+    /// 执行 PreSend Hook
+    pub async fn pre_send(
+        &self,
+        ctx: &HookContext,
+        draft: &mut MessageDraft,
+    ) -> Result<PreSendDecision> {
+        // 计划要执行的 PreSend Hooks
+        let plans = self.registry.plan_pre_send(ctx).await;
+
+        // 依次执行每个计划
+        for plan in plans {
+            let decision = plan.execute(ctx, draft).await;
+            match decision {
+                PreSendDecision::Continue => continue,
+                PreSendDecision::Reject { error } => return Err(error),
+            }
+        }
+
+        Ok(PreSendDecision::Continue)
     }
 
-    pub async fn pre_send(&self, ctx: &HookContext, draft: &mut MessageDraft) -> Result<()> {
-        self.registry.execute_pre_send(ctx, draft).await
-    }
-
+    /// 执行 PostSend Hook
     pub async fn post_send(
         &self,
         ctx: &HookContext,
@@ -37,24 +56,5 @@ impl HookDispatcher {
         draft: &MessageDraft,
     ) -> Result<()> {
         self.registry.execute_post_send(ctx, record, draft).await
-    }
-
-    pub async fn delivery(&self, ctx: &HookContext, event: &DeliveryEvent) -> Result<()> {
-        self.registry.execute_delivery(ctx, event).await
-    }
-
-    pub async fn recall(&self, ctx: &HookContext, event: &RecallEvent) -> Result<()> {
-        self.registry.execute_recall(ctx, event).await
-    }
-
-    /// 调用获取会话参与者的Hook
-    pub async fn invoke_get_session_participants(
-        &self,
-        ctx: &HookContext,
-        session_id: &str,
-    ) -> Result<Option<Vec<String>>> {
-        // 在Hook注册表中查找GetSessionParticipantsHook类型的Hook
-        // 这里简化实现，实际应该遍历注册表查找合适的Hook
-        Ok(None)
     }
 }

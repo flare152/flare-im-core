@@ -19,4 +19,3 @@ impl PushApplication {
         Arc::clone(&self.service)
     }
 }
-

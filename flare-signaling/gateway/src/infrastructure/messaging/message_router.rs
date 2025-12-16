@@ -8,14 +8,12 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::message::message_service_client::MessageServiceClient;
-use flare_proto::message::{
-    SendMessageRequest, SendMessageResponse,
-};
+use flare_proto::message::{SendMessageRequest, SendMessageResponse};
 use prost::Message as ProstMessage;
 use prost_types::Timestamp;
-use chrono::Utc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{error, info, warn};
@@ -35,11 +33,7 @@ pub struct MessageRouter {
 
 impl MessageRouter {
     /// 创建新的消息路由服务（使用服务名称，内部创建服务发现）
-    pub fn new(
-        service_name: String,
-        default_tenant_id: String,
-        default_svid: String,
-    ) -> Self {
+    pub fn new(service_name: String, default_tenant_id: String, default_svid: String) -> Self {
         Self {
             client: Arc::new(Mutex::new(None)),
             service_name,
@@ -67,12 +61,12 @@ impl MessageRouter {
     /// 初始化客户端连接
     pub async fn initialize(&self) -> Result<()> {
         use flare_server_core::discovery::ServiceClient;
-        
+
         info!(
             service_name = %self.service_name,
             "Initializing Message Router client..."
         );
-        
+
         // 使用服务发现获取 Channel
         let mut service_client_guard = self.service_client.lock().await;
         if service_client_guard.is_none() {
@@ -87,26 +81,24 @@ impl MessageRouter {
                     );
                     anyhow::anyhow!("Failed to create service discover: {}", e)
                 })?;
-            
-            let discover = discover.ok_or_else(|| {
-                anyhow::anyhow!("Service discovery not configured")
-            })?;
-            
+
+            let discover =
+                discover.ok_or_else(|| anyhow::anyhow!("Service discovery not configured"))?;
+
             *service_client_guard = Some(ServiceClient::new(discover));
         }
-        
-        let service_client = service_client_guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Service client not initialized")
+
+        let service_client = service_client_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Service client not initialized"))?;
+        let channel = service_client.get_channel().await.map_err(|e| {
+            error!(
+                service_name = %self.service_name,
+                error = %e,
+                "Failed to get channel from service discovery"
+            );
+            anyhow::anyhow!("Failed to get channel: {}", e)
         })?;
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                error!(
-                    service_name = %self.service_name,
-                    error = %e,
-                    "Failed to get channel from service discovery"
-                );
-                anyhow::anyhow!("Failed to get channel: {}", e)
-            })?;
 
         info!(
             service_name = %self.service_name,
@@ -115,7 +107,7 @@ impl MessageRouter {
 
         let client = MessageServiceClient::new(channel);
         *self.client.lock().await = Some(client);
-        
+
         info!(
             service_name = %self.service_name,
             "✅ Message Router initialized successfully"
@@ -132,7 +124,8 @@ impl MessageRouter {
         tenant_id: Option<&str>,
     ) -> Result<SendMessageResponse> {
         // 直接路由模式
-        self.route_direct(user_id, session_id, payload, tenant_id).await
+        self.route_direct(user_id, session_id, payload, tenant_id)
+            .await
     }
 
     /// 直接路由到 Message Orchestrator（向后兼容模式）
@@ -145,24 +138,22 @@ impl MessageRouter {
     ) -> Result<SendMessageResponse> {
         // 确保客户端已初始化
         let mut client_guard = self.ensure_client().await?;
-        
-        let client = client_guard.as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Message Router client not available after initialization"))?;
+
+        let client = client_guard.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("Message Router client not available after initialization")
+        })?;
 
         // 构建发送请求
-        let request = self.build_send_message_request(
-            user_id,
-            session_id,
-            payload,
-            tenant_id,
-        )?;
+        let request = self.build_send_message_request(user_id, session_id, payload, tenant_id)?;
 
         // 发送请求（添加超时保护，避免阻塞）
         let timeout_duration = std::time::Duration::from_secs(5); // 5秒超时
         let response = match tokio::time::timeout(
             timeout_duration,
-            client.send_message(tonic::Request::new(request))
-        ).await {
+            client.send_message(tonic::Request::new(request)),
+        )
+        .await
+        {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 error!(
@@ -176,7 +167,10 @@ impl MessageRouter {
                     let mut client_guard = self.client.lock().await;
                     *client_guard = None;
                 }
-                return Err(anyhow::anyhow!("Failed to send message to Message Orchestrator: {}", e));
+                return Err(anyhow::anyhow!(
+                    "Failed to send message to Message Orchestrator: {}",
+                    e
+                ));
             }
             Err(_) => {
                 error!(
@@ -193,7 +187,7 @@ impl MessageRouter {
         };
 
         let response = response.into_inner();
-        
+
         info!(
             user_id = %user_id,
             session_id = %session_id,
@@ -210,26 +204,26 @@ impl MessageRouter {
     }
 
     /// 确保客户端已初始化（内部辅助函数）
-    /// 
+    ///
     /// 如果客户端未初始化，尝试初始化（最多重试3次）
     /// 返回客户端引用，如果初始化失败则返回错误
     async fn ensure_client(
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, Option<MessageServiceClient<Channel>>>> {
         let client_guard = self.client.lock().await;
-        
+
         // 如果客户端已初始化，直接返回
         if client_guard.is_some() {
             return Ok(client_guard);
         }
-        
+
         // 客户端未初始化，需要初始化
         warn!(
             service_name = %self.service_name,
             "Message Router client not initialized, attempting to initialize..."
         );
         drop(client_guard);
-        
+
         // 重试初始化（最多3次）
         let mut retries = 3;
         let mut last_error = None;
@@ -264,23 +258,25 @@ impl MessageRouter {
                 }
             }
         }
-        
+
         if let Some(ref err) = last_error {
             error!(
                 service_name = %self.service_name,
                 error = %err,
                 "Cannot route message: Message Router initialization failed"
             );
-            return Err(anyhow::anyhow!("Failed to initialize Message Router after retries: {}", err));
+            return Err(anyhow::anyhow!(
+                "Failed to initialize Message Router after retries: {}",
+                err
+            ));
         }
-        
+
         // 重新获取锁
         Ok(self.client.lock().await)
     }
 
-
     /// 构建 SendMessageRequest（内部辅助函数）
-    /// 
+    ///
     /// 验证 payload 必须是 Message 对象，然后使用它构建请求
     fn build_send_message_request(
         &self,
@@ -290,8 +286,12 @@ impl MessageRouter {
         tenant_id: Option<&str>,
     ) -> Result<SendMessageRequest> {
         // 验证 payload 必须是 Message 对象
-        let mut message = flare_proto::Message::decode(&payload[..])
-            .map_err(|e| anyhow::anyhow!("Payload must be a valid Message object, decode error: {}", e))?;
+        let mut message = flare_proto::Message::decode(&payload[..]).map_err(|e| {
+            anyhow::anyhow!(
+                "Payload must be a valid Message object, decode error: {}",
+                e
+            )
+        })?;
 
         // 确保消息的基本字段正确（如果 payload 中的字段为空，使用传入的参数填充）
         if message.session_id.is_empty() {
@@ -303,7 +303,7 @@ impl MessageRouter {
         if message.id.is_empty() {
             message.id = uuid::Uuid::new_v4().to_string();
         }
-        
+
         // 使用解析后的 Message 对象，确保时间戳等字段正确
         if message.timestamp.is_none() {
             message.timestamp = Some(Timestamp {
@@ -311,12 +311,16 @@ impl MessageRouter {
                 nanos: 0,
             });
         }
-        
+
         // 在 extra 中添加来源标识
-        message.extra.insert("source".to_string(), "access_gateway".to_string());
-                if let Some(tenant_id) = tenant_id {
-            message.extra.insert("tenant_id".to_string(), tenant_id.to_string());
-                }
+        message
+            .extra
+            .insert("source".to_string(), "access_gateway".to_string());
+        if let Some(tenant_id) = tenant_id {
+            message
+                .extra
+                .insert("tenant_id".to_string(), tenant_id.to_string());
+        }
 
         // 构建请求上下文
         let request_context = self.build_request_context(user_id);

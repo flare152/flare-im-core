@@ -1,20 +1,20 @@
 //! ACK处理模块
 //! 整合ACK状态管理、Redis缓存、批量处理和异步归档功能
 
+pub mod config;
+pub mod metrics;
 pub mod redis_manager;
 pub mod service;
-pub mod metrics;
-pub mod config;
 pub mod traits;
 
+use crate::ack::metrics::AckMetrics;
 use crate::ack::redis_manager::RedisAckManager;
 use crate::ack::service::AckService;
-use crate::ack::metrics::AckMetrics;
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// ACK处理模块（精简版）
-/// 
+///
 /// 核心功能：
 /// - ACK 状态管理（内存 + Redis）
 /// - 批量处理
@@ -29,13 +29,13 @@ pub struct AckModule {
 }
 
 // 重新导出类型，方便外部使用
-pub use traits::{AckManager, AckEvent, AckTimeoutEvent};
-pub use redis_manager::{AckType, AckStatus, ImportanceLevel, AckStatusInfo};
 pub use config::AckServiceConfig;
+pub use redis_manager::{AckStatus, AckStatusInfo, AckType, ImportanceLevel};
+pub use traits::{AckEvent, AckManager, AckTimeoutEvent};
 
 impl AckModule {
     /// 创建新的ACK处理模块（精简版）
-    /// 
+    ///
     /// 不需要数据库连接，只使用 Redis 进行状态管理
     pub async fn new(
         ack_config: crate::ack::config::AckServiceConfig,
@@ -96,9 +96,7 @@ impl AckModule {
     pub async fn get_stats(&self) -> Result<AckModuleStats, Box<dyn std::error::Error>> {
         let service_stats = self.service.get_stats().await?;
 
-        Ok(AckModuleStats {
-            service_stats,
-        })
+        Ok(AckModuleStats { service_stats })
     }
 }
 
@@ -160,13 +158,13 @@ mod tests {
 
         let module = AckModule::new(ack_config).await?;
 
-        let ack_info = AckStatusInfo {
+        let ack_info = crate::ack::redis_manager::AckStatusInfo {
             message_id: "test_msg_1".to_string(),
             user_id: "user_1".to_string(),
-            ack_type: Some(AckType::TransportAck),
-            status: AckStatus::Received,
+            ack_type: Some(crate::ack::redis_manager::AckType::TransportAck),
+            status: crate::ack::redis_manager::AckStatus::Received,
             timestamp: 1234567890,
-            importance: ImportanceLevel::High,
+            importance: crate::ack::redis_manager::ImportanceLevel::High,
         };
 
         // 记录ACK

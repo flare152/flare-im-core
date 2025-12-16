@@ -2,17 +2,17 @@
 //!
 //! 处理消息收发的业务流程编排
 
-use std::sync::Arc;
-use flare_core::common::error::{Result, FlareError};
+use flare_core::common::error::{FlareError, Result};
 use flare_core::common::protocol::MessageCommand;
-use tracing::{info, warn, error, instrument};
 use prost::Message as ProstMessage;
+use std::sync::Arc;
+use tracing::{error, info, instrument, warn};
 
-use crate::infrastructure::messaging::message_router::MessageRouter;
-use crate::infrastructure::messaging::ack_sender::AckSender;
-use crate::infrastructure::AckPublisher;
-use crate::domain::service::SessionDomainService;
 use crate::application::services::session_service_client::SessionServiceClient;
+use crate::domain::service::SessionDomainService;
+use crate::infrastructure::AckPublisher;
+use crate::infrastructure::messaging::ack_sender::AckSender;
+use crate::infrastructure::messaging::message_router::MessageRouter;
 
 /// 消息处理应用服务
 ///
@@ -70,16 +70,16 @@ impl MessageApplicationService {
             message_len = msg_cmd.payload.len(),
             "Message received from client"
         );
-        
+
         // 尝试解析消息内容以便日志追踪
         if let Ok(message) = flare_proto::common::Message::decode(msg_cmd.payload.as_slice()) {
             tracing::debug!(
-                user_id = %user_id,
-                message_id = %msg_cmd.message_id,
-                sender_id = %message.sender_id,
-                receiver_id = %message.receiver_id,
-                "Parsed message content for logging"
-        );
+                    user_id = %user_id,
+                    message_id = %msg_cmd.message_id,
+                    sender_id = %message.sender_id,
+                    receiver_id = %message.receiver_id,
+                    "Parsed message content for logging"
+            );
         }
 
         // 检查消息路由器
@@ -103,11 +103,11 @@ impl MessageApplicationService {
                     "Failed to extract session_id from message payload"
                 );
                 // 发送错误通知
-                if let Err(e) = self.ack_sender.send_error_notification(
-                    connection_id,
-                    &msg_cmd.message_id,
-                    &error_msg,
-                ).await {
+                if let Err(e) = self
+                    .ack_sender
+                    .send_error_notification(connection_id, &msg_cmd.message_id, &error_msg)
+                    .await
+                {
                     warn!(
                         ?e,
                         user_id = %user_id,
@@ -122,12 +122,9 @@ impl MessageApplicationService {
 
         // 路由消息
         let original_message_id = msg_cmd.message_id.clone();
-        let route_res = router.route_message(
-            user_id,
-            &session_id,
-            msg_cmd.payload.clone(),
-            tenant_id,
-        ).await;
+        let route_res = router
+            .route_message(user_id, &session_id, msg_cmd.payload.clone(), tenant_id)
+            .await;
 
         let route_duration = start_time.elapsed();
         match route_res {
@@ -141,11 +138,11 @@ impl MessageApplicationService {
                     "Message routed successfully"
                 );
                 // 发送 ACK 到客户端
-                if let Err(e) = self.ack_sender.send_message_ack(
-                    connection_id,
-                    &response.message_id,
-                    &session_id,
-                ).await {
+                if let Err(e) = self
+                    .ack_sender
+                    .send_message_ack(connection_id, &response.message_id, &session_id)
+                    .await
+                {
                     // ACK 发送失败不影响消息路由，只记录警告
                     warn!(
                         ?e,
@@ -168,11 +165,11 @@ impl MessageApplicationService {
                     "Failed to route message to Message Orchestrator"
                 );
                 // 发送错误通知
-                if let Err(e) = self.ack_sender.send_error_notification(
-                    connection_id,
-                    &original_message_id,
-                    &error_msg,
-                ).await {
+                if let Err(e) = self
+                    .ack_sender
+                    .send_error_notification(connection_id, &original_message_id, &error_msg)
+                    .await
+                {
                     // 错误通知发送失败不影响错误处理流程，只记录警告
                     warn!(
                         ?e,
@@ -210,12 +207,16 @@ impl MessageApplicationService {
 
         // 上报 ACK 到 Push Server
         if let Some(ref ack_publisher) = self.ack_publisher {
-            let window_id = msg_cmd.metadata.get("window_id")
+            let window_id = msg_cmd
+                .metadata
+                .get("window_id")
                 .and_then(|v| String::from_utf8(v.clone()).ok());
-            let ack_seq = msg_cmd.metadata.get("ack_seq")
+            let ack_seq = msg_cmd
+                .metadata
+                .get("ack_seq")
                 .and_then(|v| std::str::from_utf8(v.as_slice()).ok())
                 .and_then(|s| s.parse::<i64>().ok());
-            
+
             // 创建审计事件
             let ack_event = crate::infrastructure::AckAuditEvent {
                 ack: crate::infrastructure::AckData {
@@ -245,16 +246,24 @@ impl MessageApplicationService {
         // 推送窗口 ACK 更新会话游标（如果提供）
         if let Some(ref session_client) = self.session_service_client {
             // 从元数据中提取会话信息
-            if let Some(session_id) = msg_cmd.metadata.get("session_id")
-                .and_then(|v| String::from_utf8(v.clone()).ok()) {
+            if let Some(session_id) = msg_cmd
+                .metadata
+                .get("session_id")
+                .and_then(|v| String::from_utf8(v.clone()).ok())
+            {
                 // 提取时间戳（如果有）
-                let message_ts = msg_cmd.metadata.get("timestamp")
+                let message_ts = msg_cmd
+                    .metadata
+                    .get("timestamp")
                     .and_then(|v| std::str::from_utf8(v.as_slice()).ok())
                     .and_then(|s| s.parse::<i64>().ok())
                     .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
                 // 调用会话服务更新游标
-                if let Err(e) = session_client.update_session_cursor(user_id, &session_id, message_ts).await {
+                if let Err(e) = session_client
+                    .update_session_cursor(user_id, &session_id, message_ts)
+                    .await
+                {
                     warn!(
                         ?e,
                         user_id = %user_id,
@@ -279,14 +288,16 @@ impl MessageApplicationService {
     fn extract_session_id_from_payload(&self, payload: &[u8]) -> Result<String> {
         use flare_proto::Message as ProtoMessage;
 
-        let message = ProtoMessage::decode(payload)
-            .map_err(|e| FlareError::deserialization_error(
-                format!("Failed to decode Message from payload: {}", e)
-            ))?;
+        let message = ProtoMessage::decode(payload).map_err(|e| {
+            FlareError::deserialization_error(format!(
+                "Failed to decode Message from payload: {}",
+                e
+            ))
+        })?;
 
         if message.session_id.is_empty() {
             return Err(FlareError::message_format_error(
-                "Message.session_id is required but empty".to_string()
+                "Message.session_id is required but empty".to_string(),
             ));
         }
 

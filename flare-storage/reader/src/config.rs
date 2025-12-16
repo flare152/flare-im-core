@@ -24,18 +24,16 @@ impl StorageReaderConfig {
     /// 从应用配置加载（新方式，推荐）
     pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
         let service_config = app.storage_reader_service();
-        
+
         // 解析 Redis 配置引用（可选）
-        let redis_url = env::var("STORAGE_REDIS_URL")
-            .ok()
-            .or_else(|| {
-                if let Some(redis_name) = &service_config.redis {
-                    app.redis_profile(redis_name)
-                        .map(|profile| profile.url.clone())
-                } else {
-                    None
-                }
-            });
+        let redis_url = env::var("STORAGE_REDIS_URL").ok().or_else(|| {
+            if let Some(redis_name) = &service_config.redis {
+                app.redis_profile(redis_name)
+                    .map(|profile| profile.url.clone())
+            } else {
+                None
+            }
+        });
 
         // 解析 PostgreSQL 配置引用（必需）
         // 注意：StorageReaderServiceConfig 没有 postgres 字段，直接从环境变量或使用默认 postgres profile

@@ -8,4 +8,3 @@ pub struct RegisterRouteCommand {
     /// 端点地址
     pub endpoint: String,
 }
-

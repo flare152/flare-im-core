@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use flare_core::server::connection::ConnectionManagerTrait;
 use flare_server_core::error::Result;
 
-use crate::domain::repository::ConnectionQuery;
 use crate::domain::model::ConnectionInfo;
+use crate::domain::repository::ConnectionQuery;
 
 /// 基于 ConnectionManager 的连接查询实现
 pub struct ManagerConnectionQuery {
@@ -19,12 +19,9 @@ pub struct ManagerConnectionQuery {
 
 impl ManagerConnectionQuery {
     pub fn new(connection_manager: Arc<dyn ConnectionManagerTrait>) -> Self {
-        Self {
-            connection_manager,
-        }
+        Self { connection_manager }
     }
 }
-
 
 #[async_trait]
 impl ConnectionQuery for ManagerConnectionQuery {
@@ -36,10 +33,8 @@ impl ConnectionQuery for ManagerConnectionQuery {
 
         // 获取每个连接的详细信息
         for connection_id in connection_ids {
-            if let Some((_, conn_info)) = self
-                .connection_manager
-                .get_connection(&connection_id)
-                .await
+            if let Some((_, conn_info)) =
+                self.connection_manager.get_connection(&connection_id).await
             {
                 // 获取设备信息
                 let device_id = conn_info
@@ -94,4 +89,3 @@ impl ConnectionQuery for ManagerConnectionQuery {
         Ok(connections)
     }
 }
-

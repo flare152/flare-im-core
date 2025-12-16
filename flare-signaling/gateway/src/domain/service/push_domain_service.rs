@@ -39,7 +39,7 @@ impl PushDomainService {
     }
 
     /// 检查用户是否在线
-    /// 
+    ///
     /// Gateway 直接查询本地连接状态，不维护缓存
     /// 在线状态由 Signaling Online 服务统一管理
     #[instrument(skip(self), fields(user_id = %user_id))]
@@ -83,7 +83,7 @@ impl PushDomainService {
     }
 
     /// 推送消息到连接（直接单条推送，保持 Gateway 轻量）
-    /// 
+    ///
     /// 优化：去重连接，避免重复推送
     #[instrument(skip(self, message_bytes), fields(user_id = %user_id, connection_count = connections.len()))]
     pub async fn push_to_connections(
@@ -93,12 +93,12 @@ impl PushDomainService {
         message_bytes: &[u8],
     ) -> Result<(i32, i32)> {
         let start_time = std::time::Instant::now();
-        
+
         // 去重连接：使用 HashSet 去重 connection_id，避免重复推送
         use std::collections::HashSet;
         let mut seen_connection_ids = HashSet::new();
         let mut unique_connections = Vec::new();
-        
+
         for conn in connections {
             if seen_connection_ids.insert(conn.connection_id.clone()) {
                 unique_connections.push(conn);
@@ -111,7 +111,7 @@ impl PushDomainService {
                 );
             }
         }
-        
+
         let dedup_duration_ms = start_time.elapsed().as_millis();
         tracing::debug!(
             user_id = %user_id,
@@ -120,7 +120,7 @@ impl PushDomainService {
             dedup_duration_ms = dedup_duration_ms,
             "Connection deduplication completed"
         );
-        
+
         let mut success_count = 0;
         let mut failure_count = 0;
         let push_start = std::time::Instant::now();
@@ -152,7 +152,7 @@ impl PushDomainService {
                 }
             }
         }
-        
+
         let total_duration_ms = start_time.elapsed().as_millis();
         let push_duration_ms = push_start.elapsed().as_millis();
         tracing::debug!(
@@ -183,7 +183,7 @@ impl PushDomainService {
     }
 
     /// 推送 ACK 数据包给用户
-    /// 
+    ///
     /// 策略：
     /// 1. ACK 推送给用户的所有在线设备
     /// 2. 推送失败不影响其他用户
@@ -210,7 +210,11 @@ impl PushDomainService {
 
         // 向每个连接发送 ACK 数据包
         for conn in &connections {
-            match self.connection_handler.push_packet_to_connection(&conn.connection_id, &packet).await {
+            match self
+                .connection_handler
+                .push_packet_to_connection(&conn.connection_id, &packet)
+                .await
+            {
                 Ok(_) => {
                     success_count += 1;
                     tracing::debug!(

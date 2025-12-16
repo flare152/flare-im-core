@@ -43,11 +43,7 @@ pub trait SessionRepository: Send + Sync {
         to_remove: &[String],
         role_updates: &[(String, Vec<String>)],
     ) -> Result<Vec<SessionParticipant>>;
-    async fn batch_acknowledge(
-        &self,
-        user_id: &str,
-        cursors: &[(String, i64)],
-    ) -> Result<()>;
+    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()>;
     async fn search_sessions(
         &self,
         user_id: Option<&str>,
@@ -58,19 +54,10 @@ pub trait SessionRepository: Send + Sync {
     ) -> Result<(Vec<SessionSummary>, usize)>;
 
     /// 标记消息为已读（更新 last_read_msg_seq）
-    async fn mark_as_read(
-        &self,
-        user_id: &str,
-        session_id: &str,
-        seq: i64,
-    ) -> Result<()>;
+    async fn mark_as_read(&self, user_id: &str, session_id: &str, seq: i64) -> Result<()>;
 
     /// 获取未读数（基于 last_message_seq - last_read_msg_seq）
-    async fn get_unread_count(
-        &self,
-        user_id: &str,
-        session_id: &str,
-    ) -> Result<i32>;
+    async fn get_unread_count(&self, user_id: &str, session_id: &str) -> Result<i32>;
 }
 
 /// Presence 仓储接口（需要作为 trait 对象使用，保留 async-trait）
@@ -79,7 +66,6 @@ pub trait PresenceRepository: Send + Sync {
     async fn list_devices(&self, user_id: &str) -> Result<Vec<DevicePresence>>;
     async fn update_presence(&self, update: PresenceUpdate) -> Result<()>;
 }
-
 
 #[async_trait]
 pub trait MessageProvider: Send + Sync {
@@ -99,27 +85,29 @@ pub trait MessageProvider: Send + Sync {
     ) -> Result<Vec<Message>>;
 
     /// 基于 seq 的消息同步（可选，用于优化性能）
-    /// 
+    ///
     /// # 参数
     /// * `session_id` - 会话ID
     /// * `after_seq` - 起始 seq（不包含）
     /// * `before_seq` - 结束 seq（可选，不包含）
     /// * `limit` - 返回消息数量限制
-    /// 
+    ///
     /// # 返回
     /// * `Ok(MessageSyncResult)` - 消息同步结果，包含消息列表和游标
-    /// 
+    ///
     /// # 注意
     /// 如果实现不支持基于 seq 的同步，可以返回 `Err` 或降级到基于时间戳的同步
     async fn sync_messages_by_seq(
         &self,
-        session_id: &str,
-        after_seq: i64,
-        before_seq: Option<i64>,
-        limit: i32,
+        _session_id: &str,
+        _after_seq: i64,
+        _before_seq: Option<i64>,
+        _limit: i32,
     ) -> Result<MessageSyncResult> {
         // 默认实现：返回错误，提示使用基于时间戳的同步
-        Err(anyhow::anyhow!("sync_messages_by_seq not implemented, use sync_messages instead"))
+        Err(anyhow::anyhow!(
+            "sync_messages_by_seq not implemented, use sync_messages instead"
+        ))
     }
 }
 
@@ -134,7 +122,7 @@ pub trait ThreadRepository: Send + Sync {
         title: Option<&str>,
         creator_id: &str,
     ) -> Result<String>;
-    
+
     /// 获取话题列表
     async fn list_threads(
         &self,
@@ -144,10 +132,10 @@ pub trait ThreadRepository: Send + Sync {
         include_archived: bool,
         sort_order: crate::domain::model::ThreadSortOrder,
     ) -> Result<(Vec<crate::domain::model::Thread>, i32)>;
-    
+
     /// 获取话题详情
     async fn get_thread(&self, thread_id: &str) -> Result<Option<crate::domain::model::Thread>>;
-    
+
     /// 更新话题
     async fn update_thread(
         &self,
@@ -157,10 +145,10 @@ pub trait ThreadRepository: Send + Sync {
         is_locked: Option<bool>,
         is_archived: Option<bool>,
     ) -> Result<()>;
-    
+
     /// 删除话题
     async fn delete_thread(&self, thread_id: &str) -> Result<()>;
-    
+
     /// 增加话题回复计数
     async fn increment_reply_count(
         &self,
@@ -168,14 +156,10 @@ pub trait ThreadRepository: Send + Sync {
         reply_message_id: &str,
         reply_user_id: &str,
     ) -> Result<()>;
-    
+
     /// 添加话题参与者
-    async fn add_participant(
-        &self,
-        thread_id: &str,
-        user_id: &str,
-    ) -> Result<()>;
-    
+    async fn add_participant(&self, thread_id: &str, user_id: &str) -> Result<()>;
+
     /// 获取话题参与者列表
     async fn get_participants(&self, thread_id: &str) -> Result<Vec<String>>;
 }

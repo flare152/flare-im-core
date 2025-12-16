@@ -3,21 +3,22 @@
 //! 在 CQRS 架构中，查询侧通常直接调用基础设施层（仓储实现），
 //! 因为查询是只读操作，不涉及业务逻辑，不需要经过领域层。
 
-use std::sync::Arc;
 use anyhow::Result;
-use tracing::instrument;
-use flare_proto::common::Message;
 use chrono::{DateTime, Utc};
 use flare_im_core::utils::extract_seq_from_message;
+use flare_proto::common::Message;
+use std::sync::Arc;
+use tracing::instrument;
 
 use crate::application::queries::{
-    GetMessageQuery, ListMessageTagsQuery, QueryMessagesQuery, QueryMessagesBySeqQuery, SearchMessagesQuery,
+    GetMessageQuery, ListMessageTagsQuery, QueryMessagesBySeqQuery, QueryMessagesQuery,
+    SearchMessagesQuery,
 };
 use crate::domain::repository::MessageStorage;
 use crate::domain::service::{MessageStorageDomainService, QueryMessagesResult};
 
 /// 消息存储查询处理器（查询侧）
-/// 
+///
 /// 对于基于 seq 的查询，需要使用领域服务（因为涉及业务逻辑）
 pub struct MessageStorageQueryHandler {
     storage: Arc<dyn MessageStorage + Send + Sync>,
@@ -44,16 +45,13 @@ impl MessageStorageQueryHandler {
 
     /// 查询消息列表
     #[instrument(skip(self), fields(session_id = %query.session_id))]
-    pub async fn handle_query_messages(
-        &self,
-        query: QueryMessagesQuery,
-    ) -> Result<Vec<Message>> {
+    pub async fn handle_query_messages(&self, query: QueryMessagesQuery) -> Result<Vec<Message>> {
         let start_time = if query.start_time == 0 {
             None
         } else {
             DateTime::from_timestamp(query.start_time, 0)
         };
-        
+
         let end_time = if query.end_time == 0 {
             None
         } else {
@@ -84,7 +82,7 @@ impl MessageStorageQueryHandler {
             } else {
                 query.start_time
             };
-            
+
             let end_time = if query.end_time == 0 {
                 Utc::now().timestamp()
             } else {
@@ -108,7 +106,7 @@ impl MessageStorageQueryHandler {
             } else {
                 DateTime::from_timestamp(query.start_time, 0)
             };
-            
+
             let end_time = if query.end_time == 0 {
                 None
             } else {
@@ -116,7 +114,8 @@ impl MessageStorageQueryHandler {
             };
 
             // 直接查询消息
-            let messages = self.storage
+            let messages = self
+                .storage
                 .query_messages(
                     &query.session_id,
                     None, // user_id
@@ -125,18 +124,19 @@ impl MessageStorageQueryHandler {
                     query.limit,
                 )
                 .await?;
-            
+
             // 构建简化的 QueryMessagesResult
             let message_count = messages.len() as i32;
-            let next_cursor = messages.last()
+            let next_cursor = messages
+                .last()
                 .and_then(|msg| {
-                    msg.timestamp.as_ref().map(|ts| {
-                        format!("{}:{}", ts.seconds, msg.id.clone())
-                    })
+                    msg.timestamp
+                        .as_ref()
+                        .map(|ts| format!("{}:{}", ts.seconds, msg.id.clone()))
                 })
                 .unwrap_or_default();
             let has_more = message_count >= query.limit;
-            
+
             Ok(QueryMessagesResult {
                 messages,
                 next_cursor,
@@ -154,22 +154,22 @@ impl MessageStorageQueryHandler {
 
     /// 获取消息的时间戳
     #[instrument(skip(self), fields(message_id = %message_id))]
-    pub async fn handle_get_message_timestamp(&self, message_id: &str) -> Result<Option<DateTime<Utc>>> {
+    pub async fn handle_get_message_timestamp(
+        &self,
+        message_id: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         self.storage.get_message_timestamp(message_id).await
     }
 
     /// 搜索消息
     #[instrument(skip(self))]
-    pub async fn handle_search_messages(
-        &self,
-        query: SearchMessagesQuery,
-    ) -> Result<Vec<Message>> {
+    pub async fn handle_search_messages(&self, query: SearchMessagesQuery) -> Result<Vec<Message>> {
         let start_time = if query.start_time == 0 {
             None
         } else {
             DateTime::from_timestamp(query.start_time, 0)
         };
-        
+
         let end_time = if query.end_time == 0 {
             None
         } else {
@@ -177,12 +177,7 @@ impl MessageStorageQueryHandler {
         };
 
         self.storage
-            .search_messages(
-                &query.filters,
-                start_time,
-                end_time,
-                query.limit,
-            )
+            .search_messages(&query.filters, start_time, end_time, query.limit)
             .await
     }
 
@@ -224,7 +219,7 @@ impl MessageStorageQueryHandler {
                     query.limit,
                 )
                 .await?;
-            
+
             // 构建简化的 QueryMessagesResult
             QueryMessagesResult {
                 messages,

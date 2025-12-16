@@ -404,10 +404,18 @@ pub struct AckServiceConfigSection {
     pub batch_size: usize,
 }
 
-fn default_ack_redis_ttl() -> u64 { 3600 }
-fn default_ack_cache_capacity() -> usize { 10000 }
-fn default_ack_batch_interval_ms() -> u64 { 100 }
-fn default_ack_batch_size() -> usize { 100 }
+fn default_ack_redis_ttl() -> u64 {
+    3600
+}
+fn default_ack_cache_capacity() -> usize {
+    10000
+}
+fn default_ack_batch_interval_ms() -> u64 {
+    100
+}
+fn default_ack_batch_size() -> usize {
+    100
+}
 
 /// 推送工作服务配置
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -824,32 +832,50 @@ impl FlareAppConfig {
         // 验证接入网关配置
         if let Some(cfg) = &self.services.access_gateway {
             if let Some(token_store) = &cfg.token_store {
-                self.redis_profile(token_store)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (token_store)", token_store))?;
+                self.redis_profile(token_store).ok_or_else(|| {
+                    anyhow!("Redis config '{}' not found (token_store)", token_store)
+                })?;
             }
             if let Some(session_store) = &cfg.session_store {
-                self.redis_profile(session_store)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (session_store)", session_store))?;
+                self.redis_profile(session_store).ok_or_else(|| {
+                    anyhow!("Redis config '{}' not found (session_store)", session_store)
+                })?;
             }
         }
 
         // 验证媒体服务配置
         if let Some(cfg) = &self.services.media {
             if let Some(metadata_store) = &cfg.metadata_store {
-                self.postgres_profile(metadata_store)
-                    .ok_or_else(|| anyhow!("PostgreSQL config '{}' not found (metadata_store)", metadata_store))?;
+                self.postgres_profile(metadata_store).ok_or_else(|| {
+                    anyhow!(
+                        "PostgreSQL config '{}' not found (metadata_store)",
+                        metadata_store
+                    )
+                })?;
             }
             if let Some(metadata_cache) = &cfg.metadata_cache {
-                self.redis_profile(metadata_cache)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (metadata_cache)", metadata_cache))?;
+                self.redis_profile(metadata_cache).ok_or_else(|| {
+                    anyhow!(
+                        "Redis config '{}' not found (metadata_cache)",
+                        metadata_cache
+                    )
+                })?;
             }
             if let Some(object_store) = &cfg.object_store {
-                self.object_store_profile(object_store)
-                    .ok_or_else(|| anyhow!("Object storage config '{}' not found (object_store)", object_store))?;
+                self.object_store_profile(object_store).ok_or_else(|| {
+                    anyhow!(
+                        "Object storage config '{}' not found (object_store)",
+                        object_store
+                    )
+                })?;
             }
             if let Some(upload_session_store) = &cfg.upload_session_store {
-                self.redis_profile(upload_session_store)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (upload_session_store)", upload_session_store))?;
+                self.redis_profile(upload_session_store).ok_or_else(|| {
+                    anyhow!(
+                        "Redis config '{}' not found (upload_session_store)",
+                        upload_session_store
+                    )
+                })?;
             }
         }
 
@@ -882,8 +908,9 @@ impl FlareAppConfig {
         // 验证消息编排服务配置
         if let Some(cfg) = &self.services.message_orchestrator {
             if let Some(kafka) = &cfg.kafka {
-                self.kafka_profile(kafka)
-                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (message_orchestrator)", kafka))?;
+                self.kafka_profile(kafka).ok_or_else(|| {
+                    anyhow!("Kafka config '{}' not found (message_orchestrator)", kafka)
+                })?;
             }
             if let Some(wal_store) = &cfg.wal_store {
                 self.redis_profile(wal_store)
@@ -894,40 +921,53 @@ impl FlareAppConfig {
         // 验证信令在线服务配置
         if let Some(cfg) = &self.services.signaling_online {
             if let Some(redis) = &cfg.redis {
-                self.redis_profile(redis)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (signaling_online)", redis))?;
+                self.redis_profile(redis).ok_or_else(|| {
+                    anyhow!("Redis config '{}' not found (signaling_online)", redis)
+                })?;
             }
         }
 
         // 验证存储读取服务配置
         if let Some(cfg) = &self.services.storage_reader {
             if let Some(mongo) = &cfg.mongo {
-                self.mongodb_profile(mongo)
-                    .ok_or_else(|| anyhow!("MongoDB config '{}' not found (storage_reader)", mongo))?;
+                self.mongodb_profile(mongo).ok_or_else(|| {
+                    anyhow!("MongoDB config '{}' not found (storage_reader)", mongo)
+                })?;
             }
             if let Some(redis) = &cfg.redis {
-                self.redis_profile(redis)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (storage_reader)", redis))?;
+                self.redis_profile(redis).ok_or_else(|| {
+                    anyhow!("Redis config '{}' not found (storage_reader)", redis)
+                })?;
             }
         }
 
         // 验证存储写入服务配置
         if let Some(cfg) = &self.services.storage_writer {
             if let Some(kafka) = &cfg.kafka {
-                self.kafka_profile(kafka)
-                    .ok_or_else(|| anyhow!("Kafka config '{}' not found (storage_writer)", kafka))?;
+                self.kafka_profile(kafka).ok_or_else(|| {
+                    anyhow!("Kafka config '{}' not found (storage_writer)", kafka)
+                })?;
             }
             if let Some(mongo) = &cfg.mongo {
-                self.mongodb_profile(mongo)
-                    .ok_or_else(|| anyhow!("MongoDB config '{}' not found (storage_writer)", mongo))?;
+                self.mongodb_profile(mongo).ok_or_else(|| {
+                    anyhow!("MongoDB config '{}' not found (storage_writer)", mongo)
+                })?;
             }
             if let Some(postgres) = &cfg.postgres {
-                self.postgres_profile(postgres)
-                    .ok_or_else(|| anyhow!("PostgreSQL config '{}' not found (storage_writer)", postgres))?;
+                self.postgres_profile(postgres).ok_or_else(|| {
+                    anyhow!(
+                        "PostgreSQL config '{}' not found (storage_writer)",
+                        postgres
+                    )
+                })?;
             }
             if let Some(wal_store) = &cfg.wal_store {
-                self.redis_profile(wal_store)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (storage_writer.wal_store)", wal_store))?;
+                self.redis_profile(wal_store).ok_or_else(|| {
+                    anyhow!(
+                        "Redis config '{}' not found (storage_writer.wal_store)",
+                        wal_store
+                    )
+                })?;
             }
         }
 
@@ -960,12 +1000,15 @@ impl FlareAppConfig {
 /// let config = load_config(Some("config"));
 /// ```
 pub fn load_config(path: Option<&str>) -> &'static FlareAppConfig {
+    // 确定配置文件候选路径
     let candidates: Vec<PathBuf> = match path {
         Some(p) => vec![PathBuf::from(p)],
         None => vec![PathBuf::from("config"), PathBuf::from("config.toml")],
     };
 
+    // 使用 OnceLock 确保配置只初始化一次
     APP_CONFIG.get_or_init(|| {
+        // 使用备选方案加载配置
         let mut cfg = load_with_fallback(&candidates);
         // 加载环境特定配置
         if let Err(e) = manager::ConfigManager::load_environment_config(&mut cfg) {
@@ -995,17 +1038,20 @@ pub fn load_config_with_validation(
     path: Option<&str>,
     strict: bool,
 ) -> Result<&'static FlareAppConfig> {
+    // 加载配置
     let config = load_config(path);
-    
+
+    // 根据 strict 参数决定是否严格验证配置引用
     if strict {
-        config.validate_references()
+        config
+            .validate_references()
             .with_context(|| "configuration validation failed")?;
     } else {
         if let Err(e) = config.validate_references() {
             warn!("configuration reference validation failed: {}", e);
         }
     }
-    
+
     Ok(config)
 }
 
@@ -1015,7 +1061,10 @@ pub fn app_config() -> &'static FlareAppConfig {
 }
 
 /// 使用备选方案加载配置
+///
+/// 按照候选路径列表依次尝试加载配置，如果都失败则使用默认配置
 fn load_with_fallback(candidates: &[PathBuf]) -> FlareAppConfig {
+    // 遍历候选路径列表，尝试加载配置
     for path in candidates {
         match load_config_from_source(path) {
             Ok(mut cfg) => {
@@ -1028,12 +1077,16 @@ fn load_with_fallback(candidates: &[PathBuf]) -> FlareAppConfig {
         }
     }
 
+    // 如果所有候选路径都失败，则使用默认配置
     warn!("no configuration source succeeded, falling back to defaults");
     default_config()
 }
 
 /// 从源加载配置
+///
+/// 根据路径类型（文件或目录）加载配置
 fn load_config_from_source(path: &Path) -> Result<FlareAppConfig> {
+    // 检查配置路径是否存在
     if !path.exists() {
         return Err(anyhow!(
             "configuration path {} does not exist",
@@ -1041,10 +1094,12 @@ fn load_config_from_source(path: &Path) -> Result<FlareAppConfig> {
         ));
     }
 
+    // 获取路径元数据
     let metadata = path
         .metadata()
         .with_context(|| format!("unable to read metadata for {}", path.display()))?;
 
+    // 根据路径类型加载配置
     if metadata.is_dir() {
         load_config_from_directory(path)
     } else {
@@ -1053,11 +1108,16 @@ fn load_config_from_source(path: &Path) -> Result<FlareAppConfig> {
 }
 
 /// 从文件加载配置
+///
+/// 读取并解析 TOML 配置文件
 fn load_config_from_file(path: &Path) -> Result<FlareAppConfig> {
+    // 读取配置文件内容
     let content = fs::read_to_string(path)
         .with_context(|| format!("unable to read config file: {}", Path::new(path).display()))?;
+    // 解析 TOML 格式的配置内容
     let mut cfg: FlareAppConfig = toml::from_str(&content)
         .with_context(|| format!("invalid config format: {}", Path::new(path).display()))?;
+    // 确保配置有默认值
     cfg.ensure_defaults();
     Ok(cfg)
 }
@@ -1131,9 +1191,12 @@ fn load_toml_value(path: &Path) -> Result<Value> {
 }
 
 /// 合并值
+///
+/// 将覆盖值合并到基础值中
 fn merge_value(base: &mut Value, overlay: Value) {
     match overlay {
         Value::Table(overlay_table) => {
+            // 如果基础值也是表，则递归合并
             if let Value::Table(base_table) = base {
                 for (key, overlay_value) in overlay_table.into_iter() {
                     match base_table.get_mut(&key) {
@@ -1144,10 +1207,12 @@ fn merge_value(base: &mut Value, overlay: Value) {
                     }
                 }
             } else {
+                // 如果基础值不是表，则直接替换
                 *base = Value::Table(overlay_table);
             }
         }
         other => {
+            // 对于非表值，直接替换
             *base = other;
         }
     }

@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::instrument;
 
-
 /// 图片处理操作
 #[derive(Debug, Clone)]
 pub struct ImageOperation {
@@ -52,13 +51,13 @@ impl MediaProcessor {
         operations: &[ImageOperation],
     ) -> Result<Vec<ProcessingResult>> {
         let mut results = Vec::new();
-        
+
         // 加载图片
         let img = image::open(input_path)
             .with_context(|| format!("Failed to open image: {}", input_path))?;
-        
+
         let mut processed_img = img.clone();
-        
+
         for operation in operations {
             let start_time = std::time::Instant::now();
             let result = match operation.operation_type.as_str() {
@@ -74,25 +73,30 @@ impl MediaProcessor {
                         output_size: None,
                         processing_time_ms: 0,
                         success: false,
-                        error_message: Some(format!("Unsupported operation: {}", operation.operation_type)),
+                        error_message: Some(format!(
+                            "Unsupported operation: {}",
+                            operation.operation_type
+                        )),
                     });
                     continue;
                 }
             };
-            
+
             match result {
                 Ok(img) => {
                     processed_img = img;
                     let duration = start_time.elapsed().as_millis() as u64;
-                    
+
                     // 保存处理后的图片
                     let op_output_path = format!("{}_{}", output_path, operation.operation_type);
-                    processed_img.save(&op_output_path)
-                        .with_context(|| format!("Failed to save processed image: {}", op_output_path))?;
-                    
-                    let metadata = std::fs::metadata(&op_output_path)
-                        .with_context(|| format!("Failed to get file metadata: {}", op_output_path))?;
-                    
+                    processed_img.save(&op_output_path).with_context(|| {
+                        format!("Failed to save processed image: {}", op_output_path)
+                    })?;
+
+                    let metadata = std::fs::metadata(&op_output_path).with_context(|| {
+                        format!("Failed to get file metadata: {}", op_output_path)
+                    })?;
+
                     results.push(ProcessingResult {
                         operation_type: operation.operation_type.clone(),
                         output_path: op_output_path,
@@ -115,34 +119,46 @@ impl MediaProcessor {
                 }
             }
         }
-        
+
         Ok(results)
     }
-    
+
     /// 调整图片大小
-    fn resize_image(img: &image::DynamicImage, operation: &ImageOperation) -> Result<image::DynamicImage> {
+    fn resize_image(
+        img: &image::DynamicImage,
+        operation: &ImageOperation,
+    ) -> Result<image::DynamicImage> {
         let width = operation.width.unwrap_or(img.width());
         let height = operation.height.unwrap_or(img.height());
-        
+
         let resized = img.resize(width, height, image::imageops::FilterType::Lanczos3);
         Ok(image::DynamicImage::ImageRgba8(resized.to_rgba8()))
     }
-    
+
     /// 压缩图片
-    fn compress_image(img: &image::DynamicImage, _operation: &ImageOperation) -> Result<image::DynamicImage> {
+    fn compress_image(
+        img: &image::DynamicImage,
+        _operation: &ImageOperation,
+    ) -> Result<image::DynamicImage> {
         // 压缩质量在保存时处理，这里返回原图
         Ok(img.clone())
     }
-    
+
     /// 生成缩略图
-    fn generate_thumbnail(img: &image::DynamicImage, operation: &ImageOperation) -> Result<image::DynamicImage> {
+    fn generate_thumbnail(
+        img: &image::DynamicImage,
+        operation: &ImageOperation,
+    ) -> Result<image::DynamicImage> {
         let size = operation.size.unwrap_or(128);
         let thumb = img.thumbnail(size, size);
         Ok(image::DynamicImage::ImageRgba8(thumb.to_rgba8()))
     }
-    
+
     /// 添加水印
-    fn add_watermark(img: &image::DynamicImage, operation: &ImageOperation) -> Result<image::DynamicImage> {
+    fn add_watermark(
+        img: &image::DynamicImage,
+        operation: &ImageOperation,
+    ) -> Result<image::DynamicImage> {
         // 简单实现：在右下角添加文字水印
         if let Some(text) = &operation.text {
             let img_copy = img.clone();
@@ -153,24 +169,27 @@ impl MediaProcessor {
             Ok(img.clone())
         }
     }
-    
+
     /// 裁剪图片
-    fn crop_image(img: &image::DynamicImage, operation: &ImageOperation) -> Result<image::DynamicImage> {
+    fn crop_image(
+        img: &image::DynamicImage,
+        operation: &ImageOperation,
+    ) -> Result<image::DynamicImage> {
         let width = operation.width.unwrap_or(img.width());
         let height = operation.height.unwrap_or(img.height());
-        
+
         // 确保裁剪区域不超过图片边界
         let crop_width = width.min(img.width());
         let crop_height = height.min(img.height());
         let x = (img.width() - crop_width) / 2;
         let y = (img.height() - crop_height) / 2;
-        
+
         // 克隆图像以便进行裁剪操作
         let mut img_clone = img.clone();
         let cropped = img_clone.crop(x, y, crop_width, crop_height);
         Ok(cropped)
     }
-    
+
     /// 处理视频
     #[instrument(skip(input_path, output_path))]
     pub async fn process_video(
@@ -179,18 +198,18 @@ impl MediaProcessor {
         operations: &[VideoOperation],
     ) -> Result<Vec<ProcessingResult>> {
         let mut results = Vec::new();
-        
+
         for operation in operations {
             let start_time = std::time::Instant::now();
             let result = Self::execute_ffmpeg_operation(input_path, output_path, operation).await;
-            
+
             let duration = start_time.elapsed().as_millis() as u64;
-            
+
             match result {
                 Ok(output_file) => {
                     let metadata = std::fs::metadata(&output_file)
                         .with_context(|| format!("Failed to get file metadata: {}", output_file))?;
-                    
+
                     results.push(ProcessingResult {
                         operation_type: operation.operation_type.clone(),
                         output_path: output_file,
@@ -212,10 +231,10 @@ impl MediaProcessor {
                 }
             }
         }
-        
+
         Ok(results)
     }
-    
+
     /// 执行视频操作（简化版）
     async fn execute_ffmpeg_operation(
         input_path: &str,
@@ -224,16 +243,16 @@ impl MediaProcessor {
     ) -> Result<String> {
         // 简化实现：只创建一个空的输出文件作为示例
         let op_output_path = format!("{}_{}", output_path, operation.operation_type);
-        
+
         // 检查输入文件是否存在
         if !Path::new(input_path).exists() {
             return Err(anyhow::anyhow!("Input file does not exist: {}", input_path));
         }
-        
+
         // 创建一个空的输出文件作为示例
         std::fs::write(&op_output_path, "")
             .with_context(|| format!("Failed to create output file: {}", op_output_path))?;
-        
+
         Ok(op_output_path)
     }
 }

@@ -24,15 +24,17 @@ use flare_proto::message::message_service_server::MessageService;
 use flare_proto::message::*;
 
 // 在线状态服务
-use flare_proto::signaling::online::{signaling_service_server::SignalingService, user_service_server::UserService};
 use flare_proto::signaling::online::*;
+use flare_proto::signaling::online::{
+    signaling_service_server::SignalingService, user_service_server::UserService,
+};
 
 // 会话服务
 use flare_proto::session::session_service_server::SessionService;
 use flare_proto::session::*;
 
-use crate::infrastructure::media::GrpcMediaClient;
 use crate::infrastructure::hook::GrpcHookClient;
+use crate::infrastructure::media::GrpcMediaClient;
 use crate::infrastructure::message::GrpcMessageClient;
 use crate::infrastructure::online::GrpcOnlineClient;
 use crate::infrastructure::session::GrpcSessionClient;
@@ -466,8 +468,23 @@ impl MessageService for LightweightGatewayHandler {
 }
 
 // 定义流类型以解决编译错误
-type WatchPresenceStream = std::pin::Pin<Box<dyn futures::Stream<Item = Result<flare_proto::signaling::online::PresenceEvent, Status>> + Send + Sync + 'static>>;
-type SubscribeUserPresenceStream = std::pin::Pin<Box<dyn futures::Stream<Item = Result<flare_proto::signaling::online::UserPresenceEvent, Status>> + Send + Sync + 'static>>;
+type WatchPresenceStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<Item = Result<flare_proto::signaling::online::PresenceEvent, Status>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
+type SubscribeUserPresenceStream = std::pin::Pin<
+    Box<
+        dyn futures::Stream<
+                Item = Result<flare_proto::signaling::online::UserPresenceEvent, Status>,
+            > + Send
+            + Sync
+            + 'static,
+    >,
+>;
 
 #[tonic::async_trait]
 impl SignalingService for LightweightGatewayHandler {
@@ -510,7 +527,11 @@ impl SignalingService for LightweightGatewayHandler {
         &self,
         request: Request<WatchPresenceRequest>,
     ) -> Result<Response<Self::WatchPresenceStream>, Status> {
-        let stream = self.online_client.watch_presence(request).await?.into_inner();
+        let stream = self
+            .online_client
+            .watch_presence(request)
+            .await?
+            .into_inner();
         Ok(Response::new(Box::pin(stream)))
     }
 }
@@ -540,7 +561,11 @@ impl UserService for LightweightGatewayHandler {
         &self,
         request: Request<SubscribeUserPresenceRequest>,
     ) -> Result<Response<Self::SubscribeUserPresenceStream>, Status> {
-        let stream = self.online_client.subscribe_user_presence(request).await?.into_inner();
+        let stream = self
+            .online_client
+            .subscribe_user_presence(request)
+            .await?
+            .into_inner();
         Ok(Response::new(Box::pin(stream)))
     }
 

@@ -17,16 +17,14 @@ pub async fn create_db_pool(database_url: &str) -> Result<PgPool> {
         .max_lifetime(Duration::from_secs(1800))
         .connect(database_url)
         .await?;
-    
+
     info!("Database connection pool created");
-    
+
     // 测试连接
-    sqlx::query("SELECT 1")
-        .execute(&pool)
-        .await?;
-    
+    sqlx::query("SELECT 1").execute(&pool).await?;
+
     info!("Database connection test successful");
-    
+
     Ok(pool)
 }
 
@@ -34,7 +32,6 @@ pub async fn create_db_pool(database_url: &str) -> Result<PgPool> {
 pub async fn create_db_pool_from_env() -> Result<PgPool> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://localhost/flare_im".to_string());
-    
+
     create_db_pool(&database_url).await
 }
-

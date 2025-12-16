@@ -145,23 +145,23 @@ pub enum HookTransportConfig {
         /// 模式1: 直接地址（endpoint 优先，用于外部系统/开发测试）
         #[serde(default)]
         endpoint: Option<String>,
-        
+
         /// 模式2: 服务发现（当 endpoint 为空时使用，用于生产环境内部服务）
         #[serde(default)]
         service_name: Option<String>,
-        
+
         /// 注册中心类型（可选，使用全局配置）
         #[serde(default)]
         registry_type: Option<String>,
-        
+
         /// 命名空间（可选，使用全局配置）
         #[serde(default)]
         namespace: Option<String>,
-        
+
         /// 负载均衡策略（默认：RoundRobin）
         #[serde(default)]
         load_balance: Option<LoadBalanceStrategy>,
-        
+
         /// 请求元数据
         #[serde(default)]
         metadata: HashMap<String, String>,
@@ -251,7 +251,10 @@ impl std::fmt::Debug for HookExecutionPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HookExecutionPlan")
             .field("metadata", &self.metadata)
-            .field("pre_send_handler", &self.pre_send_handler.as_ref().map(|_| "Some(PreSendHook)"))
+            .field(
+                "pre_send_handler",
+                &self.pre_send_handler.as_ref().map(|_| "Some(PreSendHook)"),
+            )
             .field("has_adapter", &self.adapter.is_some())
             .finish()
     }
@@ -279,27 +282,34 @@ impl HookExecutionPlan {
             local_target: None,
         }
     }
-    
+
     /// 设置适配器
-    pub fn with_adapter(mut self, adapter: Arc<dyn crate::infrastructure::adapters::HookAdapter>) -> Self {
+    pub fn with_adapter(
+        mut self,
+        adapter: Arc<dyn crate::infrastructure::adapters::HookAdapter>,
+    ) -> Self {
         self.adapter = Some(adapter);
         self
     }
-    
+
     /// 设置传输配置和本地目标
-    pub fn with_transport(mut self, transport: HookTransportConfig, local_target: Option<String>) -> Self {
+    pub fn with_transport(
+        mut self,
+        transport: HookTransportConfig,
+        local_target: Option<String>,
+    ) -> Self {
         self.transport_config = Some(transport);
         self.local_target = local_target;
         self
     }
-    
+
     /// 获取适配器（如果已设置）
     pub fn adapter(&self) -> Option<&Arc<dyn crate::infrastructure::adapters::HookAdapter>> {
         self.adapter.as_ref()
     }
 
     /// 从HookConfigItem创建HookExecutionPlan
-    /// 
+    ///
     /// # 参数
     /// * `config` - Hook配置项
     /// * `hook_type` - Hook类型（pre_send, post_send, delivery, recall等），用于设置HookKind
@@ -480,10 +490,10 @@ impl HookStatistics {
             self.min_latency_ms = result.latency_ms;
         } else {
             // 计算新的平均值
-            self.avg_latency_ms =
-                (self.avg_latency_ms * (self.total_count - 1) as f64 + result.latency_ms as f64)
-                    / self.total_count as f64;
-            
+            self.avg_latency_ms = (self.avg_latency_ms * (self.total_count - 1) as f64
+                + result.latency_ms as f64)
+                / self.total_count as f64;
+
             if result.latency_ms > self.max_latency_ms {
                 self.max_latency_ms = result.latency_ms;
             }

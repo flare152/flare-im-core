@@ -224,8 +224,8 @@ impl HookOrchestrationService {
 mod tests {
     use super::*;
     use crate::domain::model::HookConfigItem;
-    use std::collections::HashMap;
     use flare_im_core::{HookErrorPolicy, HookKind, HookMetadata};
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -241,7 +241,7 @@ mod tests {
             error_policy: HookErrorPolicy::FailFast,
             require_success: true,
         };
-        
+
         // HookGroup::from_priority 只能区分 Validation (>=100) 和 Business (<100)
         // Critical 组无法通过 priority 区分，所以这里 Critical 和 Business 都使用 <100
         // 注意：实际业务中，Critical 组需要通过其他方式（如配置中的 group 字段）来区分
@@ -250,28 +250,36 @@ mod tests {
             HookGroup::Critical => metadata.with_priority(priority), // 使用 <100，会被分到 Business
             HookGroup::Business => metadata.with_priority(priority),
         };
-        
+
         HookExecutionPlan::new(metadata)
     }
 
     #[test]
     fn test_group_hooks() {
         let service = HookOrchestrationService;
-        
+
         let hooks = vec![
             create_test_hook_plan("validation-hook-1", 100, HookGroup::Validation), // priority = 200
-            create_test_hook_plan("validation-hook-2", 50, HookGroup::Validation),  // priority = 150
-            create_test_hook_plan("critical-hook-1", 30, HookGroup::Critical),      // priority = 30 (会被分到 Business)
-            create_test_hook_plan("business-hook-1", 10, HookGroup::Business),      // priority = 10
-            create_test_hook_plan("business-hook-2", 20, HookGroup::Business),      // priority = 20
+            create_test_hook_plan("validation-hook-2", 50, HookGroup::Validation), // priority = 150
+            create_test_hook_plan("critical-hook-1", 30, HookGroup::Critical), // priority = 30 (会被分到 Business)
+            create_test_hook_plan("business-hook-1", 10, HookGroup::Business), // priority = 10
+            create_test_hook_plan("business-hook-2", 20, HookGroup::Business), // priority = 20
         ];
 
         let grouped = service.group_hooks(hooks);
 
         assert_eq!(grouped.validation.len(), 2, "Validation 组应该有 2 个 hook");
         // Critical 组无法通过 priority 区分，会被分到 Business 组
-        assert_eq!(grouped.critical.len(), 0, "Critical 组无法通过 priority 区分");
-        assert_eq!(grouped.business.len(), 3, "Business 组应该有 3 个 hook（包含 1 个 Critical）");
+        assert_eq!(
+            grouped.critical.len(),
+            0,
+            "Critical 组无法通过 priority 区分"
+        );
+        assert_eq!(
+            grouped.business.len(),
+            3,
+            "Business 组应该有 3 个 hook（包含 1 个 Critical）"
+        );
 
         // 验证排序（priority越小越先执行）
         assert_eq!(grouped.validation[0].priority(), 150);
@@ -285,7 +293,7 @@ mod tests {
     fn test_group_hooks_empty() {
         let service = HookOrchestrationService;
         let grouped = service.group_hooks(vec![]);
-        
+
         assert!(grouped.validation.is_empty());
         assert!(grouped.critical.is_empty());
         assert!(grouped.business.is_empty());
@@ -294,7 +302,7 @@ mod tests {
     #[test]
     fn test_group_hooks_single_group() {
         let service = HookOrchestrationService;
-        
+
         let hooks = vec![
             create_test_hook_plan("hook-1", 10, HookGroup::Business),
             create_test_hook_plan("hook-2", 20, HookGroup::Business),

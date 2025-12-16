@@ -64,7 +64,7 @@ impl StartupInfo {
         info!("║          Flare Access Gateway 服务启动成功                    ║");
         info!("╚════════════════════════════════════════════════════════════════╝");
         info!("");
-        
+
         // 网关信息
         info!("📋 网关信息:");
         info!("   Gateway ID: {}", self.gateway_id);
@@ -72,7 +72,7 @@ impl StartupInfo {
             info!("   Region:     {}", region);
         }
         info!("");
-        
+
         // gRPC 服务信息
         info!("🔌 gRPC 服务 (服务间调用，已注册到服务注册中心):");
         let grpc_addr = format!("{}:{}", self.address, self.port_config.grpc_port);
@@ -83,26 +83,34 @@ impl StartupInfo {
             info!("     • {} - {}", service.name, service.description);
         }
         info!("");
-        
+
         // 长连接服务信息
         info!("🌐 长连接服务 (客户端连接):");
         let ws_addr = format!("{}:{}", self.address, self.port_config.ws_port);
         let quic_addr = format!("{}:{}", self.address, self.port_config.quic_port);
-        info!("   WebSocket:  {} (ws://{} 或 wss://{})", 
-            ws_addr, ws_addr, ws_addr);
+        info!(
+            "   WebSocket:  {} (ws://{} 或 wss://{})",
+            ws_addr, ws_addr, ws_addr
+        );
         info!("   QUIC:       {} (quic://{})", quic_addr, quic_addr);
         info!("");
-        
+
         // 端口映射说明
         info!("📝 端口说明:");
-        info!("   • gRPC 端口 ({}) 用于服务间调用，已注册到服务注册中心", 
-            self.port_config.grpc_port);
-        info!("   • WebSocket 端口 ({}) 用于客户端 WebSocket 连接", 
-            self.port_config.ws_port);
-        info!("   • QUIC 端口 ({}) 用于客户端 QUIC 连接", 
-            self.port_config.quic_port);
+        info!(
+            "   • gRPC 端口 ({}) 用于服务间调用，已注册到服务注册中心",
+            self.port_config.grpc_port
+        );
+        info!(
+            "   • WebSocket 端口 ({}) 用于客户端 WebSocket 连接",
+            self.port_config.ws_port
+        );
+        info!(
+            "   • QUIC 端口 ({}) 用于客户端 QUIC 连接",
+            self.port_config.quic_port
+        );
         info!("");
-        
+
         // 连接示例
         info!("💡 连接示例:");
         info!("   客户端连接 WebSocket:");
@@ -112,7 +120,7 @@ impl StartupInfo {
         info!("   业务系统调用 gRPC:");
         info!("     grpc://{}", grpc_addr);
         info!("");
-        
+
         info!("✅ 所有服务已就绪，等待客户端连接...");
         info!("");
     }
@@ -145,7 +153,7 @@ pub async fn start_services(
 ) -> Result<()> {
     use flare_server_core::runtime::ServiceRuntime;
     use tonic::transport::Server;
-    
+
     // 创建启动信息
     let startup_info = StartupInfo::new(
         gateway_id.clone(),
@@ -165,7 +173,7 @@ pub async fn start_services(
     // 获取 gRPC 处理器
     let signaling_handler = context.grpc_services.signaling_handler.clone();
     let access_gateway_handler = context.grpc_services.access_gateway_handler.clone();
-    
+
     // 长连接服务器已在 wire.rs 中启动，这里只需要确保它正常运行
     // 验证长连接服务器是否已启动
     {
@@ -186,7 +194,7 @@ pub async fn start_services(
         // 添加 gRPC 服务任务
         .add_spawn_with_shutdown("grpc-server", move |shutdown_rx| async move {
             info!("正在启动 gRPC 服务器: {}", grpc_addr);
-            
+
             let server_result = Server::builder()
                 .add_service(
                     flare_proto::signaling::signaling_service_server::SignalingServiceServer::new(
@@ -204,7 +212,7 @@ pub async fn start_services(
                         port = %grpc_addr.port(),
                         "✅ Access Gateway gRPC service is listening"
                     );
-                    
+
                     // 同时监听 Ctrl+C 和关闭通道
                     tokio::select! {
                         _ = tokio::signal::ctrl_c() => {
@@ -233,41 +241,47 @@ pub async fn start_services(
     let gateway_id_for_reg = gateway_id.clone();
     let region_for_reg = region.clone();
     let long_connection_server_for_cleanup = long_connection_server.clone();
-    
-    runtime.run_with_registration(move |addr| {
-        let gateway_id_clone = gateway_id_for_reg.clone();
-        let region_clone = region_for_reg.clone();
-        
-        Box::pin(async move {
-            // 注册服务（使用常量）
-            use flare_im_core::service_names::ACCESS_GATEWAY;
-            match flare_im_core::discovery::register_service_only(ACCESS_GATEWAY, addr, Some(gateway_id_clone.clone())).await {
-                Ok(Some(registry)) => {
-                    info!(
-                        "✅ Service registered: {} (instance_id={}, region={:?})",
-                        ACCESS_GATEWAY,
-                        gateway_id_clone,
-                        region_clone
-                    );
-                    Ok(Some(registry))
+
+    runtime
+        .run_with_registration(move |addr| {
+            let gateway_id_clone = gateway_id_for_reg.clone();
+            let region_clone = region_for_reg.clone();
+
+            Box::pin(async move {
+                // 注册服务（使用常量）
+                use flare_im_core::service_names::ACCESS_GATEWAY;
+                match flare_im_core::discovery::register_service_only(
+                    ACCESS_GATEWAY,
+                    addr,
+                    Some(gateway_id_clone.clone()),
+                )
+                .await
+                {
+                    Ok(Some(registry)) => {
+                        info!(
+                            "✅ Service registered: {} (instance_id={}, region={:?})",
+                            ACCESS_GATEWAY, gateway_id_clone, region_clone
+                        );
+                        Ok(Some(registry))
+                    }
+                    Ok(None) => {
+                        info!("Service discovery not configured, skipping registration");
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "❌ Service registration failed"
+                        );
+                        Err(format!("Service registration failed: {}", e).into())
+                    }
                 }
-                Ok(None) => {
-                    info!("Service discovery not configured, skipping registration");
-                    Ok(None)
-                }
-                Err(e) => {
-                    error!(
-                        error = %e,
-                        "❌ Service registration failed"
-                    );
-                    Err(format!("Service registration failed: {}", e).into())
-                }
-            }
+            })
         })
-    }).await?;
-    
+        .await?;
+
     // ServiceRuntime 停止后，停止长连接服务器
-    if let Some(mut server) = long_connection_server_for_cleanup.lock().await.take() {
+    if let Some(server) = long_connection_server_for_cleanup.lock().await.take() {
         info!("正在停止长连接服务器...");
         if let Err(e) = server.stop().await {
             warn!(error = %e, "停止长连接服务器失败");
@@ -275,6 +289,6 @@ pub async fn start_services(
             info!("长连接服务器已停止");
         }
     }
-    
+
     Ok(())
 }

@@ -5,8 +5,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::domain::entities::device_route::DeviceRoute;
 use crate::domain::DeviceRouteRepository;
+use crate::domain::entities::device_route::DeviceRoute;
 
 /// 内存版设备路由仓储，实现用于开发和单测阶段
 pub struct InMemoryDeviceRouteRepository {
@@ -29,7 +29,10 @@ impl DeviceRouteRepository for InMemoryDeviceRouteRepository {
         let user_routes = map.entry(route.user_id.clone()).or_insert_with(Vec::new);
 
         // 如果已有同一 device_id 的路由，则替换
-        if let Some(existing) = user_routes.iter_mut().find(|r| r.device_id == route.device_id) {
+        if let Some(existing) = user_routes
+            .iter_mut()
+            .find(|r| r.device_id == route.device_id)
+        {
             *existing = route;
         } else {
             user_routes.push(route);

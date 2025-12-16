@@ -1,21 +1,21 @@
 //! Session 聚合根
-//! 
+//!
 //! 职责：管理单个设备的会话生命周期
-//! 
+//!
 //! 聚合根特性：
 //! 1. 封装业务规则 - 所有状态修改都通过方法，保证不变性约束
 //! 2. 发布领域事件 - 每次状态变更都发布事件
 //! 3. 富领域模型 - 行为和数据在一起，不是贫血模型
-//! 
+//!
 //! 设计参考：微信会话管理、Telegram设备管理
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::super::event::DomainEvent;
 use super::super::value_object::{
     ConnectionQuality, DeviceId, DevicePriority, SessionId, TokenVersion, UserId,
 };
-use super::super::event::DomainEvent;
 
 /// Session 聚合根
 #[derive(Serialize, Deserialize)]
@@ -24,21 +24,21 @@ pub struct Session {
     session_id: SessionId,
     user_id: UserId,
     device_id: DeviceId,
-    
+
     // === 连接信息 ===
-    device_platform: String,  // ios/android/web/pc
-    server_id: String,        // Signaling服务ID
-    gateway_id: String,       // Gateway服务ID
-    
+    device_platform: String, // ios/android/web/pc
+    server_id: String,       // Signaling服务ID
+    gateway_id: String,      // Gateway服务ID
+
     // === 会话属性（值对象）===
     device_priority: DevicePriority,
     token_version: TokenVersion,
     connection_quality: Option<ConnectionQuality>,
-    
+
     // === 生命周期 ===
     created_at: DateTime<Utc>,
     last_heartbeat_at: DateTime<Utc>,
-    
+
     // === 领域事件（未提交的事件）===
     #[serde(skip)]
     domain_events: Vec<Box<dyn DomainEvent>>,
@@ -58,9 +58,9 @@ pub struct SessionCreateParams {
 
 impl Session {
     // ==================== 工厂方法 ====================
-    
+
     /// 创建新会话（工厂方法）
-    /// 
+    ///
     /// 业务规则：
     /// 1. 自动生成会话ID（UUID v4）
     /// 2. 初始化心跳时间为当前时间
@@ -68,7 +68,7 @@ impl Session {
     pub fn create(params: SessionCreateParams) -> Self {
         let now = Utc::now();
         let session_id = SessionId::new();
-        
+
         let mut session = Self {
             session_id: session_id.clone(),
             user_id: params.user_id.clone(),
@@ -83,7 +83,7 @@ impl Session {
             last_heartbeat_at: now,
             domain_events: Vec::new(),
         };
-        
+
         // 发布会话创建事件
         session.add_event(crate::domain::event::SessionCreatedEvent {
             session_id,
@@ -93,12 +93,12 @@ impl Session {
             token_version: params.token_version,
             occurred_at: now,
         });
-        
+
         session
     }
 
     /// 从持久化数据重建聚合根（仓储专用）
-    /// 
+    ///
     /// 注意：此方法不发布事件，因为是从已存在的数据重建
     pub fn reconstitute(
         session_id: SessionId,
@@ -130,9 +130,9 @@ impl Session {
     }
 
     // ==================== 命令方法（修改状态）====================
-    
+
     /// 刷新心跳
-    /// 
+    ///
     /// 业务规则：
     /// 1. 更新最后心跳时间
     /// 2. 如果提供了质量数据，更新链接质量
@@ -140,18 +140,18 @@ impl Session {
     pub fn refresh_heartbeat(&mut self, quality: Option<ConnectionQuality>) -> Result<(), String> {
         let now = Utc::now();
         let old_quality = self.connection_quality.clone();
-        
+
         self.last_heartbeat_at = now;
-        
+
         if let Some(new_quality) = quality {
             // 检测质量是否显著变化（等级变化）
             let quality_changed = match &old_quality {
                 Some(old) => old.quality_level() != new_quality.quality_level(),
                 None => true, // 首次上报质量
             };
-            
+
             self.connection_quality = Some(new_quality.clone());
-            
+
             if quality_changed {
                 // 发布质量变化事件
                 self.add_event(crate::domain::event::QualityChangedEvent {
@@ -164,26 +164,26 @@ impl Session {
                 });
             }
         }
-        
+
         Ok(())
     }
 
     /// 更新链接质量
-    /// 
+    ///
     /// 业务规则：
     /// 1. 验证质量数据有效性
     /// 2. 如果质量等级变化，发布事件
     pub fn update_quality(&mut self, quality: ConnectionQuality) -> Result<(), String> {
         let old_quality = self.connection_quality.clone();
-        
+
         // 检测质量等级是否变化
         let quality_changed = match &old_quality {
             Some(old) => old.quality_level() != quality.quality_level(),
             None => true,
         };
-        
+
         self.connection_quality = Some(quality.clone());
-        
+
         if quality_changed {
             self.add_event(crate::domain::event::QualityChangedEvent {
                 session_id: self.session_id.clone(),
@@ -194,12 +194,12 @@ impl Session {
                 occurred_at: Utc::now(),
             });
         }
-        
+
         Ok(())
     }
 
     /// 更新设备优先级
-    /// 
+    ///
     /// 业务规则：
     /// 1. 只允许提升优先级或降低到Normal
     /// 2. 不允许直接降到Low（需要通过其他机制）
@@ -207,10 +207,10 @@ impl Session {
         if new_priority == DevicePriority::Low && self.device_priority != DevicePriority::Low {
             return Err("Cannot directly downgrade to Low priority".to_string());
         }
-        
+
         let old_priority = self.device_priority;
         self.device_priority = new_priority;
-        
+
         self.add_event(crate::domain::event::PriorityChangedEvent {
             session_id: self.session_id.clone(),
             user_id: self.user_id.clone(),
@@ -219,12 +219,12 @@ impl Session {
             new_priority,
             occurred_at: Utc::now(),
         });
-        
+
         Ok(())
     }
 
     /// 踢出会话（强制下线）
-    /// 
+    ///
     /// 业务规则：
     /// 1. 发布 SessionKicked 事件
     /// 2. 标记会话为已失效（实际删除由仓储完成）
@@ -236,12 +236,12 @@ impl Session {
             reason,
             occurred_at: Utc::now(),
         });
-        
+
         Ok(())
     }
 
     // ==================== 查询方法（不修改状态）====================
-    
+
     /// 获取会话ID
     pub fn id(&self) -> &SessionId {
         &self.session_id
@@ -293,7 +293,7 @@ impl Session {
     }
 
     /// 计算质量评分（0-100）
-    /// 
+    ///
     /// 业务规则：
     /// - 如果没有质量数据，返回默认分数50
     /// - 如果质量数据过期（超过30秒），降低评分
@@ -301,7 +301,7 @@ impl Session {
         match &self.connection_quality {
             Some(quality) => {
                 let base_score = quality.quality_score();
-                
+
                 // 如果质量数据过期，降低评分
                 if quality.is_stale() {
                     base_score * 0.7
@@ -314,9 +314,9 @@ impl Session {
     }
 
     /// 判断会话是否过期
-    /// 
+    ///
     /// 业务规则：超过指定时间未心跳视为过期
-    /// 
+    ///
     /// 参考：微信30秒心跳超时，钉钉60秒
     pub fn is_expired(&self, timeout: Duration) -> bool {
         let now = Utc::now();
@@ -338,7 +338,7 @@ impl Session {
     }
 
     // ==================== 领域事件管理 ====================
-    
+
     /// 添加领域事件
     fn add_event(&mut self, event: impl DomainEvent + 'static) {
         self.domain_events.push(Box::new(event));
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn test_session_creation() {
         let session = create_test_session();
-        
+
         assert_eq!(session.device_platform(), "ios");
         assert_eq!(session.device_priority(), DevicePriority::Normal);
         assert_eq!(session.domain_events().len(), 1); // SessionCreatedEvent
@@ -449,29 +449,30 @@ mod tests {
     fn test_refresh_heartbeat() {
         let mut session = create_test_session();
         let old_heartbeat = session.last_heartbeat_at();
-        
+
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         session.refresh_heartbeat(None).unwrap();
-        
+
         assert!(session.last_heartbeat_at() > old_heartbeat);
     }
 
     #[test]
     fn test_quality_score() {
         let mut session = create_test_session();
-        
+
         // 没有质量数据，默认50分
         assert_eq!(session.quality_score(), 50.0);
-        
+
         // 添加优质链接
         let quality = ConnectionQuality::new(
             30,
             0.001,
             crate::domain::value_object::NetworkType::Wifi,
             None,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         session.update_quality(quality).unwrap();
         assert!(session.quality_score() > 80.0);
     }
@@ -479,10 +480,10 @@ mod tests {
     #[test]
     fn test_token_version_kick() {
         let mut session = create_test_session();
-        
+
         let new_version = TokenVersion::new(2).unwrap();
         assert!(session.should_be_kicked_by_version(new_version));
-        
+
         session.kick("Token version outdated".to_string()).unwrap();
         assert_eq!(session.domain_events().len(), 2); // Created + Kicked
     }
@@ -490,7 +491,7 @@ mod tests {
     #[test]
     fn test_session_expiration() {
         let session = create_test_session();
-        
+
         assert!(!session.is_expired(Duration::seconds(60)));
         assert!(session.is_expired(Duration::seconds(0)));
     }

@@ -2,12 +2,12 @@
 //!
 //! 处理连接生命周期的业务流程编排
 
+use flare_server_core::error::Result; // 使用 flare_server_core 的 Result
 use std::sync::Arc;
-use flare_server_core::error::Result;  // 使用 flare_server_core 的 Result
-use tracing::{info, warn, instrument};
+use tracing::{info, instrument, warn};
 
-use crate::domain::service::SessionDomainService;
 use crate::domain::repository::ConnectionQuery;
+use crate::domain::service::SessionDomainService;
 
 /// 连接管理应用服务
 ///
@@ -49,7 +49,9 @@ impl ConnectionApplicationService {
         active_connections: usize,
     ) -> Result<String> {
         // 更新活跃连接数
-        self.metrics.connections_active.set(active_connections as i64);
+        self.metrics
+            .connections_active
+            .set(active_connections as i64);
 
         info!(
             user_id = %user_id,
@@ -60,7 +62,8 @@ impl ConnectionApplicationService {
         );
 
         // 注册会话到 Signaling Online
-        match self.session_domain_service
+        match self
+            .session_domain_service
             .register_session(user_id, device_id, Some(connection_id))
             .await
         {
@@ -103,7 +106,9 @@ impl ConnectionApplicationService {
         self.metrics.connection_disconnected_total.inc();
 
         // 更新活跃连接数
-        self.metrics.connections_active.set(active_connections as i64);
+        self.metrics
+            .connections_active
+            .set(active_connections as i64);
 
         info!(
             connection_id = %connection_id,
@@ -113,7 +118,8 @@ impl ConnectionApplicationService {
 
         // 如果没有其他本地连接，注销会话
         if !has_other_connections {
-            if let Err(err) = self.session_domain_service
+            if let Err(err) = self
+                .session_domain_service
                 .unregister_session(user_id, None)
                 .await
             {

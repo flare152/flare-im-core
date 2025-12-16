@@ -33,7 +33,11 @@ impl UserHandler {
         &self,
         request: Request<GetUserPresenceRequest>,
     ) -> std::result::Result<Response<GetUserPresenceResponse>, Status> {
-        match self.domain_service.get_user_presence(request.into_inner()).await {
+        match self
+            .domain_service
+            .get_user_presence(request.into_inner())
+            .await
+        {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "get_user_presence failed");
@@ -46,7 +50,11 @@ impl UserHandler {
         &self,
         request: Request<BatchGetUserPresenceRequest>,
     ) -> std::result::Result<Response<BatchGetUserPresenceResponse>, Status> {
-        match self.domain_service.batch_get_user_presence(request.into_inner()).await {
+        match self
+            .domain_service
+            .batch_get_user_presence(request.into_inner())
+            .await
+        {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "batch_get_user_presence failed");
@@ -58,7 +66,10 @@ impl UserHandler {
     pub async fn handle_subscribe_user_presence(
         &self,
         request: Request<SubscribeUserPresenceRequest>,
-    ) -> std::result::Result<Response<ReceiverStream<std::result::Result<UserPresenceEvent, Status>>>, Status> {
+    ) -> std::result::Result<
+        Response<ReceiverStream<std::result::Result<UserPresenceEvent, Status>>>,
+        Status,
+    > {
         let req = request.into_inner();
         let user_ids = req.user_ids;
 
@@ -109,7 +120,11 @@ impl UserHandler {
         &self,
         request: Request<ListUserDevicesRequest>,
     ) -> std::result::Result<Response<ListUserDevicesResponse>, Status> {
-        match self.domain_service.list_user_devices(request.into_inner()).await {
+        match self
+            .domain_service
+            .list_user_devices(request.into_inner())
+            .await
+        {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "list_user_devices failed");
@@ -161,7 +176,8 @@ impl UserService for UserHandler {
         self.handle_batch_get_user_presence(request).await
     }
 
-    type SubscribeUserPresenceStream = ReceiverStream<std::result::Result<UserPresenceEvent, Status>>;
+    type SubscribeUserPresenceStream =
+        ReceiverStream<std::result::Result<UserPresenceEvent, Status>>;
 
     async fn subscribe_user_presence(
         &self,

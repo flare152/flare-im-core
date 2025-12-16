@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
 use flare_proto::signaling::{GetOnlineStatusRequest, GetOnlineStatusResponse};
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::discovery::ServiceClient;
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
@@ -51,41 +51,54 @@ impl SignalingOnlineClient {
             let discover = flare_im_core::discovery::create_discover(&self.service_name)
                 .await
                 .map_err(|e| {
-                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
-                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
-                        .build_error()
+                    ErrorBuilder::new(
+                        ErrorCode::ServiceUnavailable,
+                        "signaling service unavailable",
+                    )
+                    .details(format!(
+                        "Failed to create service discover for {}: {}",
+                        self.service_name, e
+                    ))
+                    .build_error()
                 })?;
-            
+
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
-                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
-                    .details("Service discovery not configured")
-                    .build_error());
+                return Err(ErrorBuilder::new(
+                    ErrorCode::ServiceUnavailable,
+                    "signaling service unavailable",
+                )
+                .details("Service discovery not configured")
+                .build_error());
             }
         }
-        
+
         let service_client = service_client_guard.as_mut().ok_or_else(|| {
-            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling service unavailable")
-                .details("Service client not initialized")
-                .build_error()
+            ErrorBuilder::new(
+                ErrorCode::ServiceUnavailable,
+                "signaling service unavailable",
+            )
+            .details("Service client not initialized")
+            .build_error()
         })?;
         // 添加超时保护，避免服务发现阻塞过长时间
         let channel = tokio::time::timeout(
             std::time::Duration::from_secs(3), // 3秒超时
-            service_client.get_channel()
-        ).await
-            .map_err(|_| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
-                    .details("Timeout waiting for service discovery to get channel (3s)")
-                    .build_error()
-            })?
-            .map_err(|e| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
-                    .details(format!("Failed to get channel: {}", e))
-                    .build_error()
-            })?;
-        
+            service_client.get_channel(),
+        )
+        .await
+        .map_err(|_| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
+                .details("Timeout waiting for service discovery to get channel (3s)")
+                .build_error()
+        })?
+        .map_err(|e| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "signaling unavailable")
+                .details(format!("Failed to get channel: {}", e))
+                .build_error()
+        })?;
+
         tracing::debug!("Got channel for signaling service from service discovery");
 
         let client = SignalingServiceClient::new(channel);
@@ -133,13 +146,13 @@ impl SignalingOnlineClient {
             } else {
                 None
             };
-            
+
             let server_id = if !status.server_id.is_empty() {
                 Some(status.server_id.clone())
             } else {
                 None
             };
-            
+
             result.insert(
                 user_id.clone(),
                 OnlineStatus {
@@ -154,4 +167,3 @@ impl SignalingOnlineClient {
         Ok(result)
     }
 }
-

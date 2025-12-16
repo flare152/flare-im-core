@@ -5,5 +5,5 @@ pub mod infrastructure;
 pub mod interface;
 pub mod service;
 
-pub use service::ApplicationBootstrap;
 pub use domain::repository::MessageStorage;
+pub use service::ApplicationBootstrap;

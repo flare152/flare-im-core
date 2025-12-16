@@ -1,6 +1,6 @@
 //! 请求校验器实现
 
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 
 /// 请求校验器实现
@@ -21,10 +21,7 @@ impl Default for RequestValidatorImpl {
 impl crate::infrastructure::validator::RequestValidator for RequestValidatorImpl {
     fn validate_message_request(&self, request: &PushMessageRequest) -> Result<()> {
         // 校验用户ID列表不为空
-        ensure!(
-            !request.user_ids.is_empty(),
-            "user_ids cannot be empty"
-        );
+        ensure!(!request.user_ids.is_empty(), "user_ids cannot be empty");
 
         // 校验用户ID数量限制（防止批量过大）
         ensure!(
@@ -33,20 +30,14 @@ impl crate::infrastructure::validator::RequestValidator for RequestValidatorImpl
         );
 
         // 校验消息内容不为空（message 字段是 Option<Message> 类型）
-        ensure!(
-            request.message.is_some(),
-            "message content cannot be empty"
-        );
+        ensure!(request.message.is_some(), "message content cannot be empty");
 
         Ok(())
     }
 
     fn validate_notification_request(&self, request: &PushNotificationRequest) -> Result<()> {
         // 校验用户ID列表不为空
-        ensure!(
-            !request.user_ids.is_empty(),
-            "user_ids cannot be empty"
-        );
+        ensure!(!request.user_ids.is_empty(), "user_ids cannot be empty");
 
         // 校验用户ID数量限制
         ensure!(
@@ -77,4 +68,3 @@ impl crate::infrastructure::validator::RequestValidator for RequestValidatorImpl
         Ok(())
     }
 }
-

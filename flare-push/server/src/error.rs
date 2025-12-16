@@ -8,19 +8,19 @@ pub enum PushServerError {
     /// 配置错误
     #[error("Configuration error: {0}")]
     Config(String),
-    
+
     /// 服务不可用
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
-    
+
     /// 消息处理错误
     #[error("Message processing error: {0}")]
     MessageProcessing(String),
-    
+
     /// 在线状态查询错误
     #[error("Online status query error: {0}")]
     OnlineStatusQuery(String),
-    
+
     /// 网关路由错误
     #[error("Gateway routing error: {0}")]
     GatewayRouting(String),
@@ -34,4 +34,3 @@ impl From<anyhow::Error> for PushServerError {
         PushServerError::MessageProcessing(err.to_string())
     }
 }
-

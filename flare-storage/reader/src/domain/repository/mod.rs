@@ -1,20 +1,16 @@
 //! 仓储接口定义（Port）
 
-use std::collections::HashMap;
+use crate::domain::model::MessageUpdate;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use flare_proto::common::{Message, VisibilityStatus};
-use crate::domain::model::MessageUpdate;
+use std::collections::HashMap;
 
 // Rust 2024: trait 中直接使用 async fn
 // 注意：对于 trait 对象（dyn Trait），仍需要使用 async_trait
 #[async_trait::async_trait]
 pub trait MessageStorage: Send + Sync {
-    async fn store_message(
-        &self,
-        message: &Message,
-        session_id: &str,
-    ) -> Result<()>;
+    async fn store_message(&self, message: &Message, session_id: &str) -> Result<()>;
 
     async fn query_messages(
         &self,
@@ -53,10 +49,7 @@ pub trait MessageStorage: Send + Sync {
         end_time: Option<DateTime<Utc>>,
     ) -> Result<i64>;
 
-    async fn get_message(
-        &self,
-        message_id: &str,
-    ) -> Result<Option<Message>>;
+    async fn get_message(&self, message_id: &str) -> Result<Option<Message>>;
 
     /// 获取消息的时间戳
     ///
@@ -67,16 +60,9 @@ pub trait MessageStorage: Send + Sync {
     ///
     /// # 返回
     /// * `Ok(Option<DateTime<Utc>>)` - 消息的时间戳，如果消息不存在则返回None
-    async fn get_message_timestamp(
-        &self,
-        message_id: &str,
-    ) -> Result<Option<DateTime<Utc>>>;
+    async fn get_message_timestamp(&self, message_id: &str) -> Result<Option<DateTime<Utc>>>;
 
-    async fn update_message(
-        &self,
-        message_id: &str,
-        updates: MessageUpdate,
-    ) -> Result<()>;
+    async fn update_message(&self, message_id: &str, updates: MessageUpdate) -> Result<()>;
 
     async fn batch_update_visibility(
         &self,
@@ -100,9 +86,7 @@ pub trait MessageStorage: Send + Sync {
         tags: Vec<String>,
     ) -> Result<()>;
 
-    async fn list_all_tags(
-        &self,
-    ) -> Result<Vec<String>>;
+    async fn list_all_tags(&self) -> Result<Vec<String>>;
 }
 
 #[async_trait::async_trait]
@@ -150,9 +134,13 @@ pub trait MessageStateRepository: Send + Sync {
     async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> anyhow::Result<()>;
 
     /// 批量标记消息为已读
-    async fn batch_mark_as_read(&self, user_id: &str, message_ids: &[String]) -> anyhow::Result<()>;
+    async fn batch_mark_as_read(&self, user_id: &str, message_ids: &[String])
+    -> anyhow::Result<()>;
 
     /// 批量标记消息为已删除
-    async fn batch_mark_as_deleted(&self, user_id: &str, message_ids: &[String]) -> anyhow::Result<()>;
+    async fn batch_mark_as_deleted(
+        &self,
+        user_id: &str,
+        message_ids: &[String],
+    ) -> anyhow::Result<()>;
 }
-

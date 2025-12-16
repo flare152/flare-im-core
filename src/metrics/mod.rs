@@ -4,8 +4,7 @@
 
 use once_cell::sync::Lazy;
 use prometheus::{
-    Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
-    Opts, Registry,
+    Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
 };
 
 /// 全局指标注册表
@@ -34,10 +33,7 @@ pub struct MessageOrchestratorMetrics {
 impl MessageOrchestratorMetrics {
     pub fn new() -> Self {
         let messages_sent_total = IntCounterVec::new(
-            Opts::new(
-                "messages_sent_total",
-                "Total number of messages sent",
-            ),
+            Opts::new("messages_sent_total", "Total number of messages sent"),
             &["message_type", "tenant_id"],
         )
         .expect("Failed to create messages_sent_total metric");
@@ -192,11 +188,8 @@ impl StorageWriterMetrics {
         .expect("Failed to create messages_duplicate_total metric");
 
         let batch_size = Histogram::with_opts(
-            HistogramOpts::new(
-                "storage_writer_batch_size",
-                "Batch size for storage writer",
-            )
-            .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]),
+            HistogramOpts::new("storage_writer_batch_size", "Batch size for storage writer")
+                .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]),
         )
         .expect("Failed to create batch_size metric");
 
@@ -295,38 +288,26 @@ impl PushServerMetrics {
         .expect("Failed to create online_status_query_duration_seconds metric");
 
         let push_latency_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "push_latency_seconds",
-                "Push latency in seconds",
-            )
-            .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+            HistogramOpts::new("push_latency_seconds", "Push latency in seconds")
+                .buckets(vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
             &["push_type", "tenant_id"],
         )
         .expect("Failed to create push_latency_seconds metric");
 
         let batch_size = Histogram::with_opts(
-            HistogramOpts::new(
-                "push_server_batch_size",
-                "Batch size for push server",
-            )
-            .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]),
+            HistogramOpts::new("push_server_batch_size", "Batch size for push server")
+                .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]),
         )
         .expect("Failed to create batch_size metric");
 
         let ack_received_total = IntCounterVec::new(
-            Opts::new(
-                "ack_received_total",
-                "Total number of ACKs received",
-            ),
+            Opts::new("ack_received_total", "Total number of ACKs received"),
             &["ack_type", "tenant_id"],
         )
         .expect("Failed to create ack_received_total metric");
 
         let ack_timeout_total = IntCounterVec::new(
-            Opts::new(
-                "ack_timeout_total",
-                "Total number of ACK timeouts",
-            ),
+            Opts::new("ack_timeout_total", "Total number of ACK timeouts"),
             &["ack_type", "tenant_id"],
         )
         .expect("Failed to create ack_timeout_total metric");
@@ -399,20 +380,14 @@ impl PushWorkerMetrics {
         .expect("Failed to create offline_push_failure_total metric");
 
         let push_retry_total = IntCounterVec::new(
-            Opts::new(
-                "push_retry_total",
-                "Total number of push retries",
-            ),
+            Opts::new("push_retry_total", "Total number of push retries"),
             &["platform", "retry_reason", "tenant_id"],
         )
         .expect("Failed to create push_retry_total metric");
 
         let push_duration_seconds = HistogramVec::new(
-            HistogramOpts::new(
-                "push_duration_seconds",
-                "Push duration in seconds",
-            )
-            .buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
+            HistogramOpts::new("push_duration_seconds", "Push duration in seconds")
+                .buckets(vec![0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
             &["platform", "tenant_id"],
         )
         .expect("Failed to create push_duration_seconds metric");
@@ -427,11 +402,8 @@ impl PushWorkerMetrics {
         .expect("Failed to create dlq_messages_total metric");
 
         let batch_size = Histogram::with_opts(
-            HistogramOpts::new(
-                "push_worker_batch_size",
-                "Batch size for push worker",
-            )
-            .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0]),
+            HistogramOpts::new("push_worker_batch_size", "Batch size for push worker")
+                .buckets(vec![1.0, 10.0, 50.0, 100.0, 500.0]),
         )
         .expect("Failed to create batch_size metric");
 
@@ -483,35 +455,24 @@ pub struct AccessGatewayMetrics {
 
 impl AccessGatewayMetrics {
     pub fn new() -> Self {
-        let connections_active = IntGauge::new(
-            "connections_active",
-            "Number of active connections",
-        )
-        .expect("Failed to create connections_active metric");
+        let connections_active =
+            IntGauge::new("connections_active", "Number of active connections")
+                .expect("Failed to create connections_active metric");
 
         let messages_pushed_total = IntCounterVec::new(
-            Opts::new(
-                "messages_pushed_total",
-                "Total number of messages pushed",
-            ),
+            Opts::new("messages_pushed_total", "Total number of messages pushed"),
             &["tenant_id"],
         )
         .expect("Failed to create messages_pushed_total metric");
 
         let push_success_total = IntCounterVec::new(
-            Opts::new(
-                "push_success_total",
-                "Total number of successful pushes",
-            ),
+            Opts::new("push_success_total", "Total number of successful pushes"),
             &["tenant_id"],
         )
         .expect("Failed to create push_success_total metric");
 
         let push_failure_total = IntCounterVec::new(
-            Opts::new(
-                "push_failure_total",
-                "Total number of failed pushes",
-            ),
+            Opts::new("push_failure_total", "Total number of failed pushes"),
             &["failure_reason", "tenant_id"],
         )
         .expect("Failed to create push_failure_total metric");
@@ -610,4 +571,3 @@ pub fn gather_metrics() -> String {
     encoder.encode(&metric_families, &mut buffer).unwrap();
     String::from_utf8(buffer).unwrap()
 }
-

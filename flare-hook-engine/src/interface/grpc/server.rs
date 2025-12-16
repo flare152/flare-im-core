@@ -2,24 +2,25 @@
 //!
 //! 实现HookExtension服务的所有gRPC接口
 
-use std::sync::Arc;
 use anyhow::Result;
-use tonic::{Request, Response, Status};
+use flare_proto::common::{ErrorCode as ProtoErrorCode, ErrorContext, RpcStatus};
 use flare_proto::hooks::hook_extension_server::HookExtension;
 use flare_proto::hooks::*;
-use flare_proto::common::{RpcStatus, ErrorContext, ErrorCode as ProtoErrorCode};
+use std::sync::Arc;
+use tonic::{Request, Response, Status};
 
 use crate::application::handlers::HookCommandHandler;
 use crate::domain::model::HookExecutionPlan;
 use crate::infrastructure::adapters::HookAdapterFactory;
 use crate::infrastructure::adapters::conversion::{
-    hook_context_to_proto, message_draft_to_proto, proto_to_message_draft,
-    message_record_to_proto, delivery_event_to_proto, recall_event_to_proto,
-    proto_to_pre_send_decision, proto_to_recall_decision,
-    timestamp_to_system_time,
+    delivery_event_to_proto, hook_context_to_proto, message_draft_to_proto,
+    message_record_to_proto, proto_to_message_draft, proto_to_pre_send_decision,
+    proto_to_recall_decision, recall_event_to_proto, timestamp_to_system_time,
 };
 use crate::service::registry::CoreHookRegistry;
-use flare_im_core::{PreSendDecision, HookContext, MessageDraft, MessageRecord, DeliveryEvent, RecallEvent};
+use flare_im_core::{
+    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+};
 
 /// HookExtension gRPC服务实现
 pub struct HookExtensionServer {
@@ -40,43 +41,50 @@ impl HookExtensionServer {
             adapter_factory,
         }
     }
-    
+
     /// 将 protobuf HookInvocationContext 转换为 HookContext
     fn proto_to_hook_context(proto: &HookInvocationContext) -> HookContext {
         let mut ctx = HookContext::new(
-            proto.tenant.as_ref()
+            proto
+                .tenant
+                .as_ref()
                 .map(|t| t.tenant_id.clone())
                 .unwrap_or_default(),
         );
-        
+
         if !proto.session_id.is_empty() {
             ctx = ctx.with_session(proto.session_id.clone());
         }
         if !proto.session_type.is_empty() {
             ctx = ctx.with_session_type(proto.session_type.clone());
         }
-        
-        ctx = ctx.with_tags(proto.tags.clone())
+
+        ctx = ctx
+            .with_tags(proto.tags.clone())
             .with_tags(proto.attributes.clone());
-        
+
         if let Some(ref req_ctx) = proto.request_context {
             if !req_ctx.request_id.is_empty() {
                 ctx = ctx.with_trace(req_ctx.request_id.clone());
             }
         }
-        
+
         ctx
     }
-    
+
     /// 将 protobuf HookMessageRecord 转换为 MessageRecord
     fn proto_to_message_record(proto: &HookMessageRecord) -> Result<MessageRecord> {
-        let message = proto.message.as_ref()
+        let message = proto
+            .message
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Message is required in HookMessageRecord"))?;
-        
-        let persisted_at = proto.persisted_at.as_ref()
+
+        let persisted_at = proto
+            .persisted_at
+            .as_ref()
             .map(timestamp_to_system_time)
             .unwrap_or_else(std::time::SystemTime::now);
-        
+
         Ok(MessageRecord {
             message_id: message.id.clone(),
             client_message_id: None,
@@ -94,13 +102,15 @@ impl HookExtensionServer {
             metadata: proto.metadata.clone(),
         })
     }
-    
+
     /// 将 protobuf HookDeliveryEvent 转换为 DeliveryEvent
     fn proto_to_delivery_event(proto: &HookDeliveryEvent) -> Result<DeliveryEvent> {
-        let delivered_at = proto.delivered_at.as_ref()
+        let delivered_at = proto
+            .delivered_at
+            .as_ref()
             .map(timestamp_to_system_time)
             .unwrap_or_else(std::time::SystemTime::now);
-        
+
         Ok(DeliveryEvent {
             message_id: proto.message_id.clone(),
             user_id: proto.user_id.clone(),
@@ -109,13 +119,15 @@ impl HookExtensionServer {
             metadata: proto.metadata.clone(),
         })
     }
-    
+
     /// 将 protobuf HookRecallEvent 转换为 RecallEvent
     fn proto_to_recall_event(proto: &HookRecallEvent) -> Result<RecallEvent> {
-        let recalled_at = proto.recalled_at.as_ref()
+        let recalled_at = proto
+            .recalled_at
+            .as_ref()
             .map(timestamp_to_system_time)
             .unwrap_or_else(std::time::SystemTime::now);
-        
+
         Ok(RecallEvent {
             message_id: proto.message_id.clone(),
             operator_id: proto.operator_id.clone(),
@@ -123,9 +135,9 @@ impl HookExtensionServer {
             metadata: proto.metadata.clone(),
         })
     }
-    
+
     /// 从 HookConfigItem 创建 HookExecutionPlan（包含适配器）
-    /// 
+    ///
     /// # 参数
     /// * `config` - Hook配置项
     /// * `hook_type` - Hook类型（pre_send, post_send, delivery, recall等）
@@ -135,18 +147,24 @@ impl HookExtensionServer {
         hook_type: &str,
     ) -> Result<HookExecutionPlan> {
         let mut plan = HookExecutionPlan::from_hook_config(config.clone(), hook_type);
-        
+
         // 如果配置已启用且不是 Local Plugin，创建适配器
         if config.enabled {
-            if !matches!(config.transport, crate::domain::model::HookTransportConfig::Local { .. }) {
-                let adapter = self.adapter_factory.create_adapter(&config.transport).await?;
+            if !matches!(
+                config.transport,
+                crate::domain::model::HookTransportConfig::Local { .. }
+            ) {
+                let adapter = self
+                    .adapter_factory
+                    .create_adapter(&config.transport)
+                    .await?;
                 plan = plan.with_adapter(adapter);
             }
         }
-        
+
         Ok(plan)
     }
-    
+
     /// 构建 RpcStatus
     fn build_rpc_status(code: i32, message: &str) -> RpcStatus {
         RpcStatus {
@@ -162,14 +180,15 @@ impl HookExtensionServer {
             }),
         }
     }
-    
+
     /// 从 PreSendDecision 构建 RpcStatus
     fn decision_to_rpc_status(decision: &PreSendDecision) -> RpcStatus {
         match decision {
             PreSendDecision::Continue => Self::build_rpc_status(ProtoErrorCode::Ok as i32, "OK"),
             PreSendDecision::Reject { error } => {
                 use flare_im_core::error::ErrorCode;
-                let code = error.code()
+                let code = error
+                    .code()
                     .map(|c| c.as_u32() as i32)
                     .unwrap_or(ProtoErrorCode::FailedPrecondition as i32);
                 Self::build_rpc_status(code, &error.to_string())
@@ -185,19 +204,22 @@ impl HookExtension for HookExtensionServer {
         request: Request<PreSendHookRequest>,
     ) -> Result<Response<PreSendHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let mut draft = req.draft.ok_or_else(|| {
-            Status::invalid_argument("draft is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let mut draft = req
+            .draft
+            .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
         let mut message_draft = proto_to_message_draft(&draft);
 
         // 获取PreSend Hook列表
-        let hooks = self.registry.get_pre_send_hooks().await
+        let hooks = self
+            .registry
+            .get_pre_send_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -215,7 +237,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        let decision = self.command_handler
+        let decision = self
+            .command_handler
             .handle_pre_send(&ctx, &mut message_draft, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
@@ -248,15 +271,15 @@ impl HookExtension for HookExtensionServer {
         request: Request<PostSendHookRequest>,
     ) -> Result<Response<PostSendHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let record = req.record.ok_or_else(|| {
-            Status::invalid_argument("record is required")
-        })?;
-        let draft = req.draft.ok_or_else(|| {
-            Status::invalid_argument("draft is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let record = req
+            .record
+            .ok_or_else(|| Status::invalid_argument("record is required"))?;
+        let draft = req
+            .draft
+            .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
@@ -265,7 +288,10 @@ impl HookExtension for HookExtensionServer {
         let message_draft = proto_to_message_draft(&draft);
 
         // 获取PostSend Hook列表
-        let hooks = self.registry.get_post_send_hooks().await
+        let hooks = self
+            .registry
+            .get_post_send_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -299,12 +325,12 @@ impl HookExtension for HookExtensionServer {
         request: Request<DeliveryHookRequest>,
     ) -> Result<Response<DeliveryHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
@@ -312,7 +338,10 @@ impl HookExtension for HookExtensionServer {
             .map_err(|e| Status::invalid_argument(format!("Invalid event: {}", e)))?;
 
         // 获取Delivery Hook列表
-        let hooks = self.registry.get_delivery_hooks().await
+        let hooks = self
+            .registry
+            .get_delivery_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -346,12 +375,12 @@ impl HookExtension for HookExtensionServer {
         request: Request<RecallHookRequest>,
     ) -> Result<Response<RecallHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
@@ -359,7 +388,10 @@ impl HookExtension for HookExtensionServer {
             .map_err(|e| Status::invalid_argument(format!("Invalid event: {}", e)))?;
 
         // 获取Recall Hook列表
-        let hooks = self.registry.get_recall_hooks().await
+        let hooks = self
+            .registry
+            .get_recall_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -377,7 +409,8 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook
-        let decision = self.command_handler
+        let decision = self
+            .command_handler
             .handle_recall(&ctx, &recall_event, execution_plans)
             .await
             .map_err(|e| Status::internal(format!("Failed to execute hooks: {}", e)))?;
@@ -405,25 +438,31 @@ impl HookExtension for HookExtensionServer {
         request: Request<SessionLifecycleHookRequest>,
     ) -> Result<Response<SessionLifecycleHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
 
         // 获取SessionLifecycle Hook列表
-        let hooks = self.registry.get_session_lifecycle_hooks().await
+        let hooks = self
+            .registry
+            .get_session_lifecycle_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
         let mut execution_plans = Vec::new();
         for hook_config in hooks {
             if hook_config.enabled {
-                match self.create_execution_plan(hook_config, "session_lifecycle").await {
+                match self
+                    .create_execution_plan(hook_config, "session_lifecycle")
+                    .await
+                {
                     Ok(plan) => execution_plans.push(plan),
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to create execution plan, skipping hook");
@@ -454,12 +493,12 @@ impl HookExtension for HookExtensionServer {
         request: Request<PresenceHookRequest>,
     ) -> Result<Response<PresenceHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let _event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let _event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
@@ -481,9 +520,9 @@ impl HookExtension for HookExtensionServer {
         request: Request<CustomHookRequest>,
     ) -> Result<Response<CustomHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
         let hook_type = req.r#type;
         let _payload = req.payload;
 
@@ -508,25 +547,31 @@ impl HookExtension for HookExtensionServer {
         request: Request<PushPreSendHookRequest>,
     ) -> Result<Response<PushPreSendHookResponse>, Status> {
         let req = request.into_inner();
-        let context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let mut draft = req.draft.ok_or_else(|| {
-            Status::invalid_argument("draft is required")
-        })?;
+        let context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let mut draft = req
+            .draft
+            .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&context);
 
         // 获取PushPreSend Hook列表
-        let hooks = self.registry.get_push_pre_send_hooks().await
+        let hooks = self
+            .registry
+            .get_push_pre_send_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
         let mut execution_plans = Vec::new();
         for hook_config in hooks {
             if hook_config.enabled {
-                match self.create_execution_plan(hook_config, "push_pre_send").await {
+                match self
+                    .create_execution_plan(hook_config, "push_pre_send")
+                    .await
+                {
                     Ok(plan) => execution_plans.push(plan),
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to create execution plan, skipping hook");
@@ -559,28 +604,34 @@ impl HookExtension for HookExtensionServer {
         request: Request<PushPostSendHookRequest>,
     ) -> Result<Response<PushPostSendHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let _record = req.record.ok_or_else(|| {
-            Status::invalid_argument("record is required")
-        })?;
-        let _draft = req.draft.ok_or_else(|| {
-            Status::invalid_argument("draft is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let _record = req
+            .record
+            .ok_or_else(|| Status::invalid_argument("record is required"))?;
+        let _draft = req
+            .draft
+            .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取PushPostSend Hook列表
-        let hooks = self.registry.get_push_post_send_hooks().await
+        let hooks = self
+            .registry
+            .get_push_post_send_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
         let mut execution_plans = Vec::new();
         for hook_config in hooks {
             if hook_config.enabled {
-                match self.create_execution_plan(hook_config, "push_post_send").await {
+                match self
+                    .create_execution_plan(hook_config, "push_post_send")
+                    .await
+                {
                     Ok(plan) => execution_plans.push(plan),
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to create execution plan, skipping hook");
@@ -609,25 +660,31 @@ impl HookExtension for HookExtensionServer {
         request: Request<PushDeliveryHookRequest>,
     ) -> Result<Response<PushDeliveryHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取PushDelivery Hook列表
-        let hooks = self.registry.get_push_delivery_hooks().await
+        let hooks = self
+            .registry
+            .get_push_delivery_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
         let mut execution_plans = Vec::new();
         for hook_config in hooks {
             if hook_config.enabled {
-                match self.create_execution_plan(hook_config, "push_delivery").await {
+                match self
+                    .create_execution_plan(hook_config, "push_delivery")
+                    .await
+                {
                     Ok(plan) => execution_plans.push(plan),
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to create execution plan, skipping hook");
@@ -659,18 +716,21 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserLoginHookRequest>,
     ) -> Result<Response<UserLoginHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserLogin Hook列表
-        let hooks = self.registry.get_user_login_hooks().await
+        let hooks = self
+            .registry
+            .get_user_login_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -709,18 +769,21 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserLogoutHookRequest>,
     ) -> Result<Response<UserLogoutHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserLogout Hook列表
-        let hooks = self.registry.get_user_logout_hooks().await
+        let hooks = self
+            .registry
+            .get_user_logout_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -758,18 +821,21 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserOnlineHookRequest>,
     ) -> Result<Response<UserOnlineHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserOnline Hook列表
-        let hooks = self.registry.get_user_online_hooks().await
+        let hooks = self
+            .registry
+            .get_user_online_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
@@ -807,25 +873,31 @@ impl HookExtension for HookExtensionServer {
         request: Request<UserOfflineHookRequest>,
     ) -> Result<Response<UserOfflineHookResponse>, Status> {
         let req = request.into_inner();
-        let _context = req.context.ok_or_else(|| {
-            Status::invalid_argument("context is required")
-        })?;
-        let event = req.event.ok_or_else(|| {
-            Status::invalid_argument("event is required")
-        })?;
+        let _context = req
+            .context
+            .ok_or_else(|| Status::invalid_argument("context is required"))?;
+        let event = req
+            .event
+            .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
         let _ctx = Self::proto_to_hook_context(&_context);
 
         // 获取UserOffline Hook列表
-        let hooks = self.registry.get_user_offline_hooks().await
+        let hooks = self
+            .registry
+            .get_user_offline_hooks()
+            .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
         // 创建HookExecutionPlan（包含适配器）
         let mut execution_plans = Vec::new();
         for hook_config in hooks {
             if hook_config.enabled {
-                match self.create_execution_plan(hook_config, "user_offline").await {
+                match self
+                    .create_execution_plan(hook_config, "user_offline")
+                    .await
+                {
                     Ok(plan) => execution_plans.push(plan),
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to create execution plan, skipping hook");

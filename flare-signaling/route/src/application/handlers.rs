@@ -22,11 +22,11 @@ impl RouteCommandHandler {
         let svid = command.svid.clone();
         let endpoint = command.endpoint.clone();
         debug!(svid = %svid, endpoint = %endpoint, "Handling register route command");
-        
+
         self.domain_service
             .register_route(command.svid, command.endpoint)
             .await?;
-        
+
         info!(svid = %svid, "Route registered successfully");
         Ok(())
     }
@@ -46,16 +46,15 @@ impl RouteQueryHandler {
     pub async fn handle_resolve_route(&self, query: ResolveRouteQuery) -> Result<Option<String>> {
         let svid = query.svid.clone();
         debug!(svid = %svid, "Handling resolve route query");
-        
+
         let endpoint = self.domain_service.resolve_route(query.svid).await?;
-        
+
         if let Some(ref endpoint) = endpoint {
             debug!(svid = %svid, endpoint = %endpoint, "Route resolved");
         } else {
             debug!(svid = %svid, "Route not found");
         }
-        
+
         Ok(endpoint)
     }
 }
-

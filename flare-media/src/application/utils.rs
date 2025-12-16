@@ -84,4 +84,3 @@ mod tests {
         assert_eq!(proto.object_key, "images/2025/01/01/file-123.png");
     }
 }
-

@@ -6,7 +6,7 @@ pub struct PushProxyConfig {
     pub kafka_bootstrap: String,
     pub message_topic: String,
     pub notification_topic: String,
-    pub ack_topic: String,  // ACK Topic（从 Gateway 接收客户端 ACK）
+    pub ack_topic: String, // ACK Topic（从 Gateway 接收客户端 ACK）
     pub kafka_timeout_ms: u64,
 }
 
@@ -29,7 +29,12 @@ impl PushProxyConfig {
                 .notification_topic
                 .unwrap_or_else(|| "push-notifications".to_string()),
             ack_topic: std::env::var("PUSH_PROXY_ACK_TOPIC")
-                .or_else(|_| service.ack_topic.clone().ok_or(std::env::VarError::NotPresent))
+                .or_else(|_| {
+                    service
+                        .ack_topic
+                        .clone()
+                        .ok_or(std::env::VarError::NotPresent)
+                })
                 .unwrap_or_else(|_| "flare.im.push.acks".to_string()),
             kafka_timeout_ms: service
                 .timeout_ms
@@ -44,16 +49,16 @@ impl KafkaProducerConfig for PushProxyConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn message_timeout_ms(&self) -> u64 {
         self.kafka_timeout_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn enable_idempotence(&self) -> bool {
         true // 推送代理需要保证消息不丢失
     }
-    
+
     fn compression_type(&self) -> &str {
         "snappy" // 使用 snappy 压缩
     }

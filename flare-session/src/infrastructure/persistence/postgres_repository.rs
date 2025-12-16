@@ -12,8 +12,7 @@ use tracing::info;
 
 use crate::config::SessionConfig;
 use crate::domain::model::{
-    Session, SessionBootstrapResult, SessionFilter, SessionParticipant,
-    SessionSort, SessionSummary,
+    Session, SessionBootstrapResult, SessionFilter, SessionParticipant, SessionSort, SessionSummary,
 };
 use crate::domain::repository::SessionRepository;
 use async_trait::async_trait;
@@ -141,7 +140,6 @@ impl PostgresSessionRepository {
     }
 }
 
-
 #[async_trait]
 impl SessionRepository for PostgresSessionRepository {
     async fn load_bootstrap(
@@ -212,14 +210,14 @@ impl SessionRepository for PostgresSessionRepository {
             let display_name: Option<String> = row.get("display_name");
             let attributes: serde_json::Value = row.get("attributes");
             let updated_at: DateTime<Utc> = row.get("updated_at");
-            
+
             // 从数据库读取未读数相关字段
             let last_message_seq: Option<i64> = row.get("last_message_seq");
             let last_read_msg_seq: i64 = row.get("last_read_msg_seq");
             let unread_count: i32 = row.get("unread_count");
 
-            let attributes: HashMap<String, String> = serde_json::from_value(attributes)
-                .unwrap_or_default();
+            let attributes: HashMap<String, String> =
+                serde_json::from_value(attributes).unwrap_or_default();
 
             // 注释：最后一条消息信息将在ApplicationService层通过MessageProvider补充
             // 当前实现使用updated_at作为server_cursor_ts的fallback
@@ -241,11 +239,11 @@ impl SessionRepository for PostgresSessionRepository {
                 session_id,
                 session_type,
                 business_type,
-                last_message_id: None, // 将在ApplicationService层补充
-                last_message_time: None, // 将在ApplicationService层补充
-                last_sender_id: None, // 将在ApplicationService层补充
-                last_message_type: None, // 将在ApplicationService层补充
-                last_content_type: None, // 将在ApplicationService层补充
+                last_message_id: None,           // 将在ApplicationService层补充
+                last_message_time: None,         // 将在ApplicationService层补充
+                last_sender_id: None,            // 将在ApplicationService层补充
+                last_message_type: None,         // 将在ApplicationService层补充
+                last_content_type: None,         // 将在ApplicationService层补充
                 unread_count: calculated_unread, // 基于 seq 计算的未读数
                 metadata: attributes,
                 server_cursor_ts,
@@ -369,8 +367,8 @@ impl SessionRepository for PostgresSessionRepository {
         let created_at: DateTime<Utc> = row.get("created_at");
         let updated_at: DateTime<Utc> = row.get("updated_at");
 
-        let attributes: HashMap<String, String> = serde_json::from_value(attributes)
-            .unwrap_or_default();
+        let attributes: HashMap<String, String> =
+            serde_json::from_value(attributes).unwrap_or_default();
 
         let visibility = match visibility.as_str() {
             "private" => crate::domain::model::SessionVisibility::Private,
@@ -407,8 +405,8 @@ impl SessionRepository for PostgresSessionRepository {
             let muted: bool = p_row.get("muted");
             let pinned: bool = p_row.get("pinned");
             let attributes: serde_json::Value = p_row.get("attributes");
-            let attributes: HashMap<String, String> = serde_json::from_value(attributes)
-                .unwrap_or_default();
+            let attributes: HashMap<String, String> =
+                serde_json::from_value(attributes).unwrap_or_default();
 
             participants.push(SessionParticipant {
                 user_id,
@@ -525,14 +523,12 @@ impl SessionRepository for PostgresSessionRepository {
 
         // 删除参与者
         for user_id in to_remove {
-            sqlx::query(
-                "DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2",
-            )
-            .bind(session_id)
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await
-            .context("Failed to remove participant")?;
+            sqlx::query("DELETE FROM session_participants WHERE session_id = $1 AND user_id = $2")
+                .bind(session_id)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .context("Failed to remove participant")?;
         }
 
         // 更新角色
@@ -574,8 +570,8 @@ impl SessionRepository for PostgresSessionRepository {
             let muted: bool = p_row.get("muted");
             let pinned: bool = p_row.get("pinned");
             let attributes: serde_json::Value = p_row.get("attributes");
-            let attributes: HashMap<String, String> = serde_json::from_value(attributes)
-                .unwrap_or_default();
+            let attributes: HashMap<String, String> =
+                serde_json::from_value(attributes).unwrap_or_default();
 
             participants.push(SessionParticipant {
                 user_id,
@@ -589,11 +585,7 @@ impl SessionRepository for PostgresSessionRepository {
         Ok(participants)
     }
 
-    async fn batch_acknowledge(
-        &self,
-        user_id: &str,
-        cursors: &[(String, i64)],
-    ) -> Result<()> {
+    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for (session_id, ts) in cursors {
@@ -675,7 +667,9 @@ impl SessionRepository for PostgresSessionRepository {
             }
             if filter.participant_user_id.is_some() {
                 if !query.contains("session_participants") {
-                    query.push_str("INNER JOIN session_participants sp2 ON s.session_id = sp2.session_id\n");
+                    query.push_str(
+                        "INNER JOIN session_participants sp2 ON s.session_id = sp2.session_id\n",
+                    );
                 }
                 conditions.push(format!("sp2.user_id = ${}", bind_index));
                 bind_index += 1;
@@ -711,7 +705,11 @@ impl SessionRepository for PostgresSessionRepository {
         }
 
         // 添加LIMIT和OFFSET
-        query.push_str(&format!(" LIMIT ${} OFFSET ${}", bind_index, bind_index + 1));
+        query.push_str(&format!(
+            " LIMIT ${} OFFSET ${}",
+            bind_index,
+            bind_index + 1
+        ));
 
         // 执行查询（使用query而不是query_as，因为动态SQL构建）
         let mut query_builder = sqlx::query(&query);
@@ -810,20 +808,12 @@ impl SessionRepository for PostgresSessionRepository {
             }
         }
 
-        let total = count_builder
-            .fetch_one(&*self.pool)
-            .await
-            .unwrap_or(0) as usize;
+        let total = count_builder.fetch_one(&*self.pool).await.unwrap_or(0) as usize;
 
         Ok((summaries, total))
     }
 
-    async fn mark_as_read(
-        &self,
-        user_id: &str,
-        session_id: &str,
-        seq: i64,
-    ) -> Result<()> {
+    async fn mark_as_read(&self, user_id: &str, session_id: &str, seq: i64) -> Result<()> {
         // 更新 session_participants 的 last_read_msg_seq 和 unread_count
         sqlx::query(
             r#"
@@ -854,11 +844,7 @@ impl SessionRepository for PostgresSessionRepository {
         Ok(())
     }
 
-    async fn get_unread_count(
-        &self,
-        user_id: &str,
-        session_id: &str,
-    ) -> Result<i32> {
+    async fn get_unread_count(&self, user_id: &str, session_id: &str) -> Result<i32> {
         // 从 session_participants 表读取未读数
         let row = sqlx::query(
             r#"
@@ -882,4 +868,3 @@ impl SessionRepository for PostgresSessionRepository {
         Ok(unread_count)
     }
 }
-

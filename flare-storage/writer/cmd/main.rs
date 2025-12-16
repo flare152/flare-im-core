@@ -9,4 +9,3 @@ async fn main() -> Result<()> {
     // 创建应用并启动
     flare_storage_writer::ApplicationBootstrap::run().await
 }
-

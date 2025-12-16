@@ -6,11 +6,9 @@ pub mod command_handler;
 pub mod query_handler;
 
 pub use command_handler::{
-    BatchPushMessageCommand, PushMessageCommand, PushMessageService,
-    HeartbeatCommand, LoginCommand, LogoutCommand, SessionCommandService,
+    BatchPushMessageCommand, HeartbeatCommand, LoginCommand, LogoutCommand, PushMessageCommand,
+    PushMessageService, SessionCommandService,
 };
 pub use query_handler::{
-    ConnectionQueryService, QueryUserConnectionsQuery,
-    GetOnlineStatusQuery, SessionQueryService,
+    ConnectionQueryService, GetOnlineStatusQuery, QueryUserConnectionsQuery, SessionQueryService,
 };
-

@@ -32,7 +32,7 @@ impl PortConfig {
         // 确保端口不会溢出
         let ws_port = grpc_port.saturating_sub(2);
         let quic_port = grpc_port.saturating_sub(1);
-        
+
         Self {
             grpc_port,
             ws_port,
@@ -48,7 +48,7 @@ impl PortConfig {
     /// - gRPC: grpc_port（需要单独指定）
     pub fn from_ws_port(ws_port: u16, grpc_port: u16) -> Self {
         let quic_port = ws_port.saturating_add(1);
-        
+
         Self {
             grpc_port,
             ws_port,
@@ -65,19 +65,17 @@ impl PortConfig {
     /// 4. 配置中的端口 + 2（作为 gRPC 端口）
     pub fn from_env_or_config(config_port: u16) -> Self {
         // 检查是否同时指定了 PORT 和 GRPC_PORT（多网关部署场景）
-        if let (Ok(env_port), Ok(env_grpc_port)) = (
-            std::env::var("PORT"),
-            std::env::var("GRPC_PORT")
-        ) {
-            if let (Ok(ws_port), Ok(grpc_port)) = (
-                env_port.parse::<u16>(),
-                env_grpc_port.parse::<u16>()
-            ) {
+        if let (Ok(env_port), Ok(env_grpc_port)) =
+            (std::env::var("PORT"), std::env::var("GRPC_PORT"))
+        {
+            if let (Ok(ws_port), Ok(grpc_port)) =
+                (env_port.parse::<u16>(), env_grpc_port.parse::<u16>())
+            {
                 info!("使用环境变量 PORT={} 和 GRPC_PORT={}", ws_port, grpc_port);
                 return Self::from_ws_port(ws_port, grpc_port);
             }
         }
-        
+
         // 只指定了 GRPC_PORT
         if let Ok(env_grpc_port) = std::env::var("GRPC_PORT") {
             if let Ok(port) = env_grpc_port.parse::<u16>() {
@@ -85,16 +83,19 @@ impl PortConfig {
                 return Self::from_grpc_port(port);
             }
         }
-        
+
         // 只指定了 PORT
         if let Ok(env_port) = std::env::var("PORT") {
             if let Ok(port) = env_port.parse::<u16>() {
                 let grpc_port = port + 2;
-                info!("使用环境变量 PORT={}，gRPC 端口 = {} (PORT + 2)", port, grpc_port);
+                info!(
+                    "使用环境变量 PORT={}，gRPC 端口 = {} (PORT + 2)",
+                    port, grpc_port
+                );
                 return Self::from_ws_port(port, grpc_port);
             }
         }
-        
+
         // 默认：使用配置端口 + 2 作为 gRPC 端口
         let grpc_port = config_port + 2;
         Self::from_grpc_port(grpc_port)
@@ -121,11 +122,7 @@ pub struct ServiceManager {
 
 impl ServiceManager {
     /// 创建服务管理器
-    pub fn new(
-        context: ApplicationContext,
-        port_config: PortConfig,
-        address: String,
-    ) -> Self {
+    pub fn new(context: ApplicationContext, port_config: PortConfig, address: String) -> Self {
         Self {
             context,
             port_config,
@@ -202,7 +199,7 @@ impl ServiceManager {
 
         // 等待一小段时间确保服务器启动
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         info!("✅ gRPC 服务器已启动: {}", grpc_addr);
 
         Ok(())
@@ -214,9 +211,9 @@ impl ServiceManager {
 
         // 等待 Ctrl+C 信号
         tokio::signal::ctrl_c().await?;
-        
+
         info!("\n正在停止服务器...");
-        
+
         // 执行优雅停机
         self.shutdown().await;
 
@@ -243,11 +240,8 @@ impl ServiceManager {
         if let Some(handle) = self.grpc_server_handle.take() {
             // 先克隆 handle 的引用，以便在超时情况下可以 abort
             let handle_for_abort = handle.abort_handle();
-            
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(5),
-                handle,
-            ).await {
+
+            match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
                 Ok(Ok(_)) => {
                     info!("gRPC 服务器已停止");
                 }
@@ -262,7 +256,7 @@ impl ServiceManager {
         }
 
         // 2. 停止长连接服务器
-        if let Some(mut server) = self.context.long_connection_server.lock().await.take() {
+        if let Some(server) = self.context.long_connection_server.lock().await.take() {
             info!("正在停止长连接服务器...");
             if let Err(e) = server.stop().await {
                 warn!(error = %e, "停止长连接服务器失败");
@@ -276,4 +270,3 @@ impl ServiceManager {
         // 服务注销由 ServiceRuntime 统一管理，这里不需要手动注销
     }
 }
-

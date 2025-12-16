@@ -16,7 +16,7 @@ use crate::domain::repository::ReferenceStoreRef;
 use crate::domain::service::MediaService;
 
 /// 媒体查询处理器（查询侧）
-/// 
+///
 /// 简单查询直接使用基础设施层，包含业务逻辑的查询使用领域服务
 pub struct MediaQueryHandler {
     // 包含业务逻辑的查询使用领域服务
@@ -62,4 +62,3 @@ impl MediaQueryHandler {
         crate::application::utils::to_proto_file_info(metadata)
     }
 }
-

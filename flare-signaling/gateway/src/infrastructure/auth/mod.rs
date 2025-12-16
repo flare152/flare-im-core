@@ -5,10 +5,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use flare_core::common::device::DeviceInfo;
 use flare_core::common::error::{FlareError, Result};
 use flare_core::server::auth::{AuthResult, Authenticator};
-use async_trait::async_trait;
 use flare_server_core::TokenService;
 use tracing::{debug, instrument, warn};
 
@@ -25,7 +25,7 @@ impl TokenAuthenticator {
     }
 
     /// 验证 token（调用核心 TokenService）
-    /// 
+    ///
     /// 返回用户ID，如果验证失败则返回 None
     fn verify_token(&self, token: &str) -> Option<String> {
         match self.token_service.validate_token(token) {
@@ -46,7 +46,6 @@ impl TokenAuthenticator {
         }
     }
 }
-
 
 #[async_trait]
 impl Authenticator for TokenAuthenticator {

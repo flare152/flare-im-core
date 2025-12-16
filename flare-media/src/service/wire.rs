@@ -40,20 +40,21 @@ pub async fn initialize(
 ) -> Result<ApplicationContext> {
     // 1. 加载配置
     let media_config = MediaConfig::from_app_config(app_config);
-    
+
     // 2. 构建媒体服务
-    let (media_service, reference_store) = build_media_service(&media_config).await
+    let (media_service, reference_store) = build_media_service(&media_config)
+        .await
         .context("Failed to build media service")?;
-    
+
     // 3. 构建命令处理器
     let command_handler = Arc::new(MediaCommandHandler::new(media_service.clone()));
-    
+
     // 4. 构建查询处理器
     let query_handler = Arc::new(MediaQueryHandler::new(media_service, reference_store));
-    
+
     // 5. 构建 gRPC 处理器
     let handler = MediaGrpcHandler::new(command_handler, query_handler);
-    
+
     Ok(ApplicationContext { handler })
 }
 
@@ -64,18 +65,16 @@ async fn build_media_service(
     let object_repo: Option<ObjectRepositoryRef> =
         build_object_store(config.object_store.as_ref()).await?;
 
-    let (metadata_store, reference_store): (
-        Option<MetadataStoreRef>,
-        Option<ReferenceStoreRef>,
-    ) = match config.postgres_url() {
-        Some(url) => {
-            let store = PostgresMetadataStore::new(url).await?;
-            let metadata_store: MetadataStoreRef = Arc::new(store.clone());
-            let reference_store: ReferenceStoreRef = Arc::new(store.clone());
-            (Some(metadata_store), Some(reference_store))
-        }
-        None => (None, None),
-    };
+    let (metadata_store, reference_store): (Option<MetadataStoreRef>, Option<ReferenceStoreRef>) =
+        match config.postgres_url() {
+            Some(url) => {
+                let store = PostgresMetadataStore::new(url).await?;
+                let metadata_store: MetadataStoreRef = Arc::new(store.clone());
+                let reference_store: ReferenceStoreRef = Arc::new(store.clone());
+                (Some(metadata_store), Some(reference_store))
+            }
+            None => (None, None),
+        };
 
     let metadata_cache: Option<MetadataCacheRef> = match config.redis_url() {
         Some(url) => Some(
@@ -131,4 +130,3 @@ async fn build_media_service(
         reference_store_for_query,
     ))
 }
-

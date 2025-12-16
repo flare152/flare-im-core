@@ -100,7 +100,7 @@ impl PostgresHookConfigRepository {
     /// 初始化数据库表
     pub async fn init_schema(&self) -> Result<()> {
         // sqlx 不支持在一个 prepared statement 中执行多个命令，需要分开执行
-        
+
         // 创建表
         sqlx::query(
             r#"
@@ -143,7 +143,7 @@ impl PostgresHookConfigRepository {
         .map_err(|e| anyhow::anyhow!("failed to create index idx_hook_configs_tenant_type: {}", e))?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_hook_configs_priority ON hook_configs(priority)"
+            "CREATE INDEX IF NOT EXISTS idx_hook_configs_priority ON hook_configs(priority)",
         )
         .execute(&*self.pool)
         .await
@@ -225,8 +225,10 @@ impl PostgresHookConfigRepository {
         let metadata_json = if hook_item.metadata.is_empty() {
             None
         } else {
-            Some(serde_json::to_value(&hook_item.metadata)
-                .context("failed to serialize metadata")?)
+            Some(
+                serde_json::to_value(&hook_item.metadata)
+                    .context("failed to serialize metadata")?,
+            )
         };
 
         let row = sqlx::query_as::<_, (i64,)>(
@@ -332,11 +334,7 @@ impl PostgresHookConfigRepository {
     }
 
     /// 更新Hook配置
-    pub async fn update(
-        &self,
-        hook_id: i64,
-        hook_item: &HookConfigItem,
-    ) -> Result<bool> {
+    pub async fn update(&self, hook_id: i64, hook_item: &HookConfigItem) -> Result<bool> {
         let selector_json = serde_json::to_value(&hook_item.selector)
             .context("failed to serialize selector config")?;
         let transport_json = serde_json::to_value(&hook_item.transport)
@@ -344,8 +342,10 @@ impl PostgresHookConfigRepository {
         let metadata_json = if hook_item.metadata.is_empty() {
             None
         } else {
-            Some(serde_json::to_value(&hook_item.metadata)
-                .context("failed to serialize metadata")?)
+            Some(
+                serde_json::to_value(&hook_item.metadata)
+                    .context("failed to serialize metadata")?,
+            )
         };
 
         let result = sqlx::query(
@@ -388,11 +388,7 @@ impl PostgresHookConfigRepository {
     }
 
     /// 更新Hook状态（启用/禁用）
-    pub async fn update_enabled(
-        &self,
-        hook_id: i64,
-        enabled: bool,
-    ) -> Result<bool> {
+    pub async fn update_enabled(&self, hook_id: i64, enabled: bool) -> Result<bool> {
         let result = sqlx::query(
             r#"
             UPDATE hook_configs
@@ -507,4 +503,3 @@ impl PostgresHookConfigRepository {
         Ok(rows)
     }
 }
-

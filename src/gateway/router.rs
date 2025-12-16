@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use flare_proto::access_gateway::{
-    access_gateway_client::AccessGatewayClient, PushMessageRequest, PushMessageResponse, PushStatus,
+    PushMessageRequest, PushMessageResponse, PushStatus, access_gateway_client::AccessGatewayClient,
 };
 use tokio::sync::RwLock;
 use tonic::transport::{Channel, Endpoint};
@@ -109,7 +109,10 @@ impl GatewayRouter {
     }
 
     /// 使用 ServiceClient 创建Gateway Router（推荐，通过 wire 注入）
-    pub fn with_service_client(config: GatewayRouterConfig, service_client: ServiceClient) -> Arc<Self> {
+    pub fn with_service_client(
+        config: GatewayRouterConfig,
+        service_client: ServiceClient,
+    ) -> Arc<Self> {
         Arc::new(Self {
             config,
             connection_pool: Arc::new(RwLock::new(HashMap::new())),
@@ -117,10 +120,10 @@ impl GatewayRouter {
             service_discover: None, // 目前不保存 ServiceDiscover，使用 ServiceClient 的负载均衡
         })
     }
-    
+
     /// 使用 ServiceClient 和 ServiceDiscover 创建Gateway Router（支持按 gateway_id 过滤实例）
     pub fn with_service_client_and_discover(
-        config: GatewayRouterConfig, 
+        config: GatewayRouterConfig,
         service_client: ServiceClient,
         service_discover: ServiceDiscover,
     ) -> Arc<Self> {
@@ -134,6 +137,7 @@ impl GatewayRouter {
 
     /// 判断是否为本地网关
     fn is_local_gateway(&self, gateway_id: &str) -> bool {
+        // 使用逻辑表达式替代嵌套 if，提高可读性
         self.config
             .local_gateway_id
             .as_ref()
@@ -146,14 +150,12 @@ impl GatewayRouter {
     async fn cleanup_idle_connections(&self) {
         let idle_timeout = Duration::from_millis(self.config.connection_idle_timeout_ms);
         let now = Instant::now();
-        
+
         let mut pool = self.connection_pool.write().await;
         let before = pool.len();
-        
-        pool.retain(|_, entry| {
-            now.duration_since(entry.last_used) < idle_timeout
-        });
-        
+
+        pool.retain(|_, entry| now.duration_since(entry.last_used) < idle_timeout);
+
         let after = pool.len();
         if before > after {
             debug!(
@@ -165,10 +167,7 @@ impl GatewayRouter {
     }
 
     /// 获取或创建Access Gateway客户端
-    async fn get_or_create_client(
-        &self,
-        gateway_id: &str,
-    ) -> Result<AccessGatewayClient<Channel>> {
+    async fn get_or_create_client(&self, gateway_id: &str) -> Result<AccessGatewayClient<Channel>> {
         // 先检查连接池
         {
             let mut pool = self.connection_pool.write().await;
@@ -177,18 +176,19 @@ impl GatewayRouter {
                 entry.last_used = Instant::now();
                 return Ok(entry.client.clone());
             }
-            
+
             // 检查连接池大小限制
             if pool.len() >= self.config.connection_pool_size {
                 // 清理空闲连接
                 drop(pool);
                 self.cleanup_idle_connections().await;
-                
+
                 // 再次检查
                 let mut pool = self.connection_pool.write().await;
                 if pool.len() >= self.config.connection_pool_size {
                     // 如果还是满的，移除最旧的连接
-                    let oldest = pool.iter()
+                    let oldest = pool
+                        .iter()
                         .min_by_key(|(_, entry)| entry.last_used)
                         .map(|(id, _)| id.clone());
                     if let Some(oldest_id) = oldest {
@@ -207,16 +207,19 @@ impl GatewayRouter {
         let channel = if let Some(ref service_discover) = self.service_discover {
             // 使用 ServiceDiscover 获取所有实例，然后根据 instance_id == gateway_id 筛选
             let instances = service_discover.get_instances().await;
-            let target_instance = instances.iter()
-                .find(|inst| inst.instance_id == gateway_id);
-            
+
+            // 使用 find_map 简化查找逻辑
+            let target_instance = instances.iter().find(|inst| inst.instance_id == gateway_id);
+
             match target_instance {
                 Some(instance) => {
                     // 根据实例地址直接创建 channel
                     let uri = instance.to_grpc_uri();
-                    let endpoint = Endpoint::from_shared(uri)
-                        .context(format!("Invalid URI for gateway {}: {}", gateway_id, instance.address))?;
-                    
+                    let endpoint = Endpoint::from_shared(uri).context(format!(
+                        "Invalid URI for gateway {}: {}",
+                        gateway_id, instance.address
+                    ))?;
+
                     let timeout_duration = Duration::from_millis(self.config.connection_timeout_ms);
                     tokio::time::timeout(timeout_duration, endpoint.connect())
                         .await
@@ -229,14 +232,23 @@ impl GatewayRouter {
                             )
                         })?
                         .map_err(|e| {
-                            anyhow::anyhow!("Failed to connect to gateway {} at {}: {}", gateway_id, instance.address, e)
+                            anyhow::anyhow!(
+                                "Failed to connect to gateway {} at {}: {}",
+                                gateway_id,
+                                instance.address,
+                                e
+                            )
                         })?
                 }
                 None => {
                     return Err(anyhow::anyhow!(
                         "Gateway instance not found: gateway_id={}. Available instances: {}",
                         gateway_id,
-                        instances.iter().map(|i| i.instance_id.clone()).collect::<Vec<_>>().join(", ")
+                        instances
+                            .iter()
+                            .map(|i| i.instance_id.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
             }
@@ -248,7 +260,7 @@ impl GatewayRouter {
             );
             let mut service_client = service_client_arc.lock().await;
             let timeout_duration = Duration::from_millis(self.config.connection_timeout_ms);
-            
+
             tokio::time::timeout(timeout_duration, service_client.get_channel())
                 .await
                 .map_err(|_| {
@@ -266,7 +278,7 @@ impl GatewayRouter {
                 "Neither ServiceDiscover nor ServiceClient is available. Please inject at least one via with_service_client() or with_service_client_and_discover()"
             ));
         };
-        
+
         let client = AccessGatewayClient::new(channel);
 
         // 存入连接池
@@ -289,7 +301,6 @@ impl GatewayRouter {
 
         Ok(client)
     }
-
 }
 
 #[async_trait]
@@ -309,6 +320,7 @@ impl GatewayRouterTrait for GatewayRouter {
         // 判断是否为本地网关
         let is_local = self.is_local_gateway(gateway_id);
 
+        // 使用 guard clause 减少嵌套
         if is_local {
             debug!(
                 gateway_id = %gateway_id,
@@ -347,16 +359,18 @@ impl GatewayRouterTrait for GatewayRouter {
             user_ids = ?request.target_user_ids,
             "Calling Access Gateway push_message"
         );
-        
+
         // 优化超时时间：单聊消息推送应该很快，设置3秒超时
         let timeout_duration = Duration::from_secs(3); // 3秒超时
         let response = match tokio::time::timeout(
             timeout_duration,
-            client.push_message(tonic::Request::new(request.clone()))
-        ).await {
+            client.push_message(tonic::Request::new(request.clone())),
+        )
+        .await
+        {
             Ok(Ok(resp)) => {
                 let response = resp.into_inner();
-                
+
                 // 检查是否有 UserOffline 响应
                 let mut offline_users = Vec::new();
                 for result in &response.results {
@@ -364,7 +378,8 @@ impl GatewayRouterTrait for GatewayRouter {
                         offline_users.push(result.user_id.clone());
                     }
                 }
-                
+
+                // 使用 guard clause 减少嵌套
                 if !offline_users.is_empty() {
                     warn!(
                         gateway_id = %gateway_id,
@@ -375,7 +390,7 @@ impl GatewayRouterTrait for GatewayRouter {
                     // 返回 UserOffline 错误，让调用方重新查询在线状态
                     return Err(GatewayRouterError::UsersOffline(offline_users).into());
                 }
-                
+
                 info!(
                     gateway_id = %gateway_id,
                     user_count = response.results.len(),
@@ -407,4 +422,3 @@ impl GatewayRouterTrait for GatewayRouter {
         Ok(response)
     }
 }
-

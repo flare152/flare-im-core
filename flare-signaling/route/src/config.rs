@@ -44,9 +44,7 @@ impl RouteConfig {
 
         Ok(Self {
             default_services: if default.is_empty() {
-                vec![
-                    ("svid.im".to_string(), "message-orchestrator".to_string()),
-                ]
+                vec![("svid.im".to_string(), "message-orchestrator".to_string())]
             } else {
                 default
             },

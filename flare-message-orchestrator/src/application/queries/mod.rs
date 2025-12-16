@@ -49,4 +49,3 @@ pub struct QueryMessagesResult {
     /// 是否还有更多数据
     pub has_more: bool,
 }
-

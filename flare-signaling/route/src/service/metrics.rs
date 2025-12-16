@@ -1,8 +1,6 @@
 //! Router 指标（路由延迟、分片分布、流控拦截统计）
 
-use prometheus::{
-    HistogramVec, IntCounterVec, Opts, Registry,
-};
+use prometheus::{HistogramVec, IntCounterVec, Opts, Registry};
 use std::sync::Arc;
 
 /// Router 指标集合

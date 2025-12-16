@@ -4,4 +4,3 @@
 
 pub mod settings;
 pub use settings::GatewayConfig;
-

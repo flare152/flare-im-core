@@ -8,9 +8,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::error;
 
-use crate::application::commands::{
-    HeartbeatCommand, LoginCommand, LogoutCommand,
-};
+use crate::application::commands::{HeartbeatCommand, LoginCommand, LogoutCommand};
 use crate::application::handlers::{OnlineCommandHandler, OnlineQueryHandler};
 use crate::application::queries::GetOnlineStatusQuery;
 use crate::domain::repository::PresenceWatcher;
@@ -102,7 +100,10 @@ impl OnlineHandler {
     pub async fn handle_watch_presence(
         &self,
         request: Request<WatchPresenceRequest>,
-    ) -> std::result::Result<Response<ReceiverStream<std::result::Result<PresenceEvent, Status>>>, Status> {
+    ) -> std::result::Result<
+        Response<ReceiverStream<std::result::Result<PresenceEvent, Status>>>,
+        Status,
+    > {
         let req = request.into_inner();
         let user_ids = req.user_ids;
 
@@ -121,34 +122,34 @@ impl OnlineHandler {
 
         // 创建发送器用于流式响应
         let (stream_tx, stream_rx) = mpsc::channel(100);
-        
+
         // 启动后台任务转发事件
         tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
                     Some(Ok(event)) => {
                         let presence_event = PresenceEvent {
-                    user_id: event.user_id,
-                    status: Some(OnlineStatus {
-                        online: event.status.online,
-                        server_id: event.status.server_id,
-                        cluster_id: event.status.cluster_id.unwrap_or_default(),
-                        last_seen: event.status.last_seen.as_ref().map(|dt| Timestamp {
-                            seconds: dt.timestamp(),
-                            nanos: dt.timestamp_subsec_nanos() as i32,
-                        }),
-                        tenant: None,
-                        device_id: event.status.device_id.unwrap_or_default(),
-                        device_platform: event.status.device_platform.unwrap_or_default(),
-                        gateway_id: event.status.gateway_id.unwrap_or_default(), // 返回 gateway_id 用于跨地区路由
-                    }),
-                    occurred_at: Some(Timestamp {
-                        seconds: event.occurred_at.timestamp(),
-                        nanos: event.occurred_at.timestamp_subsec_nanos() as i32,
-                    }),
-                    conflict_action: event.conflict_action.unwrap_or(0),
-                    reason: event.reason.unwrap_or_default(),
-                };
+                            user_id: event.user_id,
+                            status: Some(OnlineStatus {
+                                online: event.status.online,
+                                server_id: event.status.server_id,
+                                cluster_id: event.status.cluster_id.unwrap_or_default(),
+                                last_seen: event.status.last_seen.as_ref().map(|dt| Timestamp {
+                                    seconds: dt.timestamp(),
+                                    nanos: dt.timestamp_subsec_nanos() as i32,
+                                }),
+                                tenant: None,
+                                device_id: event.status.device_id.unwrap_or_default(),
+                                device_platform: event.status.device_platform.unwrap_or_default(),
+                                gateway_id: event.status.gateway_id.unwrap_or_default(), // 返回 gateway_id 用于跨地区路由
+                            }),
+                            occurred_at: Some(Timestamp {
+                                seconds: event.occurred_at.timestamp(),
+                                nanos: event.occurred_at.timestamp_subsec_nanos() as i32,
+                            }),
+                            conflict_action: event.conflict_action.unwrap_or(0),
+                            reason: event.reason.unwrap_or_default(),
+                        };
 
                         if stream_tx.send(Ok(presence_event)).await.is_err() {
                             break;

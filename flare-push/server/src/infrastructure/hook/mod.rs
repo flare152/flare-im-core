@@ -4,8 +4,7 @@ pub mod hook_envelope;
 pub mod hook_executor;
 
 pub use hook_envelope::{
-    build_post_send_record, finalize_notification, prepare_message_envelope,
-    prepare_notification_envelope, PushHookEnvelope,
+    PushHookEnvelope, build_post_send_record, finalize_notification, prepare_message_envelope,
+    prepare_notification_envelope,
 };
 pub use hook_executor::HookExecutor;
-

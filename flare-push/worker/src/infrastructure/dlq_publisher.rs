@@ -22,31 +22,32 @@ impl KafkaDlqPublisher {
         struct SimpleProducerConfig {
             bootstrap: String,
         }
-        
+
         impl flare_server_core::kafka::KafkaProducerConfig for SimpleProducerConfig {
             fn kafka_bootstrap(&self) -> &str {
                 &self.bootstrap
             }
-            
+
             fn message_timeout_ms(&self) -> u64 {
                 5000 // 默认 5 秒
             }
         }
-        
+
         let config = SimpleProducerConfig {
             bootstrap: bootstrap_servers.to_string(),
         };
-        
+
         // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
-        let producer = build_kafka_producer(&config as &dyn flare_server_core::kafka::KafkaProducerConfig)
-            .map_err(|e| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "Failed to create Kafka producer",
-                )
-                .details(e.to_string())
-                .build_error()
-            })?;
+        let producer =
+            build_kafka_producer(&config as &dyn flare_server_core::kafka::KafkaProducerConfig)
+                .map_err(|e| {
+                    ErrorBuilder::new(
+                        ErrorCode::ServiceUnavailable,
+                        "Failed to create Kafka producer",
+                    )
+                    .details(e.to_string())
+                    .build_error()
+                })?;
 
         Ok(Arc::new(Self { producer, topic }))
     }
@@ -63,19 +64,20 @@ impl crate::domain::repository::DlqPublisher for KafkaDlqPublisher {
         });
 
         let payload = serde_json::to_vec(&dlq_message).map_err(|e| {
-            ErrorBuilder::new(
-                ErrorCode::InternalError,
-                "Failed to serialize DLQ",
-            )
-            .details(e.to_string())
-            .build_error()
+            ErrorBuilder::new(ErrorCode::InternalError, "Failed to serialize DLQ")
+                .details(e.to_string())
+                .build_error()
         })?;
 
         let record = FutureRecord::to(&self.topic)
             .key(&task.message_id)
             .payload(&payload);
 
-        match self.producer.send(record, std::time::Duration::from_secs(0)).await {
+        match self
+            .producer
+            .send(record, std::time::Duration::from_secs(0))
+            .await
+        {
             Ok(_) => {
                 info!(
                     message_id = %task.message_id,
@@ -91,14 +93,12 @@ impl crate::domain::repository::DlqPublisher for KafkaDlqPublisher {
                     ?e,
                     "Failed to publish to DLQ"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "Failed to publish to DLQ",
+                Err(
+                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "Failed to publish to DLQ")
+                        .details(e.to_string())
+                        .build_error(),
                 )
-                .details(e.to_string())
-                .build_error())
             }
         }
     }
 }
-

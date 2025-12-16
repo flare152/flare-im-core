@@ -90,14 +90,12 @@ impl ThreadRepository for PostgresThreadRepository {
         };
 
         // 查询总数
-        let total_count: i64 = sqlx::query_scalar(
-            &format!(
-                r#"
+        let total_count: i64 = sqlx::query_scalar(&format!(
+            r#"
                 SELECT COUNT(*) FROM threads {}
                 "#,
-                where_clause
-            ),
-        )
+            where_clause
+        ))
         .bind(session_id)
         .fetch_one(&*self.pool)
         .await
@@ -363,4 +361,3 @@ impl ThreadRepository for PostgresThreadRepository {
         Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
     }
 }
-

@@ -7,4 +7,3 @@ pub mod query_handler;
 
 pub use command_handler::HookCommandHandler;
 pub use query_handler::HookQueryHandler;
-

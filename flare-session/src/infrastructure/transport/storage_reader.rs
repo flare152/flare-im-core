@@ -41,12 +41,12 @@ impl StorageReaderMessageProvider {
             if self.service_name.is_empty() {
                 return Err(anyhow::anyhow!("storage_reader_service is not configured"));
             }
-            
+
             // 如果没有注入 ServiceClient，则创建服务发现器
             let discover = flare_im_core::discovery::create_discover(&self.service_name)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to create service discover: {}", e))?;
-            
+
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
@@ -64,15 +64,17 @@ impl StorageReaderMessageProvider {
                 return Ok(StorageReaderServiceClient::new(channel));
             }
         }
-        
-        let service_client = service_client_guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Service client not initialized")
-        })?;
-        let channel = service_client.get_channel().await
+
+        let service_client = service_client_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Service client not initialized"))?;
+        let channel = service_client
+            .get_channel()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get channel from service discovery: {}", e))?;
-        
+
         tracing::debug!("Got channel for storage reader service from service discovery");
-        
+
         Ok(StorageReaderServiceClient::new(channel))
     }
 
@@ -126,7 +128,6 @@ impl StorageReaderMessageProvider {
     }
 }
 
-
 #[async_trait]
 impl MessageProvider for StorageReaderMessageProvider {
     async fn sync_messages(
@@ -155,11 +156,11 @@ impl MessageProvider for StorageReaderMessageProvider {
         // 优化：并行查询多个会话的消息，提高性能
         // 注意：gRPC client 不能跨任务共享，每个任务需要重新获取 client
         use tokio::task::JoinSet;
-        
+
         let mut join_set = JoinSet::new();
         let service_name = self.service_name.clone();
         let service_client = Arc::clone(&self.service_client);
-        
+
         // 为每个会话创建查询任务
         for session_id in session_ids {
             let session_id = session_id.clone();
@@ -167,7 +168,7 @@ impl MessageProvider for StorageReaderMessageProvider {
             let limit = limit_per_session;
             let service_name = service_name.clone();
             let service_client = Arc::clone(&service_client);
-            
+
             join_set.spawn(async move {
                 // 每个任务重新获取 client（因为 gRPC client 不能跨任务共享）
                 // 直接调用 client() 方法的逻辑
@@ -176,14 +177,16 @@ impl MessageProvider for StorageReaderMessageProvider {
                     if !service_name.is_empty() {
                         let discover = flare_im_core::discovery::create_discover(&service_name)
                             .await
-                            .map_err(|e| anyhow::anyhow!("Failed to create service discover: {}", e))?;
-                        
+                            .map_err(|e| {
+                                anyhow::anyhow!("Failed to create service discover: {}", e)
+                            })?;
+
                         if let Some(discover) = discover {
                             *service_client_guard = Some(ServiceClient::new(discover));
                         }
                     }
                 }
-                
+
                 let channel: Channel = if let Some(service_client) = service_client_guard.as_mut() {
                     match service_client.get_channel().await {
                         Ok(ch) => ch,
@@ -193,7 +196,9 @@ impl MessageProvider for StorageReaderMessageProvider {
                                 .unwrap_or_else(|| "127.0.0.1:50091".to_string());
                             let endpoint = Endpoint::from_shared(format!("http://{}", addr))
                                 .map_err(|err| anyhow::anyhow!("Invalid endpoint: {}", err))?;
-                            endpoint.connect().await
+                            endpoint
+                                .connect()
+                                .await
                                 .map_err(|err| anyhow::anyhow!("Failed to connect: {}", err))?
                         }
                     }
@@ -203,10 +208,12 @@ impl MessageProvider for StorageReaderMessageProvider {
                         .unwrap_or_else(|| "127.0.0.1:50091".to_string());
                     let endpoint = Endpoint::from_shared(format!("http://{}", addr))
                         .map_err(|err| anyhow::anyhow!("Invalid endpoint: {}", err))?;
-                    endpoint.connect().await
+                    endpoint
+                        .connect()
+                        .await
                         .map_err(|err| anyhow::anyhow!("Failed to connect: {}", err))?
                 };
-                
+
                 let mut client = StorageReaderServiceClient::new(channel);
                 let request = Self::build_request(&session_id, since_ts, None, limit);
                 let response = client
@@ -217,7 +224,7 @@ impl MessageProvider for StorageReaderMessageProvider {
                 Ok::<Vec<flare_proto::common::Message>, anyhow::Error>(response.messages)
             });
         }
-        
+
         // 收集所有查询结果
         let mut messages = Vec::new();
         while let Some(result) = join_set.join_next().await {
@@ -234,14 +241,22 @@ impl MessageProvider for StorageReaderMessageProvider {
                 }
             }
         }
-        
+
         // 按时间戳排序（最新的在前）
         messages.sort_by(|a, b| {
-            let a_ts = a.timestamp.as_ref().map(|ts| ts.seconds * 1_000_000_000 + ts.nanos as i64).unwrap_or(0);
-            let b_ts = b.timestamp.as_ref().map(|ts| ts.seconds * 1_000_000_000 + ts.nanos as i64).unwrap_or(0);
+            let a_ts = a
+                .timestamp
+                .as_ref()
+                .map(|ts| ts.seconds * 1_000_000_000 + ts.nanos as i64)
+                .unwrap_or(0);
+            let b_ts = b
+                .timestamp
+                .as_ref()
+                .map(|ts| ts.seconds * 1_000_000_000 + ts.nanos as i64)
+                .unwrap_or(0);
             b_ts.cmp(&a_ts)
         });
-        
+
         Ok(messages)
     }
 
@@ -265,13 +280,13 @@ impl MessageProvider for StorageReaderMessageProvider {
                 ..Default::default()
             }),
         };
-        
+
         let response = client
             .query_messages_by_seq(Request::new(request))
             .await
             .context("call storage reader query_messages_by_seq")?
             .into_inner();
-        
+
         // 构建 MessageSyncResult
         let server_cursor_ts = Self::last_timestamp(&response.messages);
         let server_cursor_seq = if response.last_seq > 0 {
@@ -279,7 +294,7 @@ impl MessageProvider for StorageReaderMessageProvider {
         } else {
             None
         };
-        
+
         Ok(MessageSyncResult {
             messages: response.messages,
             next_cursor: if response.next_cursor.is_empty() {

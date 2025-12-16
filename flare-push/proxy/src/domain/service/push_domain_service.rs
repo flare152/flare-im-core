@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
+use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
 use flare_proto::push::{
     PushFailure, PushMessageRequest, PushMessageResponse, PushNotificationRequest,
     PushNotificationResponse,
 };
-use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
-use flare_im_core::hooks::{HookContext, MessageRecord, MessageDraft};
-use tracing::{instrument, warn, info};
+use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use crate::domain::repositories::PushEventPublisher;
@@ -68,12 +68,14 @@ impl PushDomainService {
                             user_count = user_count,
                             "Push message enqueued successfully"
                         );
-                        
+
                         // 构造 Hook 上下文和消息记录
-                        let tenant_id = request.tenant.as_ref()
+                        let tenant_id = request
+                            .tenant
+                            .as_ref()
                             .map(|t| t.tenant_id.clone())
                             .unwrap_or_else(|| "default".to_string());
-                        
+
                         let ctx = HookContext {
                             tenant_id,
                             session_id: request.message.as_ref().map(|m| m.session_id.clone()),
@@ -108,44 +110,67 @@ impl PushDomainService {
                             request_metadata: std::collections::HashMap::new(),
                             occurred_at: Some(std::time::SystemTime::now()),
                         };
-                        
+
                         let payload = Vec::new();
                         let mut draft = MessageDraft::new(payload);
-                        
+
                         // 从请求选项中获取元数据
                         if let Some(options) = &request.options {
                             draft.metadata = options.metadata.clone();
                         }
-                        
+
                         let record = MessageRecord {
-                            message_id: request.message.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
-                            client_message_id: request.message.as_ref().map(|m| m.client_msg_id.clone()),
-                            conversation_id: request.message.as_ref().map(|m| m.session_id.clone()).unwrap_or_default(),
-                            sender_id: request.message.as_ref().map(|m| m.sender_id.clone()).unwrap_or_default(),
-                            session_type: request.message.as_ref().map(|m| {
-                                let session_type_str = match m.session_type {
-                                    1 => "single".to_string(),
-                                    2 => "group".to_string(),
-                                    3 => "broadcast".to_string(),
-                                    _ => "unknown".to_string(),
-                                };
-                                Some(session_type_str)
-                            }).flatten(),
-                            message_type: request.message.as_ref().map(|m| {
-                                let message_type_str = match m.message_type {
-                                    1 => "text".to_string(),
-                                    2 => "image".to_string(),
-                                    3 => "audio".to_string(),
-                                    4 => "video".to_string(),
-                                    5 => "file".to_string(),
-                                    6 => "location".to_string(),
-                                    7 => "contact".to_string(),
-                                    8 => "system".to_string(),
-                                    9 => "custom".to_string(),
-                                    _ => "unknown".to_string(),
-                                };
-                                Some(message_type_str)
-                            }).flatten(),
+                            message_id: request
+                                .message
+                                .as_ref()
+                                .map(|m| m.id.clone())
+                                .unwrap_or_default(),
+                            client_message_id: request
+                                .message
+                                .as_ref()
+                                .map(|m| m.client_msg_id.clone()),
+                            conversation_id: request
+                                .message
+                                .as_ref()
+                                .map(|m| m.session_id.clone())
+                                .unwrap_or_default(),
+                            sender_id: request
+                                .message
+                                .as_ref()
+                                .map(|m| m.sender_id.clone())
+                                .unwrap_or_default(),
+                            session_type: request
+                                .message
+                                .as_ref()
+                                .map(|m| {
+                                    let session_type_str = match m.session_type {
+                                        1 => "single".to_string(),
+                                        2 => "group".to_string(),
+                                        3 => "broadcast".to_string(),
+                                        _ => "unknown".to_string(),
+                                    };
+                                    Some(session_type_str)
+                                })
+                                .flatten(),
+                            message_type: request
+                                .message
+                                .as_ref()
+                                .map(|m| {
+                                    let message_type_str = match m.message_type {
+                                        1 => "text".to_string(),
+                                        2 => "image".to_string(),
+                                        3 => "audio".to_string(),
+                                        4 => "video".to_string(),
+                                        5 => "file".to_string(),
+                                        6 => "location".to_string(),
+                                        7 => "contact".to_string(),
+                                        8 => "system".to_string(),
+                                        9 => "custom".to_string(),
+                                        _ => "unknown".to_string(),
+                                    };
+                                    Some(message_type_str)
+                                })
+                                .flatten(),
                             persisted_at: std::time::SystemTime::now(),
                             metadata: if let Some(options) = &request.options {
                                 options.metadata.clone()
@@ -153,7 +178,7 @@ impl PushDomainService {
                                 std::collections::HashMap::new()
                             },
                         };
-                        
+
                         // 执行 PostSend Hook
                         if let Err(e) = hook_dispatcher.post_send(&ctx, &record, &draft).await {
                             tracing::warn!(
@@ -238,12 +263,14 @@ impl PushDomainService {
                             user_count = user_count,
                             "Push notification enqueued successfully"
                         );
-                        
+
                         // 构造 Hook 上下文和消息记录
-                        let tenant_id = request.tenant.as_ref()
+                        let tenant_id = request
+                            .tenant
+                            .as_ref()
                             .map(|t| t.tenant_id.clone())
                             .unwrap_or_else(|| "default".to_string());
-                        
+
                         let ctx = HookContext {
                             tenant_id,
                             session_id: None,
@@ -256,7 +283,7 @@ impl PushDomainService {
                             request_metadata: std::collections::HashMap::new(),
                             occurred_at: Some(std::time::SystemTime::now()),
                         };
-                        
+
                         let content = if let Some(notification) = &request.notification {
                             notification.title.clone() + ": " + &notification.body
                         } else {
@@ -264,12 +291,12 @@ impl PushDomainService {
                         };
                         let payload = content.as_bytes().to_vec();
                         let mut draft = MessageDraft::new(payload);
-                        
+
                         // 从请求选项中获取元数据
                         if let Some(options) = &request.options {
                             draft.metadata = options.metadata.clone();
                         }
-                        
+
                         let record = MessageRecord {
                             message_id: Uuid::new_v4().to_string(),
                             client_message_id: None,
@@ -284,7 +311,7 @@ impl PushDomainService {
                                 std::collections::HashMap::new()
                             },
                         };
-                        
+
                         // 执行 PostSend Hook
                         if let Err(e) = hook_dispatcher.post_send(&ctx, &record, &draft).await {
                             tracing::warn!(
@@ -339,21 +366,22 @@ impl PushDomainService {
 
     /// 入队 ACK（业务逻辑）
     #[instrument(skip(self), fields(message_id = %request.ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or("")))]
-    pub async fn enqueue_ack(
-        &self,
-        request: PushAckRequest,
-    ) -> Result<PushAckResponse> {
+    pub async fn enqueue_ack(&self, request: PushAckRequest) -> Result<PushAckResponse> {
         // 1. 入参校验
         if request.ack.is_none() {
             return Err(anyhow::anyhow!("ack is required"));
         }
-        
+
         if request.target_user_ids.is_empty() {
             return Err(anyhow::anyhow!("target_user_ids cannot be empty"));
         }
 
         let user_ids = request.target_user_ids.clone();
-        let message_id = request.ack.as_ref().map(|a| a.message_id.clone()).unwrap_or_default();
+        let message_id = request
+            .ack
+            .as_ref()
+            .map(|a| a.message_id.clone())
+            .unwrap_or_default();
 
         // 2. 发布到 Kafka（幂等性由 Kafka 保证）
         match self.publisher.publish_ack(&request).await {

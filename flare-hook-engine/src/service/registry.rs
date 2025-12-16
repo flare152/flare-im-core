@@ -2,10 +2,10 @@
 //!
 //! 提供Hook服务的注册和管理
 
-use std::sync::Arc;
-use anyhow::Result;
 use crate::domain::model::HookConfigItem;
 use crate::infrastructure::config::ConfigWatcher;
+use anyhow::Result;
+use std::sync::Arc;
 
 /// Hook服务注册表
 pub struct CoreHookRegistry {

@@ -8,8 +8,3 @@ pub struct GetOnlineStatusQuery {
     /// 原始请求
     pub request: GetOnlineStatusRequest,
 }
-
-
-
-
-

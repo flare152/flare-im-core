@@ -1,6 +1,9 @@
 use anyhow::{Result, anyhow};
 use chrono::Utc;
-use flare_im_core::utils::{TimelineMetadata, current_millis, datetime_to_timestamp, timestamp_to_millis, embed_timeline_in_extra};
+use flare_im_core::utils::{
+    TimelineMetadata, current_millis, datetime_to_timestamp, embed_timeline_in_extra,
+    timestamp_to_millis,
+};
 use flare_proto::storage::StoreMessageRequest;
 use uuid::Uuid;
 
@@ -46,14 +49,15 @@ impl MessageSubmission {
         }
 
         // 如果 source 未设置，使用默认值（从 sender_type 迁移到 source 枚举）
-        if message.source == 0 { // MessageSource::Unspecified = 0
+        if message.source == 0 {
+            // MessageSource::Unspecified = 0
             // 根据 default_sender_type 设置 source
             message.source = match defaults.default_sender_type.as_str() {
-                "user" => 1, // MessageSource::User
+                "user" => 1,   // MessageSource::User
                 "system" => 2, // MessageSource::System
-                "bot" => 3, // MessageSource::Bot
-                "admin" => 4, // MessageSource::Admin
-                _ => 1, // 默认为 User
+                "bot" => 3,    // MessageSource::Bot
+                "admin" => 4,  // MessageSource::Admin
+                _ => 1,        // 默认为 User
             };
         }
 
@@ -65,15 +69,16 @@ impl MessageSubmission {
         if message.session_type == 0 {
             // 将字符串类型的默认 session_type 转换为 i32 枚举
             message.session_type = match defaults.default_session_type.as_str() {
-                "single" => 1,   // SessionType::Single
-                "group" => 2,    // SessionType::Group
-                "channel" => 3,  // SessionType::Channel
-                _ => 1,           // 默认为 Single
+                "single" => 1,  // SessionType::Single
+                "group" => 2,   // SessionType::Group
+                "channel" => 3, // SessionType::Channel
+                _ => 1,         // 默认为 Single
             };
         }
 
         // 如果 status 未设置，使用默认值（从 string 迁移到 MessageStatus 枚举）
-        if message.status == 0 { // MessageStatus::Unspecified = 0
+        if message.status == 0 {
+            // MessageStatus::Unspecified = 0
             message.status = 1; // MessageStatus::Created = 1
         }
 
@@ -130,19 +135,21 @@ impl MessageSubmission {
         // 注意：新版 Message 结构已移除 sender_platform_id、sender_nickname、
         // sender_avatar_url、group_id、receiver_id 等字段，这些信息现在通过
         // attributes 或 extra 字段存储
-        message.client_msg_id = String::from_utf8_lossy(
-            message.client_msg_id.as_bytes()
-        ).to_string();
-        
+        message.client_msg_id =
+            String::from_utf8_lossy(message.client_msg_id.as_bytes()).to_string();
+
         // 清理消息内容中的 text 字段，确保它是有效的 UTF-8
         // 这可以避免 Protobuf 序列化/反序列化时的编码问题
         if let Some(ref mut content) = message.content {
-            if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) = content.content {
+            if let Some(flare_proto::common::message_content::Content::Text(ref mut text_content)) =
+                content.content
+            {
                 // 清理 text 字段：
                 // 1. 确保 UTF-8 编码
                 // 2. 移除控制字符（如 \x08 退格字符、\x00 空字符等）
                 // 3. 保留可打印字符和空白字符（空格、换行、制表符等）
-                let cleaned: String = text_content.text
+                let cleaned: String = text_content
+                    .text
                     .chars()
                     .filter(|c| {
                         // 保留空白字符（空格、换行、制表符等）
@@ -154,7 +161,7 @@ impl MessageSubmission {
                         }
                     })
                     .collect();
-                
+
                 // 去除首尾空白
                 text_content.text = cleaned.trim().to_string();
             }

@@ -36,7 +36,7 @@ pub fn anyhow_error_to_core(error: anyhow::Error) -> FlareError {
     if let Some(flare_err) = error.downcast_ref::<FlareError>() {
         return flare_err.clone();
     }
-    
+
     // 如果无法提取，则作为系统错误
     FlareError::system(error.to_string())
 }
@@ -52,7 +52,7 @@ pub fn boxed_error_to_core(error: Box<dyn std::error::Error>) -> FlareError {
 }
 
 /// 将 server error code 映射到 core error code
-/// 
+///
 /// 由于 `flare_server_core::error::ErrorCode` 和 `flare_core::common::error::code::ErrorCode`
 /// 的定义完全相同，可以直接通过数值转换
 fn map_server_code_to_core(
@@ -60,9 +60,7 @@ fn map_server_code_to_core(
 ) -> flare_core::common::error::code::ErrorCode {
     // 由于两个 ErrorCode 枚举的定义完全相同，可以直接通过数值转换
     // 使用 unsafe 转换（安全，因为定义相同）
-    unsafe {
-        std::mem::transmute(server_code)
-    }
+    unsafe { std::mem::transmute(server_code) }
 }
 
 /// 便捷宏：将错误转换为 CoreResult
@@ -80,4 +78,3 @@ macro_rules! server_to_core_result {
         $expr.map_err(|e| crate::infrastructure::error::server_error_to_core(e))
     };
 }
-

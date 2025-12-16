@@ -6,14 +6,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::{debug, error, info, warn};
-use base64::{Engine as _, engine::general_purpose};
 
 use crate::domain::model::HookConfig;
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
-use flare_server_core::{ServiceDiscover, DiscoveryFactory, DiscoveryConfig, BackendType, KvStore, KvBackend};
+use flare_server_core::{
+    BackendType, DiscoveryConfig, DiscoveryFactory, KvBackend, KvStore, ServiceDiscover,
+};
 
 /// Hook配置加载器接口
 pub trait ConfigLoader: Send + Sync {
@@ -54,7 +56,7 @@ impl ConfigMerger {
     /// 同名Hook高优先级覆盖低优先级
     pub fn merge(configs: Vec<HookConfig>) -> HookConfig {
         let mut merged = HookConfig::default();
-        
+
         // 按顺序合并，后面的配置会覆盖前面的同名配置
         for config in configs {
             Self::merge_hook_list(&mut merged.pre_send, config.pre_send);
@@ -72,11 +74,14 @@ impl ConfigMerger {
             Self::merge_hook_list(&mut merged.push_post_send, config.push_post_send);
             Self::merge_hook_list(&mut merged.push_delivery, config.push_delivery);
         }
-        
+
         merged
     }
 
-    fn merge_hook_list(target: &mut Vec<crate::domain::model::HookConfigItem>, source: Vec<crate::domain::model::HookConfigItem>) {
+    fn merge_hook_list(
+        target: &mut Vec<crate::domain::model::HookConfigItem>,
+        source: Vec<crate::domain::model::HookConfigItem>,
+    ) {
         for hook in source {
             if let Some(existing) = target.iter_mut().find(|h| h.name == hook.name) {
                 // 高优先级覆盖
@@ -95,7 +100,9 @@ impl ConfigValidator {
     /// 验证Hook配置
     pub fn validate(config: &HookConfig) -> Result<()> {
         // 验证所有Hook类型
-        let all_hooks = config.pre_send.iter()
+        let all_hooks = config
+            .pre_send
+            .iter()
             .chain(config.post_send.iter())
             .chain(config.delivery.iter())
             .chain(config.recall.iter())
@@ -109,27 +116,27 @@ impl ConfigValidator {
             .chain(config.push_pre_send.iter())
             .chain(config.push_post_send.iter())
             .chain(config.push_delivery.iter());
-        
+
         for hook in all_hooks {
             Self::validate_hook(hook)?;
         }
-        
+
         Ok(())
     }
-    
+
     fn validate_hook(hook: &crate::domain::model::HookConfigItem) -> Result<()> {
         if hook.name.is_empty() {
             anyhow::bail!("Hook name cannot be empty");
         }
-        
+
         if hook.priority < 0 || hook.priority > 1000 {
             anyhow::bail!("Hook priority must be between 0 and 1000");
         }
-        
+
         if hook.timeout_ms == 0 || hook.timeout_ms > 30000 {
             anyhow::bail!("Hook timeout must be between 1ms and 30000ms");
         }
-        
+
         Ok(())
     }
 }
@@ -142,12 +149,9 @@ pub struct FileConfigLoader {
 
 impl FileConfigLoader {
     pub fn new<P: Into<PathBuf>>(path: P) -> Self {
-        Self {
-            path: path.into(),
-        }
+        Self { path: path.into() }
     }
 }
-
 
 impl ConfigLoader for FileConfigLoader {
     async fn load(&self) -> Result<HookConfig> {
@@ -155,20 +159,21 @@ impl ConfigLoader for FileConfigLoader {
             debug!(path = %self.path.display(), "Hook config file not found, using default config");
             return Ok(HookConfig::default());
         }
-        
+
         let content = tokio::fs::read_to_string(&self.path)
             .await
             .with_context(|| format!("Failed to read hook config file: {}", self.path.display()))?;
-        
-        let config: HookConfig = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse hook config file: {}", self.path.display()))?;
-        
+
+        let config: HookConfig = toml::from_str(&content).with_context(|| {
+            format!("Failed to parse hook config file: {}", self.path.display())
+        })?;
+
         debug!(
             path = %self.path.display(),
             hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
             "Loaded hook config from file"
         );
-        
+
         Ok(config)
     }
 }
@@ -189,20 +194,20 @@ impl DatabaseConfigLoader {
     }
 }
 
-
 impl ConfigLoader for DatabaseConfigLoader {
     async fn load(&self) -> Result<HookConfig> {
-        let config = self.repository
+        let config = self
+            .repository
             .load_all(self.tenant_id.as_deref())
             .await
             .context("Failed to load hook config from database")?;
-        
+
         info!(
             tenant_id = ?self.tenant_id,
             hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
             "Loaded hook config from database"
         );
-        
+
         Ok(config)
     }
 }
@@ -228,7 +233,7 @@ impl ConfigCenterLoader {
         } else {
             "/flare/hooks/config".to_string()
         };
-        
+
         Self {
             endpoint,
             tenant_id,
@@ -240,7 +245,10 @@ impl ConfigCenterLoader {
     }
 
     /// 设置服务发现客户端
-    pub fn with_discovery_client(mut self, client: Arc<flare_server_core::ServiceDiscover>) -> Self {
+    pub fn with_discovery_client(
+        mut self,
+        client: Arc<flare_server_core::ServiceDiscover>,
+    ) -> Self {
         self.discovery_client = Some(client);
         self
     }
@@ -266,8 +274,7 @@ impl ConfigCenterLoader {
                 anyhow::bail!("Invalid etcd endpoint format: {}", self.endpoint);
             }
             let host = parts[0].to_string();
-            let port = parts[1].parse::<u16>()
-                .context("Invalid etcd port")?;
+            let port = parts[1].parse::<u16>().context("Invalid etcd port")?;
             Ok((host, port))
         } else if self.endpoint.starts_with("consul://") {
             let addr = self.endpoint.strip_prefix("consul://").unwrap();
@@ -276,11 +283,13 @@ impl ConfigCenterLoader {
                 anyhow::bail!("Invalid consul endpoint format: {}", self.endpoint);
             }
             let host = parts[0].to_string();
-            let port = parts[1].parse::<u16>()
-                .context("Invalid consul port")?;
+            let port = parts[1].parse::<u16>().context("Invalid consul port")?;
             Ok((host, port))
         } else {
-            anyhow::bail!("Unsupported config center endpoint format: {}", self.endpoint);
+            anyhow::bail!(
+                "Unsupported config center endpoint format: {}",
+                self.endpoint
+            );
         }
     }
 }
@@ -291,53 +300,54 @@ impl std::fmt::Debug for ConfigCenterLoader {
             .field("endpoint", &self.endpoint)
             .field("tenant_id", &self.tenant_id)
             .field("config_key", &self.config_key)
-            .field("discovery_client", &self.discovery_client.as_ref().map(|_| "ServiceDiscover"))
+            .field(
+                "discovery_client",
+                &self.discovery_client.as_ref().map(|_| "ServiceDiscover"),
+            )
             .finish()
     }
 }
 
-
 impl ConfigLoader for ConfigCenterLoader {
     async fn load(&self) -> Result<HookConfig> {
         let (host, port) = self.parse_endpoint()?;
-        
+
         // 根据endpoint类型选择不同的配置中心客户端
         if self.endpoint.starts_with("etcd://") {
             // 使用etcd-client连接etcd并读取配置
             use etcd_client::Client;
-            
+
             let endpoints = vec![format!("http://{}:{}", host, port)];
             let mut client = Client::connect(endpoints, None)
                 .await
                 .context("Failed to connect to etcd")?;
-            
-            let resp = client.get(self.config_key.clone(), None)
+
+            let resp = client
+                .get(self.config_key.clone(), None)
                 .await
                 .context("Failed to get config from etcd")?;
-            
+
             if let Some(kv) = resp.kvs().first() {
                 // etcd-client返回的是bytes，需要转换为字符串
                 let value = String::from_utf8(kv.value().to_vec())
                     .context("Failed to parse etcd value as UTF-8 string")?;
-                
+
                 // 解析配置（支持TOML或JSON格式）
                 let config: HookConfig = if value.trim_start().starts_with('{') {
                     // JSON格式
-                    serde_json::from_str(&value)
-                        .context("Failed to parse etcd config as JSON")?
+                    serde_json::from_str(&value).context("Failed to parse etcd config as JSON")?
                 } else {
                     // TOML格式
-                    toml::from_str(&value)
-                        .context("Failed to parse etcd config as TOML")?
+                    toml::from_str(&value).context("Failed to parse etcd config as TOML")?
                 };
-                
+
                 info!(
                     endpoint = %self.endpoint,
                     config_key = %self.config_key,
                     hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
                     "Loaded hook config from etcd"
                 );
-                
+
                 Ok(config)
             } else {
                 warn!(
@@ -349,7 +359,7 @@ impl ConfigLoader for ConfigCenterLoader {
             }
         } else if self.endpoint.starts_with("consul://") {
             // 使用flare-server-core的KV存储模块连接Consul并读取配置
-            
+
             // 如果有KV存储，使用KV存储读取配置；否则使用HTTP客户端
             if let Some(kv_store) = &self.kv_store {
                 // 使用KV存储从Consul KV存储中读取配置
@@ -365,14 +375,14 @@ impl ConfigLoader for ConfigCenterLoader {
                             toml::from_str(&value)
                                 .context("Failed to parse consul config as TOML")?
                         };
-                        
+
                         info!(
                             endpoint = %self.endpoint,
                             config_key = %self.config_key,
                             hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
                             "Loaded hook config from consul via KV store"
                         );
-                        
+
                         Ok(config)
                     }
                     Ok(None) => {
@@ -390,7 +400,10 @@ impl ConfigLoader for ConfigCenterLoader {
                             error = %e,
                             "Failed to get config from consul via KV store"
                         );
-                        Err(anyhow::anyhow!("Failed to get config from consul via KV store: {}", e))
+                        Err(anyhow::anyhow!(
+                            "Failed to get config from consul via KV store: {}",
+                            e
+                        ))
                     }
                 }
             } else {
@@ -398,26 +411,32 @@ impl ConfigLoader for ConfigCenterLoader {
                 // 构造Consul KV URL
                 let key = self.config_key.trim_start_matches('/');
                 let url = format!("http://{}:{}/v1/kv/{}", host, port, key);
-                
+
                 // 使用HTTP客户端从Consul KV存储中读取配置
                 let http_client = reqwest::Client::new();
                 match http_client.get(&url).send().await {
                     Ok(response) => {
                         if response.status().is_success() {
-                            let body: Vec<serde_json::Value> = response.json().await
+                            let body: Vec<serde_json::Value> = response
+                                .json()
+                                .await
                                 .context("Failed to parse consul response")?;
-                            
+
                             if let Some(first) = body.first() {
                                 // 从响应中提取Value字段并进行base64解码
-                                if let Some(value_base64) = first.get("Value").and_then(|v| v.as_str()) {
+                                if let Some(value_base64) =
+                                    first.get("Value").and_then(|v| v.as_str())
+                                {
                                     // base64解码
-                                    let value_bytes = general_purpose::STANDARD.decode(value_base64)
+                                    let value_bytes = general_purpose::STANDARD
+                                        .decode(value_base64)
                                         .context("Failed to decode base64 value from consul")?;
                                     let value = String::from_utf8(value_bytes)
                                         .context("Failed to parse consul value as UTF-8 string")?;
-                                    
+
                                     // 解析配置（支持TOML或JSON格式）
-                                    let config: HookConfig = if value.trim_start().starts_with('{') {
+                                    let config: HookConfig = if value.trim_start().starts_with('{')
+                                    {
                                         // JSON格式
                                         serde_json::from_str(&value)
                                             .context("Failed to parse consul config as JSON")?
@@ -426,14 +445,14 @@ impl ConfigLoader for ConfigCenterLoader {
                                         toml::from_str(&value)
                                             .context("Failed to parse consul config as TOML")?
                                     };
-                                    
+
                                     info!(
                                         endpoint = %self.endpoint,
                                         config_key = %self.config_key,
                                         hooks_count = config.pre_send.len() + config.post_send.len() + config.delivery.len() + config.recall.len(),
                                         "Loaded hook config from consul"
                                     );
-                                    
+
                                     Ok(config)
                                 } else {
                                     warn!(
@@ -473,7 +492,10 @@ impl ConfigLoader for ConfigCenterLoader {
                 }
             }
         } else {
-            anyhow::bail!("Unsupported config center endpoint format: {}", self.endpoint);
+            anyhow::bail!(
+                "Unsupported config center endpoint format: {}",
+                self.endpoint
+            );
         }
     }
 }

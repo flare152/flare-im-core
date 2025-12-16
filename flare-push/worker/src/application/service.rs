@@ -19,4 +19,3 @@ impl PushApplication {
         Arc::clone(&self.domain_service)
     }
 }
-

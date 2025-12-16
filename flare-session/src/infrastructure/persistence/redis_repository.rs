@@ -7,8 +7,7 @@ use redis::{AsyncCommands, aio::ConnectionManager};
 
 use crate::config::SessionConfig;
 use crate::domain::model::{
-    Session, SessionBootstrapResult, SessionFilter, SessionParticipant, SessionSort,
-    SessionSummary,
+    Session, SessionBootstrapResult, SessionFilter, SessionParticipant, SessionSort, SessionSummary,
 };
 use crate::domain::repository::SessionRepository;
 use async_trait::async_trait;
@@ -39,7 +38,6 @@ impl RedisSessionRepository {
         format!("{}:{}", self.config.user_cursor_prefix, user_id)
     }
 }
-
 
 #[async_trait]
 impl SessionRepository for RedisSessionRepository {
@@ -164,11 +162,7 @@ impl SessionRepository for RedisSessionRepository {
         ))
     }
 
-    async fn batch_acknowledge(
-        &self,
-        user_id: &str,
-        cursors: &[(String, i64)],
-    ) -> Result<()> {
+    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
         // Redis repository支持批量确认，因为这只是更新光标
         let mut conn = self.connection().await?;
         let cursor_key = self.user_cursor_key(user_id);
@@ -191,22 +185,13 @@ impl SessionRepository for RedisSessionRepository {
         ))
     }
 
-    async fn mark_as_read(
-        &self,
-        _user_id: &str,
-        _session_id: &str,
-        _seq: i64,
-    ) -> Result<()> {
+    async fn mark_as_read(&self, _user_id: &str, _session_id: &str, _seq: i64) -> Result<()> {
         Err(anyhow::anyhow!(
             "RedisSessionRepository does not support mark_as_read. Use PostgresSessionRepository instead."
         ))
     }
 
-    async fn get_unread_count(
-        &self,
-        user_id: &str,
-        session_id: &str,
-    ) -> Result<i32> {
+    async fn get_unread_count(&self, user_id: &str, session_id: &str) -> Result<i32> {
         // Redis repository 支持读取未读数（从缓存）
         let mut conn = self.connection().await?;
         let unread_key = self.session_unread_key(session_id);

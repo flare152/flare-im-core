@@ -14,9 +14,7 @@ pub struct HookQueryHandler {
 
 impl HookQueryHandler {
     pub fn new(metrics_collector: Arc<MetricsCollector>) -> Self {
-        Self {
-            metrics_collector,
-        }
+        Self { metrics_collector }
     }
 
     /// 处理获取Hook统计信息查询
@@ -25,8 +23,9 @@ impl HookQueryHandler {
     }
 
     /// 处理获取所有Hook统计信息查询
-    pub async fn handle_get_all_statistics(&self) -> std::collections::HashMap<String, HookStatistics> {
+    pub async fn handle_get_all_statistics(
+        &self,
+    ) -> std::collections::HashMap<String, HookStatistics> {
         self.metrics_collector.get_all_statistics().await
     }
 }
-

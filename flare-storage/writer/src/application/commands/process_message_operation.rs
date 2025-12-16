@@ -8,4 +8,3 @@ pub struct ProcessMessageOperationCommand {
     pub operation: MessageOperation,
     pub message: Message,
 }
-

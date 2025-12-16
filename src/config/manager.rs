@@ -95,7 +95,9 @@ impl ConfigManager {
         object_storage: &mut HashMap<String, ObjectStoreConfig>,
         env_config: &Value,
     ) {
+        // 检查环境配置中是否包含对象存储配置
         if let Some(env_object_storage) = env_config.get("object_storage") {
+            // 如果包含对象存储配置表，则遍历处理每个配置项
             if let Some(tables) = env_object_storage.as_table() {
                 for (key, value) in tables {
                     // 只有当配置包含 profile_type 时才处理

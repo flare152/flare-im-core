@@ -10,9 +10,9 @@
 //! 4. **降级方案**：Redis 不可用时，自动降级到数据库
 
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use redis::{AsyncCommands, aio::ConnectionManager};
 use std::sync::Arc;
-use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use crate::domain::repository::SeqGenerator as SeqGeneratorTrait;
@@ -31,10 +31,7 @@ impl RedisSeqGenerator {
     /// # 参数
     /// * `redis_client` - Redis 客户端
     /// * `db_pool` - PostgreSQL 连接池（可选，用于降级）
-    pub fn new(
-        redis_client: Arc<redis::Client>,
-        db_pool: Option<Arc<sqlx::PgPool>>,
-    ) -> Self {
+    pub fn new(redis_client: Arc<redis::Client>, db_pool: Option<Arc<sqlx::PgPool>>) -> Self {
         Self {
             redis_client,
             db_pool,
@@ -193,21 +190,31 @@ mod tests {
     async fn test_redis_seq_generator() {
         use super::*;
         use std::sync::Arc;
-        
+
         // 创建 Redis 客户端
-        let redis_client = redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
+        let redis_client =
+            redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
         let redis_client = Arc::new(redis_client);
-        
+
         // 创建序列生成器
         let seq_generator = RedisSeqGenerator::new(redis_client, None);
-        
+
         let session_id = "test-session-redis-1";
-        
+
         // 测试生成序列号
-        let seq1 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq1");
-        let seq2 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq2");
-        let seq3 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq3");
-        
+        let seq1 = seq_generator
+            .generate_seq(session_id)
+            .await
+            .expect("Failed to generate seq1");
+        let seq2 = seq_generator
+            .generate_seq(session_id)
+            .await
+            .expect("Failed to generate seq2");
+        let seq3 = seq_generator
+            .generate_seq(session_id)
+            .await
+            .expect("Failed to generate seq3");
+
         // 验证递增性
         assert!(seq2 > seq1);
         assert!(seq3 > seq2);
@@ -220,27 +227,27 @@ mod tests {
     async fn test_database_seq_generator() {
         use super::*;
         use std::sync::Arc;
-        
+
         // 注意：这个测试需要实际的数据库连接
         // 在实际测试中，应该使用测试数据库或 mock
-        
+
         /*
         // 创建数据库连接池（示例代码，实际需要正确的数据库URL）
         let db_pool = sqlx::PgPool::connect("postgresql://user:password@localhost/test_db")
             .await
             .expect("Failed to connect to database");
         let db_pool = Arc::new(db_pool);
-        
+
         // 创建序列生成器
         let seq_generator = DatabaseSeqGenerator::new(db_pool);
-        
+
         let session_id = "test-session-db-1";
-        
+
         // 测试生成序列号
         let seq1 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq1");
         let seq2 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq2");
         let seq3 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq3");
-        
+
         // 验证递增性
         assert!(seq2 > seq1);
         assert!(seq3 > seq2);
@@ -248,19 +255,20 @@ mod tests {
         assert_eq!(seq3, seq2 + 1);
         */
     }
-    
+
     #[tokio::test]
     async fn test_seq_generator_trait_object() {
         use super::*;
         use std::sync::Arc;
-        
+
         // 测试 trait 对象的使用
-        let redis_client = redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
+        let redis_client =
+            redis::Client::open("redis://127.0.0.1/").expect("Failed to connect to Redis");
         let redis_client = Arc::new(redis_client);
-        let seq_generator: Arc<dyn SeqGeneratorTrait> = Arc::new(RedisSeqGenerator::new(redis_client, None));
-        
+        let seq_generator: Arc<dyn SeqGeneratorTrait> =
+            Arc::new(RedisSeqGenerator::new(redis_client, None));
+
         // 确保 trait 对象可以正常使用（虽然实际调用会失败，因为我们没有真正的Redis）
         let _seq_generator = seq_generator;
     }
 }
-

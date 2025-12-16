@@ -41,7 +41,7 @@ impl HookAdapterFactory {
     }
 
     /// 根据传输配置创建适配器
-    /// 
+    ///
     /// 优先级：service_name + registry > endpoint（直接地址）
     pub async fn create_adapter(
         &self,
@@ -80,12 +80,10 @@ impl HookAdapterFactory {
 
                 // 优先级2: 直接地址模式（fallback/外部系统/开发测试）
                 if let Some(endpoint) = endpoint {
-                    let adapter = GrpcHookAdapter::new_from_endpoint(
-                        endpoint.clone(),
-                        metadata.clone(),
-                    )
-                    .await
-                    .context("Failed to create gRPC adapter from endpoint")?;
+                    let adapter =
+                        GrpcHookAdapter::new_from_endpoint(endpoint.clone(), metadata.clone())
+                            .await
+                            .context("Failed to create gRPC adapter from endpoint")?;
                     return Ok(Arc::new(adapter));
                 }
 
@@ -93,15 +91,16 @@ impl HookAdapterFactory {
                     "Either service_name (with registry) or endpoint must be provided for gRPC transport"
                 ))
             }
-            HookTransportConfig::Webhook { endpoint, secret, headers } => {
+            HookTransportConfig::Webhook {
+                endpoint,
+                secret,
+                headers,
+            } => {
                 // WebHook 必须使用直接地址
-                let adapter = WebhookHookAdapter::new(
-                    endpoint.clone(),
-                    secret.clone(),
-                    headers.clone(),
-                )
-                .await
-                .context("Failed to create WebHook adapter")?;
+                let adapter =
+                    WebhookHookAdapter::new(endpoint.clone(), secret.clone(), headers.clone())
+                        .await
+                        .context("Failed to create WebHook adapter")?;
                 Ok(Arc::new(adapter))
             }
             HookTransportConfig::Local { target } => {
@@ -251,5 +250,3 @@ impl HookAdapter for LocalHookAdapter {
         Ok(flare_im_core::PreSendDecision::Continue)
     }
 }
-
-

@@ -30,26 +30,26 @@ pub async fn initialize(
     // 1. 加载配置
     let route_config = Arc::new(
         RouteConfig::from_app_config(app_config)
-            .context("Failed to load route service configuration")?
+            .context("Failed to load route service configuration")?,
     );
-    
+
     // 2. 创建 Online 服务客户端
     // 默认连接本地 Online 服务
-    let online_endpoint = route_config.online_service_endpoint
+    let online_endpoint = route_config
+        .online_service_endpoint
         .clone()
         .unwrap_or_else(|| "http://127.0.0.1:50061".to_string());
-    
+
     tracing::info!(endpoint = %online_endpoint, "Connecting to Online service");
-    
+
     let online_client = Arc::new(
         OnlineServiceClient::new(online_endpoint)
             .await
-            .context("Failed to connect to Online service")?
+            .context("Failed to connect to Online service")?,
     );
-    
+
     // 3. 构建 gRPC Handler
     let handler = RouteHandler::new(online_client);
-    
+
     Ok(ApplicationContext { handler })
 }
-

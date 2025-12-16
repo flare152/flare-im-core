@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
+use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
 use flare_proto::push::push_service_server::PushService;
 use flare_proto::push::{
     CancelScheduledPushRequest, CancelScheduledPushResponse, CreateTemplateRequest,
-    CreateTemplateResponse, DeleteTemplateRequest, DeleteTemplateResponse,
-    ListTemplatesRequest, ListTemplatesResponse, PushMessageRequest, PushMessageResponse,
-    PushNotificationRequest, PushNotificationResponse, QueryPushStatusRequest,
-    QueryPushStatusResponse, SchedulePushRequest, SchedulePushResponse,
-    UpdateTemplateRequest, UpdateTemplateResponse,
+    CreateTemplateResponse, DeleteTemplateRequest, DeleteTemplateResponse, ListTemplatesRequest,
+    ListTemplatesResponse, PushMessageRequest, PushMessageResponse, PushNotificationRequest,
+    PushNotificationResponse, QueryPushStatusRequest, QueryPushStatusResponse, SchedulePushRequest,
+    SchedulePushResponse, UpdateTemplateRequest, UpdateTemplateResponse,
 };
-use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
 
@@ -25,7 +24,10 @@ pub struct PushGrpcHandler {
 
 impl PushGrpcHandler {
     pub fn new(command_handler: Arc<PushCommandHandler>, hook_dispatcher: HookDispatcher) -> Self {
-        Self { command_handler, hook_dispatcher }
+        Self {
+            command_handler,
+            hook_dispatcher,
+        }
     }
 
     pub async fn push_message(
@@ -49,7 +51,11 @@ impl PushGrpcHandler {
     ) -> Result<Response<PushNotificationResponse>, Status> {
         let req = request.into_inner();
         let command = EnqueueNotificationCommand { request: req };
-        match self.command_handler.handle_enqueue_notification(command).await {
+        match self
+            .command_handler
+            .handle_enqueue_notification(command)
+            .await
+        {
             Ok(resp) => Ok(Response::new(resp)),
             Err(err) => {
                 error!(?err, "failed to enqueue push notification");
@@ -137,14 +143,18 @@ impl PushService for PushGrpcHandler {
         &self,
         _request: Request<CancelScheduledPushRequest>,
     ) -> Result<Response<CancelScheduledPushResponse>, Status> {
-        Err(Status::unimplemented("cancel_scheduled_push not implemented yet"))
+        Err(Status::unimplemented(
+            "cancel_scheduled_push not implemented yet",
+        ))
     }
 
     async fn query_push_status(
         &self,
         _request: Request<QueryPushStatusRequest>,
     ) -> Result<Response<QueryPushStatusResponse>, Status> {
-        Err(Status::unimplemented("query_push_status not implemented yet"))
+        Err(Status::unimplemented(
+            "query_push_status not implemented yet",
+        ))
     }
 
     // 注意：push_ack 方法需要 proto 代码重新生成后才能添加到 trait 中
@@ -156,9 +166,13 @@ impl PushService for PushGrpcHandler {
         info!(
             "Push ACK request: {} users, message_id: {}",
             request.get_ref().target_user_ids.len(),
-            request.get_ref().ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or("")
+            request
+                .get_ref()
+                .ack
+                .as_ref()
+                .map(|a| a.message_id.as_str())
+                .unwrap_or("")
         );
         self.push_ack(request).await
     }
-
 }

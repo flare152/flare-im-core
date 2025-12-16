@@ -2,27 +2,27 @@
 //!
 //! 负责将消息转发到对应的业务系统
 
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::message::message_service_client::MessageServiceClient;
 use flare_proto::message::{SendMessageRequest, SendMessageResponse};
-use flare_proto::common::{RequestContext, TenantContext};
 use prost::Message as ProstMessage;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{debug, info};
 
-use flare_server_core::discovery::ServiceClient;
 use crate::domain::repository::RouteRepository;
+use flare_server_core::discovery::ServiceClient;
 
 /// SVID 常量定义
 pub mod svid {
     pub const IM: &str = "svid.im";
     pub const CUSTOMER_SERVICE: &str = "svid.customer";
     pub const AI_BOT: &str = "svid.ai.bot";
-    
+
     /// 从旧的 SVID 格式转换为新格式
     pub fn normalize(svid: &str) -> String {
         match svid.to_uppercase().as_str() {
@@ -101,17 +101,28 @@ impl MessageForwarder {
             let message_orchestrator_service = get_service_name(MESSAGE_ORCHESTRATOR);
             let discover = flare_im_core::discovery::create_discover(&message_orchestrator_service)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to create service discover for {}: {}", message_orchestrator_service, e))?;
-            
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to create service discover for {}: {}",
+                        message_orchestrator_service,
+                        e
+                    )
+                })?;
+
             if discover.is_none() {
-                return Err(anyhow::anyhow!("Service discovery not configured for {}", message_orchestrator_service));
+                return Err(anyhow::anyhow!(
+                    "Service discovery not configured for {}",
+                    message_orchestrator_service
+                ));
             }
-            
+
             *service_client_guard = Some(ServiceClient::new(discover.unwrap()));
         }
 
         let service_client = service_client_guard.as_mut().unwrap();
-        let channel = service_client.get_channel().await
+        let channel = service_client
+            .get_channel()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to get channel from service discovery: {}", e))?;
 
         let client = MessageServiceClient::new(channel);
@@ -122,7 +133,7 @@ impl MessageForwarder {
     }
 
     /// 根据 endpoint 获取或创建业务系统客户端
-    /// 
+    ///
     /// endpoint 可以是：
     /// - 服务名（通过服务发现解析）
     /// - gRPC URL（http://host:port 或 https://host:port）
@@ -148,13 +159,22 @@ impl MessageForwarder {
             // 服务名（通过服务发现）
             let discover_result = flare_im_core::discovery::create_discover(endpoint)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to create service discover for {}: {}", endpoint, e))?;
-            
-            let discover = discover_result.ok_or_else(|| anyhow::anyhow!("Service discovery not configured for {}", endpoint))?;
-            
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to create service discover for {}: {}", endpoint, e)
+                })?;
+
+            let discover = discover_result.ok_or_else(|| {
+                anyhow::anyhow!("Service discovery not configured for {}", endpoint)
+            })?;
+
             let mut service_client = ServiceClient::new(discover);
-            service_client.get_channel().await
-                .map_err(|e| anyhow::anyhow!("Failed to get channel from service discovery for {}: {}", endpoint, e))?
+            service_client.get_channel().await.map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to get channel from service discovery for {}: {}",
+                    endpoint,
+                    e
+                )
+            })?
         };
 
         Ok(MessageServiceClient::new(channel))
@@ -175,19 +195,19 @@ impl MessageForwarder {
         // 构造路由上下文（从 RequestContext.attributes 提取）
         let route_ctx = crate::service::router::RouteContext {
             svid: normalized_svid.clone(),
-            session_id: context.as_ref().and_then(|c| {
-                c.attributes.get("session_id").cloned()
-            }),
-            user_id: context.as_ref().and_then(|c| {
-                c.actor.as_ref().map(|a| a.actor_id.clone())
-            }),
+            session_id: context
+                .as_ref()
+                .and_then(|c| c.attributes.get("session_id").cloned()),
+            user_id: context
+                .as_ref()
+                .and_then(|c| c.actor.as_ref().map(|a| a.actor_id.clone())),
             tenant_id: tenant.as_ref().map(|t| t.tenant_id.clone()),
-            client_geo: context.as_ref().and_then(|c| {
-                c.attributes.get("geo").cloned()
-            }),
-            login_gateway: context.as_ref().and_then(|c| {
-                c.attributes.get("login_gateway").cloned()
-            }),
+            client_geo: context
+                .as_ref()
+                .and_then(|c| c.attributes.get("geo").cloned()),
+            login_gateway: context
+                .as_ref()
+                .and_then(|c| c.attributes.get("login_gateway").cloned()),
         };
 
         // 根据 SVID 选择转发目标
@@ -201,7 +221,9 @@ impl MessageForwarder {
                 if let Some(repo) = route_repository {
                     // 优先使用 Router 解析端点；无 Router 时回退到仓库查找
                     let endpoint = if let Some(router_arc) = self.router.lock().await.clone() {
-                        router_arc.resolve_endpoint(&route_ctx, repo.clone()).await?
+                        router_arc
+                            .resolve_endpoint(&route_ctx, repo.clone())
+                            .await?
                     } else {
                         match repo.find_by_svid(&normalized_svid).await {
                             Ok(Some(route)) => route.endpoint,
@@ -209,42 +231,50 @@ impl MessageForwarder {
                                 return Err(anyhow::anyhow!(
                                     "Business service not found for SVID {}",
                                     normalized_svid
-                                ))
+                                ));
                             }
                             Err(e) => {
                                 return Err(anyhow::anyhow!(
                                     "Failed to resolve route for SVID {}: {}",
                                     normalized_svid,
                                     e
-                                ))
+                                ));
                             }
                         }
                     };
-                    
+
                     // 连接业务系统客户端并转发消息
                     let mut client = self.get_business_client(&endpoint).await?;
-                    
+
                     // 构造转发请求
                     let request = flare_proto::message::SendMessageRequest {
                         session_id: "".to_string(), // 需要根据实际逻辑填充
-                        message: None, // 消息内容在 payload 中
+                        message: None,              // 消息内容在 payload 中
                         sync: false,
                         context,
                         tenant,
                     };
-                    
+
                     // 发送请求到业务系统
-                    let response = client.send_message(tonic::Request::new(request)).await
+                    let response = client
+                        .send_message(tonic::Request::new(request))
+                        .await
                         .context("Failed to send message to business service")?;
 
                     let response_inner = response.into_inner();
 
                     // 序列化响应
                     let mut response_bytes = Vec::new();
-                    flare_proto::message::SendMessageResponse::encode(&response_inner, &mut response_bytes)
-                        .context("Failed to encode SendMessageResponse")?;
+                    flare_proto::message::SendMessageResponse::encode(
+                        &response_inner,
+                        &mut response_bytes,
+                    )
+                    .context("Failed to encode SendMessageResponse")?;
 
-                    info!("✅ Message forwarded to business service successfully: SVID={}, Endpoint={}", normalized_svid, endpoint);
+                    info!(
+                        "✅ Message forwarded to business service successfully: SVID={}, Endpoint={}",
+                        normalized_svid, endpoint
+                    );
                     Ok(response_bytes)
                 } else {
                     Err(anyhow::anyhow!(
@@ -264,7 +294,8 @@ impl MessageForwarder {
         tenant: Option<TenantContext>,
     ) -> Result<Vec<u8>> {
         // 确保客户端已初始化
-        self.ensure_im_client().await
+        self.ensure_im_client()
+            .await
             .context("Failed to initialize IM service client")?;
 
         // 解析 payload 为 SendMessageRequest
@@ -297,10 +328,13 @@ impl MessageForwarder {
 
         // 发送请求
         let mut client_guard = self.im_client.lock().await;
-        let client = client_guard.as_mut()
+        let client = client_guard
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("IM service client not available"))?;
 
-        let response = client.send_message(tonic::Request::new(request)).await
+        let response = client
+            .send_message(tonic::Request::new(request))
+            .await
             .context("Failed to send message to message-orchestrator")?;
 
         let response_inner = response.into_inner();
@@ -314,4 +348,3 @@ impl MessageForwarder {
         Ok(response_bytes)
     }
 }
-

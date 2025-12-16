@@ -9,4 +9,3 @@ async fn main() -> Result<()> {
     // 创建应用并启动服务器
     flare_signaling_route::ApplicationBootstrap::run().await
 }
-

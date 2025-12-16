@@ -54,7 +54,10 @@ impl GrpcOnlineClient {
         if let Some(service_client) = &self.service_client {
             let mut client = service_client.lock().await;
             let channel = client.get_channel().await.map_err(|e| {
-                Status::unavailable(format!("Failed to get channel from service discovery: {}", e))
+                Status::unavailable(format!(
+                    "Failed to get channel from service discovery: {}",
+                    e
+                ))
             })?;
             Ok(SignalingServiceClient::new(channel))
         } else if let Some(ref address) = self.direct_address {
@@ -62,7 +65,9 @@ impl GrpcOnlineClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", address, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!("Failed to connect to {}: {}", address, e))
+                })?;
             Ok(SignalingServiceClient::new(channel))
         } else {
             // 使用服务名称进行直连（假设服务名称可以直接解析）
@@ -70,7 +75,12 @@ impl GrpcOnlineClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid service name: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", self.service_name, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!(
+                        "Failed to connect to {}: {}",
+                        self.service_name, e
+                    ))
+                })?;
             Ok(SignalingServiceClient::new(channel))
         }
     }
@@ -80,7 +90,10 @@ impl GrpcOnlineClient {
         if let Some(service_client) = &self.service_client {
             let mut client = service_client.lock().await;
             let channel = client.get_channel().await.map_err(|e| {
-                Status::unavailable(format!("Failed to get channel from service discovery: {}", e))
+                Status::unavailable(format!(
+                    "Failed to get channel from service discovery: {}",
+                    e
+                ))
             })?;
             Ok(UserServiceClient::new(channel))
         } else if let Some(ref address) = self.direct_address {
@@ -88,7 +101,9 @@ impl GrpcOnlineClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", address, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!("Failed to connect to {}: {}", address, e))
+                })?;
             Ok(UserServiceClient::new(channel))
         } else {
             // 使用服务名称进行直连（假设服务名称可以直接解析）
@@ -96,7 +111,12 @@ impl GrpcOnlineClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid service name: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", self.service_name, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!(
+                        "Failed to connect to {}: {}",
+                        self.service_name, e
+                    ))
+                })?;
             Ok(UserServiceClient::new(channel))
         }
     }

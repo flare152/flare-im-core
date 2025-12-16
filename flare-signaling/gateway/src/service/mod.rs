@@ -6,7 +6,6 @@ pub mod startup;
 mod wire;
 
 pub use bootstrap::ApplicationBootstrap;
-pub use wire::{ApplicationContext, GrpcServices};
 pub use service_manager::{PortConfig, ServiceManager};
-pub use startup::{StartupInfo, GrpcServiceInfo};
-
+pub use startup::{GrpcServiceInfo, StartupInfo};
+pub use wire::{ApplicationContext, GrpcServices};

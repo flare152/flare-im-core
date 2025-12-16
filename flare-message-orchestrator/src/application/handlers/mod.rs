@@ -5,4 +5,3 @@ pub mod query_handler;
 
 pub use command_handler::MessageCommandHandler;
 pub use query_handler::MessageQueryHandler;
-

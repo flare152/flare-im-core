@@ -18,24 +18,24 @@ pub struct ConnectionQualityMetrics {
     pub connection_id: String,
     pub user_id: String,
     pub device_id: String,
-    
+
     // RTT 统计
     pub rtt_ms: i64,
     pub rtt_avg_ms: f64,
     pub rtt_min_ms: i64,
     pub rtt_max_ms: i64,
-    
+
     // 丢包统计
     pub packet_loss_rate: f64,
     pub packets_sent: u64,
     pub packets_lost: u64,
-    
+
     // 网络类型
     pub network_type: String,
-    
+
     // 最后更新时间
     pub last_update: Instant,
-    
+
     // 质量评级
     pub quality_level: QualityLevel,
 }
@@ -43,10 +43,10 @@ pub struct ConnectionQualityMetrics {
 /// 质量评级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QualityLevel {
-    Excellent = 4,  // RTT < 50ms, Loss < 0.1%
-    Good = 3,       // RTT < 100ms, Loss < 1%
-    Fair = 2,       // RTT < 200ms, Loss < 3%
-    Poor = 1,       // RTT >= 200ms or Loss >= 3%
+    Excellent = 4, // RTT < 50ms, Loss < 0.1%
+    Good = 3,      // RTT < 100ms, Loss < 1%
+    Fair = 2,      // RTT < 200ms, Loss < 3%
+    Poor = 1,      // RTT >= 200ms or Loss >= 3%
 }
 
 impl QualityLevel {
@@ -68,7 +68,7 @@ impl QualityLevel {
 pub struct ConnectionQualityService {
     // connection_id -> ConnectionQualityMetrics
     metrics: Arc<RwLock<HashMap<String, ConnectionQualityMetrics>>>,
-    
+
     // 质量数据过期时间（默认5分钟）
     expiration: Duration,
 }
@@ -90,9 +90,10 @@ impl ConnectionQualityService {
         rtt_ms: i64,
     ) {
         let mut metrics_map = self.metrics.write().await;
-        
-        let metrics = metrics_map.entry(connection_id.to_string()).or_insert_with(|| {
-            ConnectionQualityMetrics {
+
+        let metrics = metrics_map
+            .entry(connection_id.to_string())
+            .or_insert_with(|| ConnectionQualityMetrics {
                 connection_id: connection_id.to_string(),
                 user_id: user_id.to_string(),
                 device_id: device_id.to_string(),
@@ -106,22 +107,19 @@ impl ConnectionQualityService {
                 network_type: "unknown".to_string(),
                 last_update: Instant::now(),
                 quality_level: QualityLevel::Good,
-            }
-        });
-        
+            });
+
         // 更新 RTT 统计（使用滑动平均）
         metrics.rtt_ms = rtt_ms;
         metrics.rtt_avg_ms = metrics.rtt_avg_ms * 0.8 + rtt_ms as f64 * 0.2;
         metrics.rtt_min_ms = metrics.rtt_min_ms.min(rtt_ms);
         metrics.rtt_max_ms = metrics.rtt_max_ms.max(rtt_ms);
         metrics.last_update = Instant::now();
-        
+
         // 重新计算质量等级
-        metrics.quality_level = QualityLevel::from_metrics(
-            metrics.rtt_avg_ms as i64,
-            metrics.packet_loss_rate,
-        );
-        
+        metrics.quality_level =
+            QualityLevel::from_metrics(metrics.rtt_avg_ms as i64, metrics.packet_loss_rate);
+
         debug!(
             connection_id = %connection_id,
             rtt_ms = rtt_ms,
@@ -139,24 +137,22 @@ impl ConnectionQualityService {
         packets_lost: u64,
     ) {
         let mut metrics_map = self.metrics.write().await;
-        
+
         if let Some(metrics) = metrics_map.get_mut(connection_id) {
             metrics.packets_sent = packets_sent;
             metrics.packets_lost = packets_lost;
-            
+
             // 计算丢包率
             if packets_sent > 0 {
                 metrics.packet_loss_rate = packets_lost as f64 / packets_sent as f64;
             }
-            
+
             metrics.last_update = Instant::now();
-            
+
             // 重新计算质量等级
-            metrics.quality_level = QualityLevel::from_metrics(
-                metrics.rtt_avg_ms as i64,
-                metrics.packet_loss_rate,
-            );
-            
+            metrics.quality_level =
+                QualityLevel::from_metrics(metrics.rtt_avg_ms as i64, metrics.packet_loss_rate);
+
             if metrics.packet_loss_rate > 0.05 {
                 warn!(
                     connection_id = %connection_id,
@@ -168,13 +164,9 @@ impl ConnectionQualityService {
     }
 
     /// 更新网络类型
-    pub async fn update_network_type(
-        &self,
-        connection_id: &str,
-        network_type: String,
-    ) {
+    pub async fn update_network_type(&self, connection_id: &str, network_type: String) {
         let mut metrics_map = self.metrics.write().await;
-        
+
         if let Some(metrics) = metrics_map.get_mut(connection_id) {
             metrics.network_type = network_type;
             metrics.last_update = Instant::now();
@@ -200,19 +192,17 @@ impl ConnectionQualityService {
     /// 选择最优设备（基于质量等级和RTT）
     pub async fn select_best_device(&self, user_id: &str) -> Option<ConnectionQualityMetrics> {
         let mut devices = self.get_user_devices_quality(user_id).await;
-        
+
         if devices.is_empty() {
             return None;
         }
-        
+
         // 按质量等级降序、RTT升序排序
-        devices.sort_by(|a, b| {
-            match b.quality_level.cmp(&a.quality_level) {
-                std::cmp::Ordering::Equal => a.rtt_avg_ms.partial_cmp(&b.rtt_avg_ms).unwrap(),
-                other => other,
-            }
+        devices.sort_by(|a, b| match b.quality_level.cmp(&a.quality_level) {
+            std::cmp::Ordering::Equal => a.rtt_avg_ms.partial_cmp(&b.rtt_avg_ms).unwrap(),
+            other => other,
         });
-        
+
         devices.into_iter().next()
     }
 
@@ -226,10 +216,8 @@ impl ConnectionQualityService {
     pub async fn cleanup_expired(&self) {
         let mut metrics_map = self.metrics.write().await;
         let now = Instant::now();
-        
-        metrics_map.retain(|_, metrics| {
-            now.duration_since(metrics.last_update) < self.expiration
-        });
+
+        metrics_map.retain(|_, metrics| now.duration_since(metrics.last_update) < self.expiration);
     }
 }
 

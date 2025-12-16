@@ -2,11 +2,11 @@
 //!
 //! 封装会话管理的核心业务逻辑，包括注册、注销、心跳等
 
-use std::sync::Arc;
 use async_trait::async_trait;
-use flare_server_core::error::{Result, ErrorBuilder, ErrorCode};  // 使用 flare_server_core 的 Result 类型
-use flare_proto::signaling::{LoginRequest, LogoutRequest, HeartbeatRequest};
-use tracing::{info, warn, instrument};
+use flare_proto::signaling::{HeartbeatRequest, LoginRequest, LogoutRequest};
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result}; // 使用 flare_server_core 的 Result 类型
+use std::sync::Arc;
+use tracing::{info, instrument, warn};
 
 use crate::domain::repository::SignalingGateway;
 use crate::domain::service::ConnectionQualityService;
@@ -54,7 +54,7 @@ impl SessionDomainService {
         // 构建 metadata，包含 gateway_id
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("gateway_id".to_string(), self.gateway_id.clone());
-        
+
         let login_request = LoginRequest {
             user_id: user_id.to_string(),
             token: String::new(),
@@ -66,7 +66,7 @@ impl SessionDomainService {
             device_platform: "unknown".to_string(),
             app_version: "unknown".to_string(),
             desired_conflict_strategy: 0,
-            device_priority: 2,  // Normal 优先级
+            device_priority: 2, // Normal 优先级
             token_version: 0,
             initial_quality: None,
             resume_session_id: String::new(),
@@ -75,8 +75,9 @@ impl SessionDomainService {
         // 调用 Signaling Online 服务，添加超时保护
         let login_result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.signaling_gateway.login(login_request)
-        ).await;
+            self.signaling_gateway.login(login_request),
+        )
+        .await;
 
         match login_result {
             Ok(Ok(response)) => {
@@ -97,7 +98,8 @@ impl SessionDomainService {
                     Err(ErrorBuilder::new(
                         ErrorCode::OperationFailed,
                         format!("Failed to register session: {}", response.error_message),
-                    ).build_error())
+                    )
+                    .build_error())
                 }
             }
             Ok(Err(e)) => {
@@ -109,17 +111,18 @@ impl SessionDomainService {
                 Err(ErrorBuilder::new(
                     ErrorCode::InternalError,
                     format!("Signaling login failed: {}", e),
-                ).build_error())
+                )
+                .build_error())
             }
             Err(_) => {
                 warn!(
                     user_id = %user_id,
                     "Timeout while calling signaling login (5s)"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::OperationTimeout,
-                    "Signaling login timeout",
-                ).build_error())
+                Err(
+                    ErrorBuilder::new(ErrorCode::OperationTimeout, "Signaling login timeout")
+                        .build_error(),
+                )
             }
         }
     }
@@ -145,7 +148,8 @@ impl SessionDomainService {
             return Err(ErrorBuilder::new(
                 ErrorCode::InternalError,
                 format!("Signaling logout failed: {}", e),
-            ).build_error());
+            )
+            .build_error());
         }
 
         info!(
@@ -187,14 +191,16 @@ impl SessionDomainService {
             session_id: session_id.to_string(),
             context: None,
             tenant: None,
-            current_quality,  // 使用从链接质量服务获取的质量信息
+            current_quality, // 使用从链接质量服务获取的质量信息
         };
-        
+
         // 添加超时保护
         match tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            self.signaling_gateway.heartbeat(heartbeat_request)
-        ).await {
+            self.signaling_gateway.heartbeat(heartbeat_request),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 tracing::debug!(
                     user_id = %user_id,
@@ -202,7 +208,7 @@ impl SessionDomainService {
                     "Heartbeat sent successfully"
                 );
                 Ok(())
-            },
+            }
             Ok(Err(e)) => {
                 warn!(
                     error = %e,
@@ -210,21 +216,21 @@ impl SessionDomainService {
                     session_id = %session_id,
                     "Failed to send heartbeat"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::InternalError,
-                    format!("Heartbeat failed: {}", e),
-                ).build_error())
-            },
+                Err(
+                    ErrorBuilder::new(ErrorCode::InternalError, format!("Heartbeat failed: {}", e))
+                        .build_error(),
+                )
+            }
             Err(_) => {
                 warn!(
                     user_id = %user_id,
                     session_id = %session_id,
                     "Timeout sending heartbeat (3s)"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::OperationTimeout,
-                    "Heartbeat timeout",
-                ).build_error())
+                Err(
+                    ErrorBuilder::new(ErrorCode::OperationTimeout, "Heartbeat timeout")
+                        .build_error(),
+                )
             }
         }
     }

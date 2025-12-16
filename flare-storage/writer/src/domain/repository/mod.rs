@@ -16,7 +16,7 @@ pub trait MessageIdempotencyRepository: Send + Sync {
 #[async_trait]
 pub trait HotCacheRepository: Send + Sync {
     async fn store_hot(&self, message: &Message) -> Result<()>;
-    
+
     /// 批量存储消息（优化性能）
     async fn store_hot_batch(&self, messages: &[Message]) -> Result<()> {
         // 默认实现：逐个存储（子类可以覆盖以优化）
@@ -30,7 +30,7 @@ pub trait HotCacheRepository: Send + Sync {
 #[async_trait]
 pub trait RealtimeStoreRepository: Send + Sync {
     async fn store_realtime(&self, message: &Message) -> Result<()>;
-    
+
     /// 批量存储消息（优化性能）
     async fn store_realtime_batch(&self, messages: &[Message]) -> Result<()> {
         // 默认实现：逐个存储（子类可以覆盖以优化）
@@ -44,7 +44,7 @@ pub trait RealtimeStoreRepository: Send + Sync {
 #[async_trait]
 pub trait ArchiveStoreRepository: Send + Sync {
     async fn store_archive(&self, message: &Message) -> Result<()>;
-    
+
     /// 批量存储消息（优化性能）
     async fn store_archive_batch(&self, messages: &[Message]) -> Result<()> {
         // 默认实现：逐个存储（子类可以覆盖以优化）
@@ -53,7 +53,7 @@ pub trait ArchiveStoreRepository: Send + Sync {
         }
         Ok(())
     }
-    
+
     /// 更新消息状态（用于撤回、编辑、删除等操作）
     async fn update_message_status(
         &self,
@@ -66,7 +66,7 @@ pub trait ArchiveStoreRepository: Send + Sync {
         let _ = (message_id, status, is_recalled, recalled_at);
         Ok(())
     }
-    
+
     /// 更新消息内容（用于编辑操作）
     async fn update_message_content(
         &self,
@@ -78,7 +78,7 @@ pub trait ArchiveStoreRepository: Send + Sync {
         let _ = (message_id, new_content, edit_version);
         Ok(())
     }
-    
+
     /// 更新消息可见性（用于删除操作）
     async fn update_message_visibility(
         &self,
@@ -90,7 +90,7 @@ pub trait ArchiveStoreRepository: Send + Sync {
         let _ = (message_id, user_id, visibility);
         Ok(())
     }
-    
+
     /// 追加操作记录到消息
     async fn append_operation(
         &self,
@@ -101,7 +101,7 @@ pub trait ArchiveStoreRepository: Send + Sync {
         let _ = (message_id, operation);
         Ok(())
     }
-    
+
     /// 获取 Any trait 引用（用于向下转型）
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -149,12 +149,8 @@ pub trait SessionRepository: Send + Sync {
 #[async_trait]
 pub trait SessionUpdateRepository: Send + Sync {
     /// 更新会话的最后消息信息
-    async fn update_last_message(
-        &self,
-        session_id: &str,
-        message_id: &str,
-        seq: i64,
-    ) -> Result<()>;
+    async fn update_last_message(&self, session_id: &str, message_id: &str, seq: i64)
+    -> Result<()>;
 
     /// 批量更新参与者的未读数
     async fn batch_update_unread_count(
@@ -194,6 +190,9 @@ pub trait MessageStateRepository: Send + Sync {
     async fn is_burned(&self, message_id: &str, user_id: &str) -> Result<bool>;
 
     /// 批量检查消息是否已删除（用于消息查询时过滤）
-    async fn batch_check_deleted(&self, user_id: &str, message_ids: &[String]) -> Result<Vec<String>>;
+    async fn batch_check_deleted(
+        &self,
+        user_id: &str,
+        message_ids: &[String],
+    ) -> Result<Vec<String>>;
 }
-

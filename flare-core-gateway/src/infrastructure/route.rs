@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::signaling::router::router_service_client::RouterServiceClient;
 use flare_proto::signaling::router::{SelectPushTargetsRequest, SelectPushTargetsResponse};
-use flare_proto::common::{RequestContext, TenantContext};
 use prost::Message as ProstMessage;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
@@ -55,7 +55,7 @@ impl RouteServiceClient {
             service_name = %self.service_name,
             "Initializing Route Service client..."
         );
-        
+
         // 使用服务发现获取 Channel
         let mut service_client_guard = self.service_client.lock().await;
         if service_client_guard.is_none() {
@@ -70,24 +70,23 @@ impl RouteServiceClient {
                     );
                     anyhow::anyhow!("Failed to create service discover: {}", e)
                 })?;
-            
+
             let discover = discover_result.ok_or_else(|| {
                 anyhow::anyhow!("Service discovery not configured for route service")
             })?;
-            
+
             *service_client_guard = Some(ServiceClient::new(discover));
         }
-        
+
         let service_client = service_client_guard.as_mut().unwrap();
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                error!(
-                    service_name = %self.service_name,
-                    error = %e,
-                    "Failed to get channel from service discovery"
-                );
-                anyhow::anyhow!("Failed to get channel: {}", e)
-            })?;
+        let channel = service_client.get_channel().await.map_err(|e| {
+            error!(
+                service_name = %self.service_name,
+                error = %e,
+                "Failed to get channel from service discovery"
+            );
+            anyhow::anyhow!("Failed to get channel: {}", e)
+        })?;
 
         info!(
             service_name = %self.service_name,
@@ -96,7 +95,7 @@ impl RouteServiceClient {
 
         let client = RouterServiceClient::new(channel);
         *client_guard = Some(client);
-        
+
         info!(
             service_name = %self.service_name,
             "✅ Route Service client initialized successfully"
@@ -112,10 +111,14 @@ impl RouteServiceClient {
         strategy: flare_proto::signaling::router::PushStrategy,
         tenant: Option<TenantContext>,
     ) -> Result<SelectPushTargetsResponse> {
-        self.initialize().await.context("Failed to initialize Route Service client")?;
+        self.initialize()
+            .await
+            .context("Failed to initialize Route Service client")?;
 
         let mut client_guard = self.client.lock().await;
-        let client = client_guard.as_mut().ok_or_else(|| anyhow::anyhow!("Route Service client not available"))?;
+        let client = client_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Route Service client not available"))?;
 
         let request = SelectPushTargetsRequest {
             user_id: user_id.to_string(),
@@ -123,9 +126,11 @@ impl RouteServiceClient {
             tenant,
         };
 
-        let response = client.select_push_targets(tonic::Request::new(request)).await
+        let response = client
+            .select_push_targets(tonic::Request::new(request))
+            .await
             .context("Failed to call SelectPushTargets RPC")?;
-        
+
         Ok(response.into_inner())
     }
 }

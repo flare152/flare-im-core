@@ -19,9 +19,9 @@ impl RouteDomainService {
     /// 注册路由
     pub async fn register_route(&self, svid: String, endpoint: String) -> Result<()> {
         debug!(svid = %svid, endpoint = %endpoint, "Registering route");
-        
+
         let route = Route::new(svid.clone(), endpoint.clone());
-        
+
         // 检查是否已存在
         if let Some(existing) = self.repository.find_by_svid(&svid).await? {
             warn!(
@@ -31,16 +31,16 @@ impl RouteDomainService {
                 "Route already exists, updating"
             );
         }
-        
+
         self.repository.save(route).await?;
-        
+
         Ok(())
     }
 
     /// 解析路由
     pub async fn resolve_route(&self, svid: String) -> Result<Option<String>> {
         debug!(svid = %svid, "Resolving route");
-        
+
         match self.repository.find_by_svid(&svid).await? {
             Some(route) => {
                 debug!(svid = %svid, endpoint = %route.endpoint, "Route found");
@@ -56,10 +56,9 @@ impl RouteDomainService {
     /// 删除路由
     pub async fn unregister_route(&self, svid: String) -> Result<()> {
         debug!(svid = %svid, "Unregistering route");
-        
+
         self.repository.delete(&svid).await?;
-        
+
         Ok(())
     }
 }
-

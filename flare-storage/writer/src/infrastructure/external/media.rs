@@ -36,7 +36,6 @@ impl MediaAttachmentClient {
     }
 }
 
-
 #[async_trait]
 impl MediaAttachmentVerifier for MediaAttachmentClient {
     async fn fetch_metadata(&self, file_ids: &[String]) -> Result<Vec<MediaAttachmentMetadata>> {

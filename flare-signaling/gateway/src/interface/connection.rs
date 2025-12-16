@@ -4,33 +4,33 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use flare_core::common::error::{FlareError as CoreFlareError, Result as CoreResult};
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
 use flare_core::common::protocol::{
     Frame, MessageCommand, Reliability, frame_with_message_command, generate_message_id,
 };
+use flare_core::server::builder::flare::MessageListener;
 use flare_core::server::handle::ServerHandle;
 use flare_core::server::{ConnectionHandler, ConnectionManagerTrait};
-use async_trait::async_trait;
-use flare_core::server::builder::flare::MessageListener;
 use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::domain::repository::SignalingGateway;
-use crate::infrastructure::messaging::message_router::MessageRouter;
-use crate::infrastructure::messaging::ack_sender::AckSender;
-use crate::infrastructure::AckPublisher;
 use crate::application::services::{ConnectionApplicationService, MessageApplicationService};
+use crate::domain::repository::SignalingGateway;
+use crate::infrastructure::AckPublisher;
+use crate::infrastructure::messaging::ack_sender::AckSender;
+use crate::infrastructure::messaging::message_router::MessageRouter;
 #[cfg(feature = "tracing")]
-use flare_im_core::tracing::{set_user_id, set_message_id, set_tenant_id};
-use tracing::instrument;
+use flare_im_core::tracing::{set_message_id, set_tenant_id, set_user_id};
 use prost::Message as ProstMessage;
+use tracing::instrument;
 
 /// 长连接处理器
 ///
 /// 处理客户端长连接的消息接收和推送
-/// 
+///
 /// Gateway 层职责（接口层 - 协议适配）：
 /// - 接收和解析协议帧（Frame）
 /// - 转换协议对象到领域对象
@@ -45,7 +45,15 @@ pub struct LongConnectionHandler {
     message_router: Option<Arc<MessageRouter>>,
     ack_sender: Arc<AckSender>,
     metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
-    session_service_client: Arc<Mutex<Option<flare_proto::session::session_service_client::SessionServiceClient<tonic::transport::Channel>>>>,
+    session_service_client: Arc<
+        Mutex<
+            Option<
+                flare_proto::session::session_service_client::SessionServiceClient<
+                    tonic::transport::Channel,
+                >,
+            >,
+        >,
+    >,
     session_service_discover: Arc<Mutex<Option<ServiceClient>>>,
     // 应用层服务
     pub connection_app_service: Arc<ConnectionApplicationService>,
@@ -64,7 +72,7 @@ impl LongConnectionHandler {
     ) -> Self {
         let server_handle = Arc::new(Mutex::new(None));
         let ack_sender = Arc::new(AckSender::new(server_handle.clone()));
-        
+
         Self {
             signaling_gateway,
             gateway_id,
@@ -80,7 +88,7 @@ impl LongConnectionHandler {
             message_app_service,
         }
     }
-    
+
     /// 带占位符的新构造函数，用于解决循环依赖问题
     pub fn new_with_placeholders(
         signaling_gateway: Arc<dyn SignalingGateway>,
@@ -91,20 +99,24 @@ impl LongConnectionHandler {
     ) -> Self {
         let server_handle = Arc::new(Mutex::new(None));
         let ack_sender = Arc::new(AckSender::new(server_handle.clone()));
-        
+
         // 创建临时的应用服务实例来打破循环依赖
         let session_domain_service = Arc::new(crate::domain::service::session_domain_service::SessionDomainService::new(
             signaling_gateway.clone(),
             Arc::new(crate::domain::service::connection_quality_service::ConnectionQualityService::new()),
             gateway_id.clone(),
         ));
-        
+
         let connection_app_service = Arc::new(ConnectionApplicationService::new(
             session_domain_service.clone(),
-            Arc::new(crate::infrastructure::connection_query::ManagerConnectionQuery::new(Arc::new(flare_core::server::connection::ConnectionManager::new()))),
+            Arc::new(
+                crate::infrastructure::connection_query::ManagerConnectionQuery::new(Arc::new(
+                    flare_core::server::connection::ConnectionManager::new(),
+                )),
+            ),
             metrics.clone(),
         ));
-        
+
         let message_app_service = Arc::new(MessageApplicationService::new(
             message_router.clone(),
             ack_sender.clone(),
@@ -113,7 +125,7 @@ impl LongConnectionHandler {
             None, // session_service_client
             gateway_id.clone(),
         ));
-        
+
         Self {
             signaling_gateway,
             gateway_id,
@@ -167,7 +179,7 @@ impl LongConnectionHandler {
     }
 
     /// 获取连接对应的会话ID
-    /// 
+    ///
     /// 注意：Gateway 不存储会话信息，会话由 Signaling Online 管理
     /// 这里返回 None，session_id 应该从消息 payload 中提取
     async fn get_session_id_for_connection(&self, connection_id: &str) -> Option<String> {
@@ -214,7 +226,7 @@ impl LongConnectionHandler {
                 return Ok(());
             }
         };
-        
+
         // 获取会话ID
         let session_id = match self.get_session_id_for_connection(connection_id).await {
             Some(session_id) => session_id,
@@ -232,16 +244,14 @@ impl LongConnectionHandler {
     }
 
     /// 推送消息到客户端
-    pub async fn push_message_to_user(
-        &self,
-        user_id: &str,
-        message: Vec<u8>,
-    ) -> CoreResult<()> {
+    pub async fn push_message_to_user(&self, user_id: &str, message: Vec<u8>) -> CoreResult<()> {
         let handle_guard = self.server_handle.lock().await;
         let handle = match handle_guard.as_ref() {
             Some(handle) => handle,
             None => {
-                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+                return Err(CoreFlareError::system(
+                    "ServerHandle not initialized".to_string(),
+                ));
             }
         };
 
@@ -255,7 +265,9 @@ impl LongConnectionHandler {
 
         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
 
-        handle.send_to_user(user_id, &frame).await
+        handle
+            .send_to_user(user_id, &frame)
+            .await
             .map_err(|e| CoreFlareError::system(format!("Failed to send message: {}", e)))?;
 
         info!(
@@ -275,7 +287,9 @@ impl LongConnectionHandler {
         let handle = match handle_guard.as_ref() {
             Some(handle) => handle,
             None => {
-                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+                return Err(CoreFlareError::system(
+                    "ServerHandle not initialized".to_string(),
+                ));
             }
         };
 
@@ -289,7 +303,9 @@ impl LongConnectionHandler {
 
         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
 
-        handle.send_to(connection_id, &frame).await
+        handle
+            .send_to(connection_id, &frame)
+            .await
             .map_err(|e| CoreFlareError::system(format!("Failed to send message: {}", e)))?;
 
         debug!(
@@ -309,14 +325,17 @@ impl LongConnectionHandler {
         let handle = match handle_guard.as_ref() {
             Some(handle) => handle,
             None => {
-                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+                return Err(CoreFlareError::system(
+                    "ServerHandle not initialized".to_string(),
+                ));
             }
         };
 
         // 将 ServerPacket 序列化为字节
         let mut packet_data = Vec::new();
-        packet.encode(&mut packet_data)
-            .map_err(|e| CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e)))?;
+        packet.encode(&mut packet_data).map_err(|e| {
+            CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e))
+        })?;
 
         // 创建推送命令
         let cmd = MessageCommand {
@@ -330,7 +349,9 @@ impl LongConnectionHandler {
         let message_id = cmd.message_id.clone();
         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
 
-        handle.send_to(connection_id, &frame).await
+        handle
+            .send_to(connection_id, &frame)
+            .await
             .map_err(|e| CoreFlareError::system(format!("Failed to send packet: {}", e)))?;
 
         debug!(
@@ -351,14 +372,17 @@ impl LongConnectionHandler {
         let handle = match handle_guard.as_ref() {
             Some(handle) => handle,
             None => {
-                return Err(CoreFlareError::system("ServerHandle not initialized".to_string()));
+                return Err(CoreFlareError::system(
+                    "ServerHandle not initialized".to_string(),
+                ));
             }
         };
 
         // 将 ServerPacket 序列化为字节
         let mut packet_data = Vec::new();
-        packet.encode(&mut packet_data)
-            .map_err(|e| CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e)))?;
+        packet.encode(&mut packet_data).map_err(|e| {
+            CoreFlareError::serialization_error(format!("Failed to encode ServerPacket: {}", e))
+        })?;
 
         // 创建推送命令
         let cmd = MessageCommand {
@@ -372,7 +396,9 @@ impl LongConnectionHandler {
         let message_id = cmd.message_id.clone();
         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
 
-        handle.send_to_user(user_id, &frame).await
+        handle
+            .send_to_user(user_id, &frame)
+            .await
             .map_err(|e| CoreFlareError::system(format!("Failed to send packet: {}", e)))?;
 
         info!(
@@ -390,11 +416,11 @@ impl MessageListener for LongConnectionHandler {
     async fn on_message(&self, frame: &Frame, connection_id: &str) -> CoreResult<Option<Frame>> {
         self.handle_frame_impl(frame, connection_id).await
     }
-    
+
     async fn on_connect(&self, connection_id: &str) -> CoreResult<()> {
         self.on_connect_impl(connection_id).await
     }
-    
+
     async fn on_disconnect(&self, connection_id: &str, _reason: Option<&str>) -> CoreResult<()> {
         self.on_disconnect_impl(connection_id).await
     }
@@ -406,11 +432,11 @@ impl ConnectionHandler for LongConnectionHandler {
     async fn handle_frame(&self, frame: &Frame, connection_id: &str) -> CoreResult<Option<Frame>> {
         self.handle_frame_impl(frame, connection_id).await
     }
-    
+
     async fn on_connect(&self, connection_id: &str) -> CoreResult<()> {
         self.on_connect_impl(connection_id).await
     }
-    
+
     async fn on_disconnect(&self, connection_id: &str) -> CoreResult<()> {
         self.on_disconnect_impl(connection_id).await
     }
@@ -418,7 +444,11 @@ impl ConnectionHandler for LongConnectionHandler {
 
 impl LongConnectionHandler {
     /// 处理消息帧的内部实现（协议适配层）
-    async fn handle_frame_impl(&self, frame: &Frame, connection_id: &str) -> CoreResult<Option<Frame>> {
+    async fn handle_frame_impl(
+        &self,
+        frame: &Frame,
+        connection_id: &str,
+    ) -> CoreResult<Option<Frame>> {
         let start_time = std::time::Instant::now();
         info!(
             "[LongConnectionHandler] handle_frame_impl: 收到 Frame, connection_id={}, frame.message_id={}",
@@ -451,7 +481,10 @@ impl LongConnectionHandler {
                         message_id = %message_id,
                         "Processing message send request"
                     );
-                    match self.handle_message_send(frame, msg_cmd, connection_id).await {
+                    match self
+                        .handle_message_send(frame, msg_cmd, connection_id)
+                        .await
+                    {
                         Ok(_) => {
                             debug!(
                                 connection_id = %connection_id,
@@ -484,65 +517,132 @@ impl LongConnectionHandler {
 
                 match custom_cmd.name.as_str() {
                     "SessionBootstrap" => {
-                        use flare_proto::session::{SessionBootstrapRequest, SessionBootstrapResponse};
-                        let req = SessionBootstrapRequest::decode(&custom_cmd.data[..])
-                            .map_err(|e| CoreFlareError::deserialization_error(format!("decode SessionBootstrapRequest: {}", e)))?;
+                        use flare_proto::session::{
+                            SessionBootstrapRequest, SessionBootstrapResponse,
+                        };
+                        let req =
+                            SessionBootstrapRequest::decode(&custom_cmd.data[..]).map_err(|e| {
+                                CoreFlareError::deserialization_error(format!(
+                                    "decode SessionBootstrapRequest: {}",
+                                    e
+                                ))
+                            })?;
                         let mut client = self.ensure_session_client().await?;
-                        let resp = client.session_bootstrap(req).await
+                        let resp = client
+                            .session_bootstrap(req)
+                            .await
                             .map_err(|status| CoreFlareError::system(status.to_string()))?
                             .into_inner();
                         let mut buf = Vec::new();
-                        SessionBootstrapResponse::encode(&resp, &mut buf)
-                            .map_err(|e| CoreFlareError::serialization_error(format!("encode SessionBootstrapResponse: {}", e)))?;
+                        SessionBootstrapResponse::encode(&resp, &mut buf).map_err(|e| {
+                            CoreFlareError::serialization_error(format!(
+                                "encode SessionBootstrapResponse: {}",
+                                e
+                            ))
+                        })?;
                         let mut metadata = std::collections::HashMap::new();
                         metadata.insert("request_id".to_string(), request_id.as_bytes().to_vec());
-                        let response_frame = flare_core::common::protocol::builder::FrameBuilder::new()
-                            .with_command(flare_core::common::protocol::flare::core::commands::Command { r#type: Some(CommandType::Custom(flare_core::common::protocol::CustomCommand { name: "SessionBootstrap".to_string(), data: buf, metadata })) })
-                            .with_message_id(request_id)
-                            .with_reliability(Reliability::AtLeastOnce)
-                            .build();
+                        let response_frame =
+                            flare_core::common::protocol::builder::FrameBuilder::new()
+                                .with_command(
+                                    flare_core::common::protocol::flare::core::commands::Command {
+                                        r#type: Some(CommandType::Custom(
+                                            flare_core::common::protocol::CustomCommand {
+                                                name: "SessionBootstrap".to_string(),
+                                                data: buf,
+                                                metadata,
+                                            },
+                                        )),
+                                    },
+                                )
+                                .with_message_id(request_id)
+                                .with_reliability(Reliability::AtLeastOnce)
+                                .build();
                         return Ok(Some(response_frame));
                     }
                     "SyncMessages" => {
                         use flare_proto::session::{SyncMessagesRequest, SyncMessagesResponse};
                         use prost::Message as _;
-                        let req = SyncMessagesRequest::decode(&custom_cmd.data[..])
-                            .map_err(|e| CoreFlareError::deserialization_error(format!("decode SyncMessagesRequest: {}", e)))?;
+                        let req =
+                            SyncMessagesRequest::decode(&custom_cmd.data[..]).map_err(|e| {
+                                CoreFlareError::deserialization_error(format!(
+                                    "decode SyncMessagesRequest: {}",
+                                    e
+                                ))
+                            })?;
                         let mut client = self.ensure_session_client().await?;
-                        let resp = client.sync_messages(req).await
+                        let resp = client
+                            .sync_messages(req)
+                            .await
                             .map_err(|status| CoreFlareError::system(status.to_string()))?
                             .into_inner();
                         let mut buf = Vec::new();
-                        SyncMessagesResponse::encode(&resp, &mut buf)
-                            .map_err(|e| CoreFlareError::serialization_error(format!("encode SyncMessagesResponse: {}", e)))?;
+                        SyncMessagesResponse::encode(&resp, &mut buf).map_err(|e| {
+                            CoreFlareError::serialization_error(format!(
+                                "encode SyncMessagesResponse: {}",
+                                e
+                            ))
+                        })?;
                         let mut metadata = std::collections::HashMap::new();
                         metadata.insert("request_id".to_string(), request_id.as_bytes().to_vec());
-                        let response_frame = flare_core::common::protocol::builder::FrameBuilder::new()
-                            .with_command(flare_core::common::protocol::flare::core::commands::Command { r#type: Some(CommandType::Custom(flare_core::common::protocol::CustomCommand { name: "SyncMessages".to_string(), data: buf, metadata })) })
-                            .with_message_id(request_id)
-                            .with_reliability(Reliability::AtLeastOnce)
-                            .build();
+                        let response_frame =
+                            flare_core::common::protocol::builder::FrameBuilder::new()
+                                .with_command(
+                                    flare_core::common::protocol::flare::core::commands::Command {
+                                        r#type: Some(CommandType::Custom(
+                                            flare_core::common::protocol::CustomCommand {
+                                                name: "SyncMessages".to_string(),
+                                                data: buf,
+                                                metadata,
+                                            },
+                                        )),
+                                    },
+                                )
+                                .with_message_id(request_id)
+                                .with_reliability(Reliability::AtLeastOnce)
+                                .build();
                         return Ok(Some(response_frame));
                     }
                     "ListSessions" => {
                         use flare_proto::session::{ListSessionsRequest, ListSessionsResponse};
-                        let req = ListSessionsRequest::decode(&custom_cmd.data[..])
-                            .map_err(|e| CoreFlareError::deserialization_error(format!("decode ListSessionsRequest: {}", e)))?;
+                        let req =
+                            ListSessionsRequest::decode(&custom_cmd.data[..]).map_err(|e| {
+                                CoreFlareError::deserialization_error(format!(
+                                    "decode ListSessionsRequest: {}",
+                                    e
+                                ))
+                            })?;
                         let mut client = self.ensure_session_client().await?;
-                        let resp = client.list_sessions(req).await
+                        let resp = client
+                            .list_sessions(req)
+                            .await
                             .map_err(|status| CoreFlareError::system(status.to_string()))?
                             .into_inner();
                         let mut buf = Vec::new();
                         if let Err(e) = ListSessionsResponse::encode(&resp, &mut buf) {
-                            return Err(CoreFlareError::serialization_error(format!("encode ListSessionsResponse: {}", e)));
+                            return Err(CoreFlareError::serialization_error(format!(
+                                "encode ListSessionsResponse: {}",
+                                e
+                            )));
                         }
                         let mut metadata = std::collections::HashMap::new();
                         metadata.insert("request_id".to_string(), request_id.as_bytes().to_vec());
-                        let response_frame = flare_core::common::protocol::builder::FrameBuilder::new()
-                            .with_command(flare_core::common::protocol::flare::core::commands::Command { r#type: Some(CommandType::Custom(flare_core::common::protocol::CustomCommand { name: "ListSessions".to_string(), data: buf, metadata })) })
-                            .with_message_id(request_id)
-                            .with_reliability(Reliability::AtLeastOnce)
-                            .build();
+                        let response_frame =
+                            flare_core::common::protocol::builder::FrameBuilder::new()
+                                .with_command(
+                                    flare_core::common::protocol::flare::core::commands::Command {
+                                        r#type: Some(CommandType::Custom(
+                                            flare_core::common::protocol::CustomCommand {
+                                                name: "ListSessions".to_string(),
+                                                data: buf,
+                                                metadata,
+                                            },
+                                        )),
+                                    },
+                                )
+                                .with_message_id(request_id)
+                                .with_reliability(Reliability::AtLeastOnce)
+                                .build();
                         return Ok(Some(response_frame));
                     }
                     _ => {}
@@ -558,9 +658,15 @@ impl LongConnectionHandler {
         Ok(None)
     }
 
-    async fn ensure_session_client(&self) -> CoreResult<flare_proto::session::session_service_client::SessionServiceClient<tonic::transport::Channel>> {
-        use tonic::transport::{Channel, Endpoint};
+    async fn ensure_session_client(
+        &self,
+    ) -> CoreResult<
+        flare_proto::session::session_service_client::SessionServiceClient<
+            tonic::transport::Channel,
+        >,
+    > {
         use flare_im_core::service_names::{SESSION, get_service_name};
+        use tonic::transport::{Channel, Endpoint};
         let mut guard = self.session_service_client.lock().await;
         if let Some(client) = guard.as_ref() {
             return Ok(client.clone());
@@ -568,7 +674,8 @@ impl LongConnectionHandler {
         let mut discover_guard = self.session_service_discover.lock().await;
         if discover_guard.is_none() {
             let name = get_service_name(SESSION);
-            let discover = flare_im_core::discovery::create_discover(&name).await
+            let discover = flare_im_core::discovery::create_discover(&name)
+                .await
                 .map_err(|e| CoreFlareError::system(format!("create discover: {}", e)))?;
             if let Some(d) = discover {
                 *discover_guard = Some(ServiceClient::new(d));
@@ -578,19 +685,30 @@ impl LongConnectionHandler {
             match service_client.get_channel().await {
                 Ok(ch) => ch,
                 Err(_e) => {
-                    let addr = std::env::var("SESSION_GRPC_ADDR").ok().unwrap_or_else(|| "127.0.0.1:50090".to_string());
+                    let addr = std::env::var("SESSION_GRPC_ADDR")
+                        .ok()
+                        .unwrap_or_else(|| "127.0.0.1:50090".to_string());
                     let endpoint = Endpoint::from_shared(format!("http://{}", addr))
                         .map_err(|err| CoreFlareError::system(err.to_string()))?;
-                    endpoint.connect().await.map_err(|err| CoreFlareError::system(err.to_string()))?
+                    endpoint
+                        .connect()
+                        .await
+                        .map_err(|err| CoreFlareError::system(err.to_string()))?
                 }
             }
         } else {
-            let addr = std::env::var("SESSION_GRPC_ADDR").ok().unwrap_or_else(|| "127.0.0.1:50090".to_string());
+            let addr = std::env::var("SESSION_GRPC_ADDR")
+                .ok()
+                .unwrap_or_else(|| "127.0.0.1:50090".to_string());
             let endpoint = Endpoint::from_shared(format!("http://{}", addr))
                 .map_err(|err| CoreFlareError::system(err.to_string()))?;
-            endpoint.connect().await.map_err(|err| CoreFlareError::system(err.to_string()))?
+            endpoint
+                .connect()
+                .await
+                .map_err(|err| CoreFlareError::system(err.to_string()))?
         };
-        let client = flare_proto::session::session_service_client::SessionServiceClient::new(channel);
+        let client =
+            flare_proto::session::session_service_client::SessionServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }
@@ -610,10 +728,11 @@ impl LongConnectionHandler {
 
         // 获取连接信息
         let connection_info = self.get_connection_info(connection_id).await;
-        
+
         if let Some((user_id, device_id)) = connection_info {
             // 委托给应用层服务处理
-            if let Err(err) = self.connection_app_service
+            if let Err(err) = self
+                .connection_app_service
                 .handle_connect(connection_id, &user_id, &device_id, active_count)
                 .await
             {
@@ -650,7 +769,8 @@ impl LongConnectionHandler {
         // 获取 user_id
         if let Some(user_id) = self.user_id_for_connection(connection_id).await {
             // 检查是否还有其他连接
-            let has_other_connections = if let Some(ref manager) = *self.manager_trait.lock().await {
+            let has_other_connections = if let Some(ref manager) = *self.manager_trait.lock().await
+            {
                 let count = manager.connection_count().await;
                 count > 1
             } else {
@@ -658,7 +778,8 @@ impl LongConnectionHandler {
             };
 
             // 委托给应用层服务处理
-            if let Err(err) = self.connection_app_service
+            if let Err(err) = self
+                .connection_app_service
                 .handle_disconnect(connection_id, &user_id, active_count, has_other_connections)
                 .await
             {
@@ -692,8 +813,16 @@ impl LongConnectionHandler {
             .await?;
 
         // 推送窗口 ACK 更新会话游标（如果提供）
-        if let (Some(session_id_bytes), Some(ack_seq_bytes)) = (msg_cmd.metadata.get("session_id"), msg_cmd.metadata.get("ack_seq")) {
-            if let (Ok(session_id), Some(ack_seq)) = (String::from_utf8(session_id_bytes.clone()), std::str::from_utf8(ack_seq_bytes.as_slice()).ok().and_then(|s| s.parse::<i64>().ok())) {
+        if let (Some(session_id_bytes), Some(ack_seq_bytes)) = (
+            msg_cmd.metadata.get("session_id"),
+            msg_cmd.metadata.get("ack_seq"),
+        ) {
+            if let (Ok(session_id), Some(ack_seq)) = (
+                String::from_utf8(session_id_bytes.clone()),
+                std::str::from_utf8(ack_seq_bytes.as_slice())
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok()),
+            ) {
                 let mut client = self.ensure_session_client().await?;
                 let req = flare_proto::session::UpdateCursorRequest {
                     user_id: user_id.clone(),
@@ -726,7 +855,7 @@ impl LongConnectionHandler {
             "[LongConnectionHandler] handle_message_send: 开始处理, connection_id={}, message_id={}",
             connection_id, msg_cmd.message_id
         );
-        
+
         let user_id = self
             .user_id_for_connection(connection_id)
             .await
@@ -762,7 +891,8 @@ impl LongConnectionHandler {
             "[LongConnectionHandler] handle_message_send: 准备调用 message_app_service.handle_message_send, connection_id={}, user_id={}, message_id={}",
             connection_id, user_id, msg_cmd.message_id
         );
-        match self.message_app_service
+        match self
+            .message_app_service
             .handle_message_send(connection_id, &user_id, msg_cmd, tenant_id.as_deref())
             .await
         {
@@ -771,7 +901,7 @@ impl LongConnectionHandler {
                     "[LongConnectionHandler] handle_message_send: message_app_service.handle_message_send 成功, connection_id={}, user_id={}, message_id={}",
                     connection_id, user_id, msg_cmd.message_id
                 );
-        Ok(())
+                Ok(())
             }
             Err(e) => {
                 error!(

@@ -1,11 +1,12 @@
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 
+use flare_proto::common::Message;
 use flare_proto::common::{
     ConflictResolution as ProtoConflictResolution, DeviceState as ProtoDeviceState,
-    SessionLifecycleState as ProtoSessionLifecycleState, SessionVisibility as ProtoSessionVisibility,
+    SessionLifecycleState as ProtoSessionLifecycleState,
+    SessionVisibility as ProtoSessionVisibility,
 };
-use flare_proto::common::Message;
 
 #[derive(Clone, Debug)]
 pub struct SessionSummary {
@@ -92,21 +93,13 @@ pub enum ConflictResolutionPolicy {
 impl ConflictResolutionPolicy {
     pub fn as_proto(&self) -> i32 {
         match self {
-            ConflictResolutionPolicy::Unspecified => {
-                ProtoConflictResolution::Unspecified as i32
-            }
-            ConflictResolutionPolicy::Exclusive => {
-                ProtoConflictResolution::Exclusive as i32
-            }
+            ConflictResolutionPolicy::Unspecified => ProtoConflictResolution::Unspecified as i32,
+            ConflictResolutionPolicy::Exclusive => ProtoConflictResolution::Exclusive as i32,
             ConflictResolutionPolicy::PlatformExclusive => {
                 ProtoConflictResolution::PlatformExclusive as i32
             }
-            ConflictResolutionPolicy::Coexist => {
-                ProtoConflictResolution::Coexist as i32
-            }
-            ConflictResolutionPolicy::ForceLogout => {
-                ProtoConflictResolution::ForceLogout as i32
-            }
+            ConflictResolutionPolicy::Coexist => ProtoConflictResolution::Coexist as i32,
+            ConflictResolutionPolicy::ForceLogout => ProtoConflictResolution::ForceLogout as i32,
         }
     }
 
@@ -123,9 +116,7 @@ impl ConflictResolutionPolicy {
     pub fn from_proto(value: i32) -> Self {
         match ProtoConflictResolution::try_from(value).ok() {
             Some(ProtoConflictResolution::Exclusive) => Self::Exclusive,
-            Some(ProtoConflictResolution::PlatformExclusive) => {
-                Self::PlatformExclusive
-            }
+            Some(ProtoConflictResolution::PlatformExclusive) => Self::PlatformExclusive,
             Some(ProtoConflictResolution::Coexist) => Self::Coexist,
             Some(ProtoConflictResolution::ForceLogout) => Self::ForceLogout,
             _ => Self::Unspecified,
@@ -237,10 +228,18 @@ impl SessionLifecycleState {
     pub fn as_proto(&self) -> i32 {
         match self {
             SessionLifecycleState::Unspecified => ProtoSessionLifecycleState::Unspecified as i32,
-            SessionLifecycleState::Active => ProtoSessionLifecycleState::SessionLifecycleActive as i32,
-            SessionLifecycleState::Suspended => ProtoSessionLifecycleState::SessionLifecycleSuspended as i32,
-            SessionLifecycleState::Archived => ProtoSessionLifecycleState::SessionLifecycleArchived as i32,
-            SessionLifecycleState::Deleted => ProtoSessionLifecycleState::SessionLifecycleDeleted as i32,
+            SessionLifecycleState::Active => {
+                ProtoSessionLifecycleState::SessionLifecycleActive as i32
+            }
+            SessionLifecycleState::Suspended => {
+                ProtoSessionLifecycleState::SessionLifecycleSuspended as i32
+            }
+            SessionLifecycleState::Archived => {
+                ProtoSessionLifecycleState::SessionLifecycleArchived as i32
+            }
+            SessionLifecycleState::Deleted => {
+                ProtoSessionLifecycleState::SessionLifecycleDeleted as i32
+            }
         }
     }
 
@@ -294,9 +293,9 @@ pub struct Thread {
 /// 话题排序方式
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThreadSortOrder {
-    UpdatedDesc,      // 按更新时间降序（默认）
-    UpdatedAsc,       // 按更新时间升序
-    ReplyCountDesc,   // 按回复数降序
+    UpdatedDesc,    // 按更新时间降序（默认）
+    UpdatedAsc,     // 按更新时间升序
+    ReplyCountDesc, // 按回复数降序
 }
 
 /// 会话领域配置值对象（只包含领域相关的配置）

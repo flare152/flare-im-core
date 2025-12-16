@@ -4,9 +4,8 @@ use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::application::commands::{
-    BatchAcknowledgeCommand, CreateSessionCommand, DeleteSessionCommand,
-    ForceSessionSyncCommand, ManageParticipantsCommand, UpdateCursorCommand,
-    UpdatePresenceCommand, UpdateSessionCommand,
+    BatchAcknowledgeCommand, CreateSessionCommand, DeleteSessionCommand, ForceSessionSyncCommand,
+    ManageParticipantsCommand, UpdateCursorCommand, UpdatePresenceCommand, UpdateSessionCommand,
 };
 use crate::application::queries::{
     ListSessionsQuery, SearchSessionsQuery, SessionBootstrapQuery, SyncMessagesQuery,
@@ -26,10 +25,7 @@ impl SessionCommandHandler {
     }
 
     /// 处理批量确认命令
-    pub async fn handle_batch_acknowledge(
-        &self,
-        command: BatchAcknowledgeCommand,
-    ) -> Result<()> {
+    pub async fn handle_batch_acknowledge(&self, command: BatchAcknowledgeCommand) -> Result<()> {
         debug!(
             user_id = %command.user_id,
             count = command.cursors.len(),
@@ -209,7 +205,9 @@ pub struct SessionQueryHandler {
 impl SessionQueryHandler {
     pub fn new(
         _session_repo: Arc<dyn crate::domain::repository::SessionRepository>,
-        _message_provider: Option<Arc<dyn crate::domain::repository::MessageProvider + Send + Sync>>,
+        _message_provider: Option<
+            Arc<dyn crate::domain::repository::MessageProvider + Send + Sync>,
+        >,
         domain_service: Arc<SessionDomainService>,
     ) -> Self {
         Self { domain_service }
@@ -219,7 +217,11 @@ impl SessionQueryHandler {
     pub async fn handle_list_sessions(
         &self,
         query: ListSessionsQuery,
-    ) -> Result<(Vec<crate::domain::model::SessionSummary>, Option<String>, bool)> {
+    ) -> Result<(
+        Vec<crate::domain::model::SessionSummary>,
+        Option<String>,
+        bool,
+    )> {
         debug!(
             user_id = %query.user_id,
             cursor = ?query.cursor,
@@ -312,4 +314,3 @@ impl SessionQueryHandler {
         Ok(result)
     }
 }
-

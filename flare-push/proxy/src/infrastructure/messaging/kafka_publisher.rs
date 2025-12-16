@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
+use async_trait::async_trait;
 use flare_proto::flare::push::v1::PushAckRequest;
+use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_server_core::kafka::build_kafka_producer;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use async_trait::async_trait;
 use tracing::info;
 
 use crate::domain::repositories::PushEventPublisher;
@@ -21,8 +21,10 @@ pub struct KafkaPushEventPublisher {
 impl KafkaPushEventPublisher {
     pub fn new(config: Arc<PushProxyConfig>) -> Result<Self> {
         // 使用统一的 Kafka 生产者构建器（从 flare-server-core）
-        let producer = build_kafka_producer(config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig)
-            .map_err(|err| anyhow!("failed to create Kafka producer: {err}"))?;
+        let producer = build_kafka_producer(
+            config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig
+        )
+        .map_err(|err| anyhow!("failed to create Kafka producer: {err}"))?;
 
         Ok(Self {
             config,
@@ -30,7 +32,6 @@ impl KafkaPushEventPublisher {
         })
     }
 }
-
 
 #[async_trait]
 impl PushEventPublisher for KafkaPushEventPublisher {
@@ -67,7 +68,9 @@ impl PushEventPublisher for KafkaPushEventPublisher {
     async fn publish_ack(&self, request: &PushAckRequest) -> Result<()> {
         let payload = request.encode_to_vec();
         // 使用 message_id 作为 key，确保同一消息的 ACK 进入同一分区
-        let key = request.ack.as_ref()
+        let key = request
+            .ack
+            .as_ref()
             .map(|ack| ack.message_id.as_str())
             .unwrap_or("");
         let record = FutureRecord::to(&self.config.ack_topic)

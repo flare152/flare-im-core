@@ -104,4 +104,3 @@ impl ThreadDomainService {
         self.thread_repo.add_participant(thread_id, user_id).await
     }
 }
-

@@ -2,10 +2,10 @@
 //!
 //! 封装连接管理的核心业务逻辑
 
+use flare_proto::signaling::{HeartbeatRequest, LoginRequest, LogoutRequest};
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use std::sync::Arc;
-use flare_server_core::error::{Result, ErrorBuilder, ErrorCode};
-use flare_proto::signaling::{LoginRequest, LogoutRequest, HeartbeatRequest};
-use tracing::{info, warn, instrument};
+use tracing::{info, instrument, warn};
 
 use crate::domain::repository::SignalingGateway;
 use crate::domain::service::ConnectionQualityService;
@@ -68,7 +68,7 @@ impl ConnectionDomainService {
         // 构建 metadata，包含 gateway_id
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("gateway_id".to_string(), self.config.gateway_id.clone());
-        
+
         let login_request = LoginRequest {
             user_id: user_id.to_string(),
             token: String::new(),
@@ -80,7 +80,7 @@ impl ConnectionDomainService {
             device_platform: "unknown".to_string(),
             app_version: "unknown".to_string(),
             desired_conflict_strategy: 0,
-            device_priority: 2,  // Normal 优先级
+            device_priority: 2, // Normal 优先级
             token_version: 0,
             initial_quality: None,
             resume_session_id: String::new(),
@@ -89,8 +89,9 @@ impl ConnectionDomainService {
         // 调用 Signaling Online 服务，添加超时保护
         let login_result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.signaling_gateway.login(login_request)
-        ).await;
+            self.signaling_gateway.login(login_request),
+        )
+        .await;
 
         match login_result {
             Ok(Ok(response)) => {
@@ -110,7 +111,8 @@ impl ConnectionDomainService {
                     Err(ErrorBuilder::new(
                         ErrorCode::OperationFailed,
                         format!("Failed to register connection: {}", response.error_message),
-                    ).build_error())
+                    )
+                    .build_error())
                 }
             }
             Ok(Err(e)) => {
@@ -122,17 +124,18 @@ impl ConnectionDomainService {
                 Err(ErrorBuilder::new(
                     ErrorCode::InternalError,
                     format!("Signaling login failed: {}", e),
-                ).build_error())
+                )
+                .build_error())
             }
             Err(_) => {
                 warn!(
                     user_id = %user_id,
                     "Timeout while calling signaling login (5s)"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::OperationTimeout,
-                    "Signaling login timeout",
-                ).build_error())
+                Err(
+                    ErrorBuilder::new(ErrorCode::OperationTimeout, "Signaling login timeout")
+                        .build_error(),
+                )
             }
         }
     }
@@ -141,7 +144,11 @@ impl ConnectionDomainService {
     ///
     /// 通知 Signaling Online 服务注销用户连接
     #[instrument(skip(self), fields(user_id))]
-    pub async fn unregister_connection(&self, user_id: &str, session_id: Option<&str>) -> Result<()> {
+    pub async fn unregister_connection(
+        &self,
+        user_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         let logout_request = LogoutRequest {
             user_id: user_id.to_string(),
             session_id: session_id.unwrap_or("").to_string(),
@@ -158,7 +165,8 @@ impl ConnectionDomainService {
             return Err(ErrorBuilder::new(
                 ErrorCode::InternalError,
                 format!("Signaling logout failed: {}", e),
-            ).build_error());
+            )
+            .build_error());
         }
 
         info!(
@@ -172,13 +180,12 @@ impl ConnectionDomainService {
     ///
     /// 向 Signaling Online 服务发送心跳，保持连接活跃
     #[instrument(skip(self), fields(user_id))]
-    pub async fn refresh_heartbeat(
-        &self,
-        user_id: &str,
-        session_id: &str,
-    ) -> Result<()> {
+    pub async fn refresh_heartbeat(&self, user_id: &str, session_id: &str) -> Result<()> {
         // 从链接质量服务获取当前连接质量
-        let current_quality = self.quality_service.get_quality(session_id).await
+        let current_quality = self
+            .quality_service
+            .get_quality(session_id)
+            .await
             .map(|metrics| flare_proto::common::ConnectionQuality {
                 rtt_ms: metrics.rtt_ms,
                 packet_loss_rate: metrics.packet_loss_rate,
@@ -194,12 +201,14 @@ impl ConnectionDomainService {
             tenant: None,
             current_quality,
         };
-        
+
         // 添加超时保护
         match tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            self.signaling_gateway.heartbeat(heartbeat_request)
-        ).await {
+            self.signaling_gateway.heartbeat(heartbeat_request),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 tracing::debug!(
                     user_id = %user_id,
@@ -207,7 +216,7 @@ impl ConnectionDomainService {
                     "Heartbeat sent successfully"
                 );
                 Ok(())
-            },
+            }
             Ok(Err(e)) => {
                 warn!(
                     error = %e,
@@ -215,21 +224,21 @@ impl ConnectionDomainService {
                     session_id = %session_id,
                     "Failed to send heartbeat"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::InternalError,
-                    format!("Heartbeat failed: {}", e),
-                ).build_error())
-            },
+                Err(
+                    ErrorBuilder::new(ErrorCode::InternalError, format!("Heartbeat failed: {}", e))
+                        .build_error(),
+                )
+            }
             Err(_) => {
                 warn!(
                     user_id = %user_id,
                     session_id = %session_id,
                     "Timeout sending heartbeat (3s)"
                 );
-                Err(ErrorBuilder::new(
-                    ErrorCode::OperationTimeout,
-                    "Heartbeat timeout",
-                ).build_error())
+                Err(
+                    ErrorBuilder::new(ErrorCode::OperationTimeout, "Heartbeat timeout")
+                        .build_error(),
+                )
             }
         }
     }

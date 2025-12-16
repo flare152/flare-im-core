@@ -15,4 +15,3 @@ pub struct BatchExecutePushTasksCommand {
     /// 批量任务
     pub tasks: Vec<PushDispatchTask>,
 }
-

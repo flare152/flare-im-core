@@ -1,10 +1,8 @@
 //! ACK状态Redis管理器
 //! 实现基于Redis的ACK状态暂存机制，用于支持ACK重传判断和状态查询
 
-use redis::{Client, AsyncCommands, RedisResult, RedisError};
+use redis::{AsyncCommands, Client, RedisError, RedisResult};
 use serde::{Deserialize, Serialize};
-// use std::time::Duration;
-// use tokio::sync::OnceCell;
 
 /// ACK状态信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,13 +80,19 @@ impl RedisAckManager {
     pub async fn store_ack_status(&self, ack_info: &AckStatusInfo) -> RedisResult<()> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let key = self.format_key(&ack_info.message_id, &ack_info.user_id);
-        let value = serde_json::to_string(ack_info).map_err(|e| RedisError::from((redis::ErrorKind::TypeError, "JSON serialization error", e.to_string())))?;
+        let value = serde_json::to_string(ack_info).map_err(|e| {
+            RedisError::from((
+                redis::ErrorKind::TypeError,
+                "JSON serialization error",
+                e.to_string(),
+            ))
+        })?;
 
         // 根据重要性等级设置不同的过期时间
         let ttl = match ack_info.importance {
-            ImportanceLevel::Low => self.default_ttl / 4,    // 低重要性，较短过期时间
+            ImportanceLevel::Low => self.default_ttl / 4, // 低重要性，较短过期时间
             ImportanceLevel::Medium => self.default_ttl / 2, // 中等重要性，中等过期时间
-            ImportanceLevel::High => self.default_ttl,       // 高重要性，较长过期时间
+            ImportanceLevel::High => self.default_ttl,    // 高重要性，较长过期时间
         };
 
         let _: () = conn.set_ex(&key, value, ttl).await?;
@@ -96,14 +100,24 @@ impl RedisAckManager {
     }
 
     /// 获取ACK状态
-    pub async fn get_ack_status(&self, message_id: &str, user_id: &str) -> RedisResult<Option<AckStatusInfo>> {
+    pub async fn get_ack_status(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> RedisResult<Option<AckStatusInfo>> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let key = self.format_key(message_id, user_id);
         let value: Option<String> = conn.get(&key).await?;
 
         match value {
             Some(data) => {
-                let ack_info: AckStatusInfo = serde_json::from_str(&data).map_err(|e| RedisError::from((redis::ErrorKind::TypeError, "JSON deserialization error", e.to_string())))?;
+                let ack_info: AckStatusInfo = serde_json::from_str(&data).map_err(|e| {
+                    RedisError::from((
+                        redis::ErrorKind::TypeError,
+                        "JSON deserialization error",
+                        e.to_string(),
+                    ))
+                })?;
                 Ok(Some(ack_info))
             }
             None => Ok(None),
@@ -117,7 +131,13 @@ impl RedisAckManager {
 
         for ack_info in ack_infos {
             let key = self.format_key(&ack_info.message_id, &ack_info.user_id);
-            let value = serde_json::to_string(ack_info).map_err(|e| RedisError::from((redis::ErrorKind::TypeError, "JSON serialization error", e.to_string())))?;
+            let value = serde_json::to_string(ack_info).map_err(|e| {
+                RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "JSON serialization error",
+                    e.to_string(),
+                ))
+            })?;
 
             // 根据重要性等级设置不同的过期时间
             let ttl = match ack_info.importance {
@@ -155,20 +175,24 @@ impl RedisAckManager {
     }
 
     /// 扫描所有 ACK keys（使用 SCAN 命令，避免阻塞）
-    /// 
+    ///
     /// 返回所有匹配 `ack:*:*` 模式的 keys
-    /// 
+    ///
     /// # 参数
     /// - `max_keys`: 最大扫描 keys 数量（0 表示不限制）
     /// - `scan_batch_size`: 每次 SCAN 的 keys 数量
-    pub async fn scan_all_ack_keys(&self, max_keys: Option<usize>, scan_batch_size: usize) -> RedisResult<Vec<String>> {
+    pub async fn scan_all_ack_keys(
+        &self,
+        max_keys: Option<usize>,
+        scan_batch_size: usize,
+    ) -> RedisResult<Vec<String>> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let mut keys = Vec::new();
         let mut cursor: u64 = 0;
         let pattern = "ack:*:*";
         let count = scan_batch_size;
         let max_keys = max_keys.unwrap_or(0);
-        
+
         loop {
             let result: (u64, Vec<String>) = redis::cmd("SCAN")
                 .arg(cursor)
@@ -178,10 +202,10 @@ impl RedisAckManager {
                 .arg(count)
                 .query_async(&mut conn)
                 .await?;
-            
+
             cursor = result.0;
             let batch_keys = result.1;
-            
+
             // 如果设置了最大 keys 数量，限制扫描
             if max_keys > 0 {
                 let remaining = max_keys.saturating_sub(keys.len());
@@ -192,44 +216,44 @@ impl RedisAckManager {
             } else {
                 keys.extend(batch_keys);
             }
-            
+
             // 如果 cursor 为 0，表示扫描完成
-            if cursor == 0 {
-                break;
-            }
-            
-            // 如果已达到最大 keys 数量，停止扫描
-            if max_keys > 0 && keys.len() >= max_keys {
+            // 或者如果已达到最大 keys 数量，停止扫描
+            if cursor == 0 || (max_keys > 0 && keys.len() >= max_keys) {
                 break;
             }
         }
-        
+
         Ok(keys)
     }
 
     /// 批量获取 ACK 状态（用于超时检查）
-    /// 
+    ///
     /// 从 Redis keys 中批量获取 ACK 状态信息
-    /// 
+    ///
     /// # 参数
     /// - `keys`: 要查询的 keys 列表
     /// - `batch_size`: Pipeline 批次大小（避免单个 Pipeline 太大）
-    pub async fn batch_get_ack_status_from_keys(&self, keys: &[String], batch_size: usize) -> RedisResult<Vec<AckStatusInfo>> {
+    pub async fn batch_get_ack_status_from_keys(
+        &self,
+        keys: &[String],
+        batch_size: usize,
+    ) -> RedisResult<Vec<AckStatusInfo>> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
         let mut ack_infos = Vec::new();
-        
+
         // 分批处理，避免单个 Pipeline 太大
         for chunk in keys.chunks(batch_size) {
             // 使用 pipeline 批量获取
             let mut pipe = redis::pipe();
             pipe.atomic(); // 原子性执行
-            
+
             for key in chunk {
                 pipe.cmd("GET").arg(key);
             }
-            
+
             let values: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
-            
+
             for value in values {
                 if let Some(data) = value {
                     match serde_json::from_str::<AckStatusInfo>(&data) {
@@ -242,19 +266,22 @@ impl RedisAckManager {
                 }
             }
         }
-        
+
         Ok(ack_infos)
     }
 
     /// 获取统计信息
     pub async fn get_stats(&self) -> RedisResult<RedisStats> {
         let mut conn = self.client.get_multiplexed_async_connection().await?;
-        let info: String = redis::cmd("INFO").arg("memory").query_async(&mut conn).await?;
-        
+        let info: String = redis::cmd("INFO")
+            .arg("memory")
+            .query_async(&mut conn)
+            .await?;
+
         // 解析Redis内存信息
         let mut used_memory = 0u64;
         let mut used_memory_peak = 0u64;
-        
+
         for line in info.lines() {
             if line.starts_with("used_memory:") {
                 if let Some(value) = line.split(':').nth(1) {
@@ -266,7 +293,7 @@ impl RedisAckManager {
                 }
             }
         }
-        
+
         Ok(RedisStats {
             used_memory,
             used_memory_peak,
@@ -292,7 +319,7 @@ mod tests {
     async fn test_ack_status_management() -> RedisResult<()> {
         // 注意：这需要一个运行中的Redis实例
         let manager = RedisAckManager::new("redis://127.0.0.1/", 3600)?;
-        
+
         let ack_info = AckStatusInfo {
             message_id: "test_msg_1".to_string(),
             user_id: "user_1".to_string(),

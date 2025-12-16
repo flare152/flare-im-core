@@ -30,7 +30,7 @@ impl WebhookHookAdapter {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
-        
+
         Ok(Self {
             client,
             endpoint,
@@ -38,7 +38,7 @@ impl WebhookHookAdapter {
             headers,
         })
     }
-    
+
     /// 执行PreSend Hook
     pub async fn pre_send(
         &self,
@@ -47,7 +47,7 @@ impl WebhookHookAdapter {
     ) -> Result<PreSendDecision> {
         use serde_json::json;
         use std::time::{SystemTime, UNIX_EPOCH};
-        
+
         let payload = json!({
             "hook_type": "pre_send",
             "context": {
@@ -65,50 +65,64 @@ impl WebhookHookAdapter {
             },
             "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         });
-        
-        let mut request = self.client.post(&self.endpoint)
+
+        let mut request = self
+            .client
+            .post(&self.endpoint)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30));
-        
+
         // 设置自定义请求头
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
-        
+
         // 如果配置了密钥，生成签名
         if let Some(ref secret) = self.secret {
             let signature = self.generate_signature(&payload.to_string(), secret)?;
             request = request.header("X-Hook-Signature", signature);
         }
-        
-        let response = request.send().await
+
+        let response = request
+            .send()
+            .await
             .context("WebHook PreSend request failed")?;
-        
+
         if response.status().is_success() {
-            let result: serde_json::Value = response.json().await
+            let result: serde_json::Value = response
+                .json()
+                .await
                 .context("Failed to parse WebHook response")?;
-            
+
             // 检查是否允许发送
-            let allow = result.get("allow")
+            let allow = result
+                .get("allow")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
-            
+
             if allow {
                 // 如果允许发送，检查是否有修改后的 draft
                 if let Some(updated_draft) = result.get("draft") {
-                    if let Some(payload_base64) = updated_draft.get("payload").and_then(|v| v.as_str()) {
-                        if let Ok(payload) = base64::engine::general_purpose::STANDARD.decode(payload_base64) {
+                    if let Some(payload_base64) =
+                        updated_draft.get("payload").and_then(|v| v.as_str())
+                    {
+                        if let Ok(payload) =
+                            base64::engine::general_purpose::STANDARD.decode(payload_base64)
+                        {
                             draft.payload = payload;
                         }
                     }
-                    if let Some(headers) = updated_draft.get("headers").and_then(|v| v.as_object()) {
+                    if let Some(headers) = updated_draft.get("headers").and_then(|v| v.as_object())
+                    {
                         for (key, value) in headers {
                             if let Some(value_str) = value.as_str() {
                                 draft.header(key.clone(), value_str.to_string());
                             }
                         }
                     }
-                    if let Some(metadata) = updated_draft.get("metadata").and_then(|v| v.as_object()) {
+                    if let Some(metadata) =
+                        updated_draft.get("metadata").and_then(|v| v.as_object())
+                    {
                         for (key, value) in metadata {
                             if let Some(value_str) = value.as_str() {
                                 draft.metadata(key.clone(), value_str.to_string());
@@ -119,8 +133,9 @@ impl WebhookHookAdapter {
                 Ok(PreSendDecision::Continue)
             } else {
                 use flare_im_core::error::{ErrorBuilder, ErrorCode};
-                let error = ErrorBuilder::new(ErrorCode::PermissionDenied, "WebHook rejected the request")
-                    .build_error();
+                let error =
+                    ErrorBuilder::new(ErrorCode::PermissionDenied, "WebHook rejected the request")
+                        .build_error();
                 Ok(PreSendDecision::Reject { error })
             }
         } else {
@@ -133,7 +148,7 @@ impl WebhookHookAdapter {
             Err(error.into())
         }
     }
-    
+
     /// 执行PostSend Hook
     pub async fn post_send(
         &self,
@@ -143,7 +158,7 @@ impl WebhookHookAdapter {
     ) -> Result<()> {
         use serde_json::json;
         use std::time::{SystemTime, UNIX_EPOCH};
-        
+
         let payload = json!({
             "hook_type": "post_send",
             "context": {
@@ -157,23 +172,27 @@ impl WebhookHookAdapter {
             },
             "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         });
-        
-        let mut request = self.client.post(&self.endpoint)
+
+        let mut request = self
+            .client
+            .post(&self.endpoint)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30));
-        
+
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
-        
+
         if let Some(ref secret) = self.secret {
             let signature = self.generate_signature(&payload.to_string(), secret)?;
             request = request.header("X-Hook-Signature", signature);
         }
-        
-        let response = request.send().await
+
+        let response = request
+            .send()
+            .await
             .context("WebHook PostSend request failed")?;
-        
+
         if response.status().is_success() {
             Ok(())
         } else {
@@ -186,15 +205,11 @@ impl WebhookHookAdapter {
             Err(error.into())
         }
     }
-    
+
     /// 执行Delivery Hook
-    pub async fn delivery(
-        &self,
-        ctx: &HookContext,
-        event: &DeliveryEvent,
-    ) -> Result<()> {
+    pub async fn delivery(&self, ctx: &HookContext, event: &DeliveryEvent) -> Result<()> {
         use serde_json::json;
-        
+
         let payload = json!({
             "hook_type": "delivery",
             "context": {
@@ -206,34 +221,34 @@ impl WebhookHookAdapter {
                 "channel": event.channel,
             },
         });
-        
-        let mut request = self.client.post(&self.endpoint)
+
+        let mut request = self
+            .client
+            .post(&self.endpoint)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30));
-        
+
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
-        
+
         if let Some(ref secret) = self.secret {
             let signature = self.generate_signature(&payload.to_string(), secret)?;
             request = request.header("X-Hook-Signature", signature);
         }
-        
-        let _response = request.send().await
+
+        let _response = request
+            .send()
+            .await
             .context("WebHook Delivery request failed")?;
-        
+
         Ok(())
     }
-    
+
     /// 执行Recall Hook
-    pub async fn recall(
-        &self,
-        ctx: &HookContext,
-        event: &RecallEvent,
-    ) -> Result<PreSendDecision> {
+    pub async fn recall(&self, ctx: &HookContext, event: &RecallEvent) -> Result<PreSendDecision> {
         use serde_json::json;
-        
+
         let payload = json!({
             "hook_type": "recall",
             "context": {
@@ -244,37 +259,47 @@ impl WebhookHookAdapter {
                 "operator_id": event.operator_id,
             },
         });
-        
-        let mut request = self.client.post(&self.endpoint)
+
+        let mut request = self
+            .client
+            .post(&self.endpoint)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30));
-        
+
         for (key, value) in &self.headers {
             request = request.header(key, value);
         }
-        
+
         if let Some(ref secret) = self.secret {
             let signature = self.generate_signature(&payload.to_string(), secret)?;
             request = request.header("X-Hook-Signature", signature);
         }
-        
-        let response = request.send().await
+
+        let response = request
+            .send()
+            .await
             .context("WebHook Recall request failed")?;
-        
+
         if response.status().is_success() {
-            let result: serde_json::Value = response.json().await
+            let result: serde_json::Value = response
+                .json()
+                .await
                 .context("Failed to parse WebHook response")?;
-            
-            let allow = result.get("allow")
+
+            let allow = result
+                .get("allow")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
-            
+
             if allow {
                 Ok(PreSendDecision::Continue)
             } else {
                 use flare_im_core::error::{ErrorBuilder, ErrorCode};
-                let error = ErrorBuilder::new(ErrorCode::PermissionDenied, "WebHook rejected the recall request")
-                    .build_error();
+                let error = ErrorBuilder::new(
+                    ErrorCode::PermissionDenied,
+                    "WebHook rejected the recall request",
+                )
+                .build_error();
                 Ok(PreSendDecision::Reject { error })
             }
         } else {
@@ -287,21 +312,20 @@ impl WebhookHookAdapter {
             Err(error.into())
         }
     }
-    
+
     /// 生成签名（使用 HMAC-SHA256）
     fn generate_signature(&self, payload: &str, secret: &str) -> Result<String> {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
-        
+
         type HmacSha256 = Hmac<Sha256>;
-        
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .context("Invalid secret key")?;
+
+        let mut mac =
+            HmacSha256::new_from_slice(secret.as_bytes()).context("Invalid secret key")?;
         mac.update(payload.as_bytes());
         let result = mac.finalize();
         let signature = hex::encode(result.into_bytes());
-        
+
         Ok(format!("sha256={}", signature))
     }
 }
-

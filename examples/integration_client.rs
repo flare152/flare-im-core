@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::time::Duration;
 use async_trait::async_trait;
 use flare_core::client::{ClientEventHandler, ObserverClientBuilder};
 use flare_core::common::MessageParser;
@@ -11,12 +9,16 @@ use flare_core::common::protocol::flare::core::commands::command::Type;
 use flare_core::common::protocol::flare::core::commands::message_command::Type as MsgType;
 use flare_core::common::protocol::flare::core::commands::notification_command::Type as NotifType;
 use flare_core::common::protocol::flare::core::commands::system_command::Type as SysType;
-use flare_core::common::protocol::{Frame, Reliability, frame_with_message_command, generate_message_id, send_message};
+use flare_core::common::protocol::{
+    Frame, Reliability, frame_with_message_command, generate_message_id, send_message,
+};
 use flare_core::transport::events::{ConnectionEvent, ConnectionObserver};
 use prost::Message;
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, warn};
-use sha2::{Digest, Sha256};
 
 fn gen_single_session_id(a: &str, b: &str) -> String {
     let (min_id, max_id) = if a <= b { (a, b) } else { (b, a) };
@@ -30,22 +32,50 @@ fn gen_single_session_id(a: &str, b: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_target(false).with_thread_ids(true).init();
-    let default_host = std::env::var("NEGOTIATION_HOST").unwrap_or_else(|_| "localhost:60051".to_string());
-    let ws_url = std::env::var("NEGOTIATION_WS_URL").unwrap_or_else(|_| format!("ws://{}", default_host));
-    let platform = std::env::var("DEVICE_PLATFORM").map(|v| DevicePlatform::from_str(&v)).unwrap_or(DevicePlatform::PC);
-    let device_info = DeviceInfo::new(format!("integration-client-{}-{}", platform.as_str(), std::process::id()), platform.clone()).with_model(platform.as_str().to_string()).with_app_version("1.0.0".to_string());
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_thread_ids(true)
+        .init();
+    let default_host =
+        std::env::var("NEGOTIATION_HOST").unwrap_or_else(|_| "localhost:60051".to_string());
+    let ws_url =
+        std::env::var("NEGOTIATION_WS_URL").unwrap_or_else(|_| format!("ws://{}", default_host));
+    let platform = std::env::var("DEVICE_PLATFORM")
+        .map(|v| DevicePlatform::from_str(&v))
+        .unwrap_or(DevicePlatform::PC);
+    let device_info = DeviceInfo::new(
+        format!(
+            "integration-client-{}-{}",
+            platform.as_str(),
+            std::process::id()
+        ),
+        platform.clone(),
+    )
+    .with_model(platform.as_str().to_string())
+    .with_app_version("1.0.0".to_string());
     let user_id = std::env::var("USER_ID").unwrap_or_else(|_| "123456".to_string());
     let peer_id = std::env::var("PEER_ID").unwrap_or_else(|_| "user1".to_string());
-    let session_id = std::env::var("SESSION_ID").ok().unwrap_or_else(|| gen_single_session_id(&user_id, &peer_id));
+    let session_id = std::env::var("SESSION_ID")
+        .ok()
+        .unwrap_or_else(|| gen_single_session_id(&user_id, &peer_id));
     info!(%user_id, %peer_id, %session_id, host = %default_host, "integration client start");
 
-    let heartbeat = HeartbeatConfig::default().with_interval(Duration::from_secs(30)).with_timeout(Duration::from_secs(90));
-    let observer = Arc::new(Observer { user_id: user_id.clone() });
+    let heartbeat = HeartbeatConfig::default()
+        .with_interval(Duration::from_secs(30))
+        .with_timeout(Duration::from_secs(90));
+    let observer = Arc::new(Observer {
+        user_id: user_id.clone(),
+    });
     let handler = Arc::new(Events);
     let token = std::env::var("TOKEN").unwrap_or_else(|_| {
         use flare_server_core::TokenService;
-        TokenService::new("insecure-secret".to_string(), "flare-im-core".to_string(), 3600).generate_token(&user_id, None, None).unwrap_or_default()
+        TokenService::new(
+            "insecure-secret".to_string(),
+            "flare-im-core".to_string(),
+            3600,
+        )
+        .generate_token(&user_id, None, None)
+        .unwrap_or_default()
     });
     let mut builder = ObserverClientBuilder::new(&ws_url)
         .with_observer(observer as Arc<dyn ConnectionObserver>)
@@ -60,7 +90,9 @@ async fn main() -> Result<()> {
         .with_connect_timeout(Duration::from_secs(10))
         .with_reconnect_interval(Duration::from_secs(3))
         .with_max_reconnect_attempts(Some(5));
-    if !token.is_empty() { builder = builder.with_token(token); }
+    if !token.is_empty() {
+        builder = builder.with_token(token);
+    }
     let mut client = builder.build_with_race().await?;
     info!("connected");
 
@@ -99,14 +131,22 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-struct Observer { user_id: String }
+struct Observer {
+    user_id: String,
+}
 #[async_trait]
 impl ConnectionObserver for Observer {
     fn on_event(&self, event: &ConnectionEvent) {
         match event {
-            ConnectionEvent::Connected => { info!(user = %self.user_id, "connected"); }
-            ConnectionEvent::Disconnected(reason) => { warn!(%reason, "disconnected"); }
-            ConnectionEvent::Error(err) => { error!(?err, "error"); }
+            ConnectionEvent::Connected => {
+                info!(user = %self.user_id, "connected");
+            }
+            ConnectionEvent::Disconnected(reason) => {
+                warn!(%reason, "disconnected");
+            }
+            ConnectionEvent::Error(err) => {
+                error!(?err, "error");
+            }
             ConnectionEvent::Message(data) => {
                 let parser = MessageParser::protobuf();
                 if let Ok(frame) = parser.parse(data) {
@@ -116,7 +156,9 @@ impl ConnectionObserver for Observer {
                                 Ok(message) => {
                                     let sender = message.sender_id;
                                     let text = match message.content.and_then(|c| c.content) {
-                                        Some(flare_proto::common::message_content::Content::Text(t)) => t.text,
+                                        Some(
+                                            flare_proto::common::message_content::Content::Text(t),
+                                        ) => t.text,
                                         _ => String::from_utf8_lossy(&msg.payload).to_string(),
                                     };
                                     println!("\n[{}] {}", sender, text);
@@ -137,9 +179,20 @@ impl ConnectionObserver for Observer {
 struct Events;
 #[async_trait]
 impl ClientEventHandler for Events {
-    async fn handle_system_command(&self, _t: SysType, _f: &Frame) -> Result<Option<Frame>> { Ok(None) }
-    async fn handle_message_command(&self, _t: MsgType, _f: &Frame) -> Result<Option<Frame>> { Ok(None) }
-    async fn handle_notification_command(&self, _t: NotifType, _f: &Frame) -> Result<Option<Frame>> { Ok(None) }
-    async fn handle_connection_event(&self, _e: &ConnectionEvent) -> Result<()> { Ok(()) }
+    async fn handle_system_command(&self, _t: SysType, _f: &Frame) -> Result<Option<Frame>> {
+        Ok(None)
+    }
+    async fn handle_message_command(&self, _t: MsgType, _f: &Frame) -> Result<Option<Frame>> {
+        Ok(None)
+    }
+    async fn handle_notification_command(
+        &self,
+        _t: NotifType,
+        _f: &Frame,
+    ) -> Result<Option<Frame>> {
+        Ok(None)
+    }
+    async fn handle_connection_event(&self, _e: &ConnectionEvent) -> Result<()> {
+        Ok(())
+    }
 }
-

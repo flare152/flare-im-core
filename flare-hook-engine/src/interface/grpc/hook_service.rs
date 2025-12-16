@@ -2,48 +2,48 @@
 //!
 //! 实现HookService服务的所有gRPC接口，提供Hook配置的CRUD操作
 
-use std::sync::Arc;
-use std::str::FromStr;
 use anyhow::Result;
-use tonic::{Request, Response, Status};
-use prost_types::Timestamp;
+use flare_proto::common::{ErrorCode, ErrorContext, RpcStatus};
 use flare_proto::hooks::hook_service_server::HookService;
 use flare_proto::hooks::{
-    CreateHookConfigRequest, CreateHookConfigResponse,
-    GetHookConfigRequest, GetHookConfigResponse,
-    UpdateHookConfigRequest, UpdateHookConfigResponse,
-    ListHookConfigsRequest, ListHookConfigsResponse,
-    DeleteHookConfigRequest, DeleteHookConfigResponse,
-    SetHookStatusRequest, SetHookStatusResponse,
-    GetHookStatisticsRequest, GetHookStatisticsResponse,
-    QueryHookExecutionsRequest, QueryHookExecutionsResponse,
-    HookConfig, HookTransport, HookSelector, HookRetryPolicy,
-    HookStatistics, HookExecution,
+    CreateHookConfigRequest, CreateHookConfigResponse, DeleteHookConfigRequest,
+    DeleteHookConfigResponse, GetHookConfigRequest, GetHookConfigResponse,
+    GetHookStatisticsRequest, GetHookStatisticsResponse, HookConfig, HookExecution,
+    HookRetryPolicy, HookSelector, HookStatistics, HookTransport, ListHookConfigsRequest,
+    ListHookConfigsResponse, QueryHookExecutionsRequest, QueryHookExecutionsResponse,
+    SetHookStatusRequest, SetHookStatusResponse, UpdateHookConfigRequest, UpdateHookConfigResponse,
 };
-use flare_proto::common::{RpcStatus, ErrorContext, ErrorCode};
+use prost_types::Timestamp;
+use std::str::FromStr;
+use std::sync::Arc;
+use tonic::{Request, Response, Status};
 
+use crate::domain::model::{
+    HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy,
+};
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
-use crate::domain::model::{HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy};
 use crate::service::registry::CoreHookRegistry;
 use chrono::Utc;
 
 /// 从gRPC请求中提取租户ID
-/// 
+///
 /// Gateway会在metadata中设置租户信息，优先从metadata中提取，如果没有则返回None
 fn extract_tenant_id<T>(request: &Request<T>) -> Option<String> {
     // 方法1: 从metadata中提取（Gateway会在metadata中设置）
-    if let Some(tenant_id) = request.metadata()
+    if let Some(tenant_id) = request
+        .metadata()
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .filter(|s| !s.is_empty()) {
+        .filter(|s| !s.is_empty())
+    {
         return Some(tenant_id);
     }
-    
+
     // 方法2: 从请求扩展中提取（如果使用了Gateway拦截器）
     // 注意：Hook Engine可能没有使用Gateway的拦截器，所以这个方法可能不适用
     // 如果需要，可以添加：request.extensions().get::<flare_proto::TenantContext>()
-    
+
     None
 }
 
@@ -86,7 +86,7 @@ impl HookService for HookServiceServer {
         request: Request<CreateHookConfigRequest>,
     ) -> Result<Response<CreateHookConfigResponse>, Status> {
         let req = request.into_inner();
-        
+
         // 提取租户ID（从请求参数）
         if req.tenant_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id is required"));
@@ -100,19 +100,31 @@ impl HookService for HookServiceServer {
         if req.hook_type.is_empty() {
             return Err(Status::invalid_argument("hook_type is required"));
         }
-        
+
         // 验证hook_type有效性
         let valid_hook_types = [
-            "pre_send", "post_send", "delivery", "recall",
-            "session_lifecycle", "presence",
-            "push_pre_send", "push_post_send", "push_delivery",
-            "user_login", "user_logout", "user_online", "user_offline",
+            "pre_send",
+            "post_send",
+            "delivery",
+            "recall",
+            "session_lifecycle",
+            "presence",
+            "push_pre_send",
+            "push_post_send",
+            "push_delivery",
+            "user_login",
+            "user_logout",
+            "user_online",
+            "user_offline",
             "custom",
         ];
         if !valid_hook_types.contains(&req.hook_type.as_str()) {
-            return Err(Status::invalid_argument(format!("Invalid hook_type: {}. Valid types: {:?}", req.hook_type, valid_hook_types)));
+            return Err(Status::invalid_argument(format!(
+                "Invalid hook_type: {}. Valid types: {:?}",
+                req.hook_type, valid_hook_types
+            )));
         }
-        
+
         if req.transport.is_none() {
             return Err(Status::invalid_argument("transport is required"));
         }
@@ -120,23 +132,29 @@ impl HookService for HookServiceServer {
         // 转换protobuf类型到内部类型
         let hook_item = protobuf_to_hook_config_item(&req, None)
             .map_err(|e| Status::invalid_argument(format!("Invalid hook config: {}", e)))?;
-        
+
         // 保存到数据库
-        let created_by = req.context.as_ref()
+        let created_by = req
+            .context
+            .as_ref()
             .and_then(|ctx| ctx.actor.as_ref())
             .map(|a| a.actor_id.as_str());
-        
-        let hook_id = self.repository.save(
-            Some(tenant_id.as_str()),
-            &req.hook_type,
-            &hook_item,
-            created_by,
-        )
-        .await
-        .map_err(|e| Status::internal(format!("Failed to save hook config: {}", e)))?;
+
+        let hook_id = self
+            .repository
+            .save(
+                Some(tenant_id.as_str()),
+                &req.hook_type,
+                &hook_item,
+                created_by,
+            )
+            .await
+            .map_err(|e| Status::internal(format!("Failed to save hook config: {}", e)))?;
 
         // 通知配置监听器重新加载配置
-        self.registry.reload_config().await
+        self.registry
+            .reload_config()
+            .await
             .map_err(|e| Status::internal(format!("Failed to reload config: {}", e)))?;
 
         // 构建响应
@@ -172,7 +190,7 @@ impl HookService for HookServiceServer {
         // 先提取租户ID（在into_inner()之前）
         let tenant_id = extract_tenant_id(&request);
         let req = request.into_inner();
-        
+
         if req.hook_id.is_empty() {
             return Err(Status::invalid_argument("hook_id is required"));
         }
@@ -180,10 +198,11 @@ impl HookService for HookServiceServer {
         // 解析hook_id（格式：hook_type:name 或 id）
         // 先尝试作为数字ID解析
         let hook_id_parsed = req.hook_id.parse::<i64>();
-        
+
         let (row, hook_item) = if let Ok(id) = hook_id_parsed {
             // 作为数字ID查询
-            self.repository.get_by_id(id)
+            self.repository
+                .get_by_id(id)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?
@@ -191,13 +210,16 @@ impl HookService for HookServiceServer {
             // 作为hook_type:name格式解析
             let parts: Vec<&str> = req.hook_id.splitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(Status::invalid_argument("Invalid hook_id format, expected numeric id or 'hook_type:name'"));
+                return Err(Status::invalid_argument(
+                    "Invalid hook_id format, expected numeric id or 'hook_type:name'",
+                ));
             }
-            
+
             let hook_type = parts[0];
             let name = parts[1];
-            
-            self.repository.get_by_name(tenant_id.as_deref(), hook_type, name)
+
+            self.repository
+                .get_by_name(tenant_id.as_deref(), hook_type, name)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?
@@ -236,17 +258,18 @@ impl HookService for HookServiceServer {
         // 先提取租户ID（在into_inner()之前）
         let tenant_id = extract_tenant_id(&request);
         let req = request.into_inner();
-        
+
         if req.hook_id.is_empty() {
             return Err(Status::invalid_argument("hook_id is required"));
         }
 
         // 解析hook_id（格式：hook_type:name 或 id）
         let hook_id_parsed = req.hook_id.parse::<i64>();
-        
+
         let (row, mut hook_item) = if let Ok(id) = hook_id_parsed {
             // 作为数字ID查询
-            self.repository.get_by_id(id)
+            self.repository
+                .get_by_id(id)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?
@@ -254,13 +277,16 @@ impl HookService for HookServiceServer {
             // 作为hook_type:name格式解析
             let parts: Vec<&str> = req.hook_id.splitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(Status::invalid_argument("Invalid hook_id format, expected numeric id or 'hook_type:name'"));
+                return Err(Status::invalid_argument(
+                    "Invalid hook_id format, expected numeric id or 'hook_type:name'",
+                ));
             }
-            
+
             let hook_type = parts[0];
             let name = parts[1];
-            
-            self.repository.get_by_name(tenant_id.as_deref(), hook_type, name)
+
+            self.repository
+                .get_by_name(tenant_id.as_deref(), hook_type, name)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?
@@ -287,14 +313,14 @@ impl HookService for HookServiceServer {
                     } else {
                         None
                     };
-                    
+
                     // 解析负载均衡策略
                     let load_balance = if !transport.load_balance.is_empty() {
                         LoadBalanceStrategy::from_str(&transport.load_balance).ok()
                     } else {
                         None
                     };
-                    
+
                     HookTransportConfig::Grpc {
                         endpoint,
                         service_name,
@@ -311,7 +337,7 @@ impl HookService for HookServiceServer {
                         load_balance,
                         metadata: transport.metadata.clone(),
                     }
-                },
+                }
                 "webhook" => HookTransportConfig::Webhook {
                     endpoint: transport.endpoint.clone(),
                     secret: if transport.secret.is_empty() {
@@ -324,7 +350,12 @@ impl HookService for HookServiceServer {
                 "local" => HookTransportConfig::Local {
                     target: transport.target.clone(),
                 },
-                _ => return Err(Status::invalid_argument(format!("Unsupported transport type: {}", transport.r#type))),
+                _ => {
+                    return Err(Status::invalid_argument(format!(
+                        "Unsupported transport type: {}",
+                        transport.r#type
+                    )));
+                }
             };
             hook_item.timeout_ms = transport.timeout_ms as u64;
         }
@@ -349,7 +380,9 @@ impl HookService for HookServiceServer {
         }
 
         // 更新数据库
-        let updated = self.repository.update(row.id, &hook_item)
+        let updated = self
+            .repository
+            .update(row.id, &hook_item)
             .await
             .map_err(|e| Status::internal(format!("Failed to update hook config: {}", e)))?;
 
@@ -358,7 +391,9 @@ impl HookService for HookServiceServer {
         }
 
         // 通知配置监听器重新加载配置
-        self.registry.reload_config().await
+        self.registry
+            .reload_config()
+            .await
             .map_err(|e| Status::internal(format!("Failed to reload config: {}", e)))?;
 
         // 构建响应
@@ -392,7 +427,7 @@ impl HookService for HookServiceServer {
         request: Request<ListHookConfigsRequest>,
     ) -> Result<Response<ListHookConfigsResponse>, Status> {
         let req = request.into_inner();
-        
+
         // 提取租户ID
         let tenant_id = if req.tenant_id.is_empty() {
             None
@@ -406,43 +441,49 @@ impl HookService for HookServiceServer {
         } else {
             Some(req.hook_type.as_str())
         };
-        
-        let rows = self.repository.query(
-            tenant_id.as_deref(),
-            hook_type_filter,
-            req.enabled_only,
-        )
-        .await
-        .map_err(|e| Status::internal(format!("Failed to query hook configs: {}", e)))?;
+
+        let rows = self
+            .repository
+            .query(tenant_id.as_deref(), hook_type_filter, req.enabled_only)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to query hook configs: {}", e)))?;
 
         // 转换为protobuf类型
         let mut configs = Vec::new();
-        
+
         for row in rows {
-            let hook_item: crate::domain::model::HookConfigItem = row.clone().try_into()
+            let hook_item: crate::domain::model::HookConfigItem = row
+                .clone()
+                .try_into()
                 .map_err(|e| Status::internal(format!("Failed to convert hook config: {}", e)))?;
-            
+
             // 应用enabled_only过滤（如果查询时没有过滤）
             if !req.enabled_only || hook_item.enabled {
-                configs.push(hook_config_item_to_protobuf(
-                    &row.id.to_string(),
-                    row.tenant_id.as_deref().unwrap_or(""),
-                    &row.hook_type,
-                    &hook_item,
-                )
-                .map_err(|e| Status::internal(format!("Failed to convert hook config: {}", e)))?);
+                configs.push(
+                    hook_config_item_to_protobuf(
+                        &row.id.to_string(),
+                        row.tenant_id.as_deref().unwrap_or(""),
+                        &row.hook_type,
+                        &hook_item,
+                    )
+                    .map_err(|e| {
+                        Status::internal(format!("Failed to convert hook config: {}", e))
+                    })?,
+                );
             }
         }
 
         // 应用分页限制
-        let limit = req.pagination.as_ref()
+        let limit = req
+            .pagination
+            .as_ref()
             .map(|p| p.limit as usize)
             .unwrap_or(100)
             .min(1000); // 最多1000条
-        
+
         let total_count = configs.len();
         let configs: Vec<_> = configs.into_iter().take(limit).collect();
-        
+
         // 更新分页信息
         let mut pagination = req.pagination.unwrap_or_default();
         pagination.has_more = total_count > configs.len();
@@ -473,24 +514,21 @@ impl HookService for HookServiceServer {
         // 先提取租户ID（在into_inner()之前）
         let tenant_id = extract_tenant_id(&request);
         let req = request.into_inner();
-        
+
         if req.hook_id.is_empty() {
             return Err(Status::invalid_argument("hook_id is required"));
         }
 
         // 解析hook_id（格式：hook_type:name 或 id）
         let hook_id_parsed = req.hook_id.parse::<i64>();
-        
+
         let deleted = if let Ok(id) = hook_id_parsed {
             // 作为数字ID查询并删除
             if let Ok(Some((row, _))) = self.repository.get_by_id(id).await {
-                self.repository.delete(
-                    row.tenant_id.as_deref(),
-                    &row.hook_type,
-                    &row.name,
-                )
-                .await
-                .map_err(|e| Status::internal(format!("Failed to delete hook config: {}", e)))?
+                self.repository
+                    .delete(row.tenant_id.as_deref(), &row.hook_type, &row.name)
+                    .await
+                    .map_err(|e| Status::internal(format!("Failed to delete hook config: {}", e)))?
             } else {
                 false
             }
@@ -498,20 +536,19 @@ impl HookService for HookServiceServer {
             // 作为hook_type:name格式解析
             let parts: Vec<&str> = req.hook_id.splitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(Status::invalid_argument("Invalid hook_id format, expected numeric id or 'hook_type:name'"));
+                return Err(Status::invalid_argument(
+                    "Invalid hook_id format, expected numeric id or 'hook_type:name'",
+                ));
             }
-            
+
             let hook_type = parts[0];
             let name = parts[1];
 
             // 删除Hook配置
-            self.repository.delete(
-                tenant_id.as_deref(),
-                hook_type,
-                name,
-            )
-            .await
-            .map_err(|e| Status::internal(format!("Failed to delete hook config: {}", e)))?
+            self.repository
+                .delete(tenant_id.as_deref(), hook_type, name)
+                .await
+                .map_err(|e| Status::internal(format!("Failed to delete hook config: {}", e)))?
         };
 
         if !deleted {
@@ -519,7 +556,9 @@ impl HookService for HookServiceServer {
         }
 
         // 通知配置监听器重新加载配置
-        self.registry.reload_config().await
+        self.registry
+            .reload_config()
+            .await
             .map_err(|e| Status::internal(format!("Failed to reload config: {}", e)))?;
 
         Ok(Response::new(DeleteHookConfigResponse {
@@ -546,36 +585,42 @@ impl HookService for HookServiceServer {
         // 先提取租户ID（在into_inner()之前）
         let tenant_id = extract_tenant_id(&request);
         let req = request.into_inner();
-        
+
         if req.hook_id.is_empty() {
             return Err(Status::invalid_argument("hook_id is required"));
         }
 
         // 解析hook_id（格式：hook_type:name 或 id）
         let hook_id_parsed = req.hook_id.parse::<i64>();
-        
+
         let hook_id = if let Ok(id) = hook_id_parsed {
             id
         } else {
             // 作为hook_type:name格式解析，需要先查询获取ID
             let parts: Vec<&str> = req.hook_id.splitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(Status::invalid_argument("Invalid hook_id format, expected numeric id or 'hook_type:name'"));
+                return Err(Status::invalid_argument(
+                    "Invalid hook_id format, expected numeric id or 'hook_type:name'",
+                ));
             }
-            
+
             let hook_type = parts[0];
             let name = parts[1];
-            
-            let (row, _) = self.repository.get_by_name(tenant_id.as_deref(), hook_type, name)
+
+            let (row, _) = self
+                .repository
+                .get_by_name(tenant_id.as_deref(), hook_type, name)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?;
-            
+
             row.id
         };
 
         // 更新数据库中的enabled字段
-        let updated = self.repository.update_enabled(hook_id, req.enabled)
+        let updated = self
+            .repository
+            .update_enabled(hook_id, req.enabled)
             .await
             .map_err(|e| Status::internal(format!("Failed to update hook status: {}", e)))?;
 
@@ -584,7 +629,9 @@ impl HookService for HookServiceServer {
         }
 
         // 通知配置监听器重新加载配置
-        self.registry.reload_config().await
+        self.registry
+            .reload_config()
+            .await
             .map_err(|e| Status::internal(format!("Failed to reload config: {}", e)))?;
 
         Ok(Response::new(SetHookStatusResponse {
@@ -611,14 +658,14 @@ impl HookService for HookServiceServer {
         // 先提取租户ID（在into_inner()之前）
         let tenant_id = extract_tenant_id(&request);
         let req = request.into_inner();
-        
+
         if req.hook_id.is_empty() {
             return Err(Status::invalid_argument("hook_id is required"));
         }
 
         // 解析hook_id（格式：hook_type:name 或 id）
         let hook_id_parsed = req.hook_id.parse::<i64>();
-        
+
         let hook_id = if let Ok(id) = hook_id_parsed {
             // 作为数字ID使用
             id
@@ -626,17 +673,21 @@ impl HookService for HookServiceServer {
             // 作为hook_type:name格式解析，需要先查询获取ID
             let parts: Vec<&str> = req.hook_id.splitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(Status::invalid_argument("Invalid hook_id format, expected numeric id or 'hook_type:name'"));
+                return Err(Status::invalid_argument(
+                    "Invalid hook_id format, expected numeric id or 'hook_type:name'",
+                ));
             }
-            
+
             let hook_type = parts[0];
             let name = parts[1];
-            
-            let (row, _) = self.repository.get_by_name(tenant_id.as_deref(), hook_type, name)
+
+            let (row, _) = self
+                .repository
+                .get_by_name(tenant_id.as_deref(), hook_type, name)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to get hook config: {}", e)))?
                 .ok_or_else(|| Status::not_found("Hook config not found"))?;
-            
+
             row.id
         };
 
@@ -655,7 +706,7 @@ impl HookService for HookServiceServer {
                 // 如果是hook_type:name格式，直接使用
                 req.hook_id.clone()
             };
-            
+
             // 从MetricsCollector查询统计数据
             if let Some(stats) = metrics_collector.get_statistics(&hook_name).await {
                 // 将domain model转换为protobuf类型
@@ -731,36 +782,37 @@ impl HookService for HookServiceServer {
             } else {
                 None
             };
-            
+
             // 确定查询限制
-            let limit = req.pagination.as_ref()
+            let limit = req
+                .pagination
+                .as_ref()
                 .map(|p| p.limit as usize)
                 .unwrap_or(100)
                 .min(1000); // 最多1000条
-            
+
             // 从ExecutionRecorder查询执行记录
-            let records = execution_recorder.query(
-                hook_name.as_deref(),
-                limit,
-            ).await;
-            
+            let records = execution_recorder.query(hook_name.as_deref(), limit).await;
+
             // 过滤条件
-            let mut filtered_records = records.into_iter()
+            let mut filtered_records = records
+                .into_iter()
                 .filter(|r| {
                     // 如果指定了message_id，需要匹配（但domain model中没有message_id，暂时跳过）
                     // if !req.message_id.is_empty() && r.message_id != req.message_id {
                     //     return false;
                     // }
-                    
+
                     // 如果只查询成功的，过滤失败的
                     if req.success_only && !r.success {
                         return false;
                     }
-                    
+
                     // 时间范围过滤
                     if let Some(ref time_range) = req.time_range {
                         // 将执行时间转换为Timestamp进行比较
-                        let executed_timestamp = r.executed_at
+                        let executed_timestamp = r
+                            .executed_at
                             .duration_since(std::time::SystemTime::UNIX_EPOCH)
                             .map(|d| prost_types::Timestamp {
                                 seconds: d.as_secs() as i64,
@@ -770,7 +822,7 @@ impl HookService for HookServiceServer {
                                 seconds: 0,
                                 nanos: 0,
                             });
-                        
+
                         // 检查是否在时间范围内
                         if let Some(ref start) = time_range.start_time {
                             if executed_timestamp.seconds < start.seconds {
@@ -787,15 +839,16 @@ impl HookService for HookServiceServer {
                     true
                 })
                 .collect::<Vec<_>>();
-            
+
             // 转换为protobuf类型
-            filtered_records.into_iter()
+            filtered_records
+                .into_iter()
                 .enumerate()
                 .map(|(idx, record)| {
                     domain_to_protobuf_execution(
                         format!("exec-{}", idx), // execution_id
-                        req.hook_id.clone(), // hook_id
-                        String::new(), // message_id (domain model中没有，暂时为空)
+                        req.hook_id.clone(),     // hook_id
+                        String::new(),           // message_id (domain model中没有，暂时为空)
                         record,
                     )
                 })
@@ -835,8 +888,8 @@ fn domain_to_protobuf_statistics(
         success_count: stats.success_count as i64,
         failure_count: stats.failure_count as i64,
         avg_latency_ms: stats.avg_latency_ms,
-        p99_latency_ms: 0.0, // 暂时不计算P99延迟
-        rate_limit_count: 0, // 暂时不统计限流次数
+        p99_latency_ms: 0.0,    // 暂时不计算P99延迟
+        rate_limit_count: 0,    // 暂时不统计限流次数
         circuit_break_count: 0, // 暂时不统计熔断次数
         error_count_by_code: std::collections::HashMap::new(), // 暂时不统计错误码
     }
@@ -847,10 +900,14 @@ fn protobuf_to_hook_config_item(
     req: &CreateHookConfigRequest,
     _existing: Option<&HookConfigItem>,
 ) -> Result<HookConfigItem> {
-    let transport = req.transport.as_ref()
+    let transport = req
+        .transport
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("transport is required"))?;
 
-    let selector = req.selector.as_ref()
+    let selector = req
+        .selector
+        .as_ref()
         .map(|s| HookSelectorConfig {
             tenants: s.tenants.clone(),
             session_types: s.session_types.clone(),
@@ -874,14 +931,14 @@ fn protobuf_to_hook_config_item(
             } else {
                 None
             };
-            
+
             // 解析负载均衡策略
             let load_balance = if !transport.load_balance.is_empty() {
                 LoadBalanceStrategy::from_str(&transport.load_balance).ok()
             } else {
                 None
             };
-            
+
             HookTransportConfig::Grpc {
                 endpoint,
                 service_name,
@@ -898,7 +955,7 @@ fn protobuf_to_hook_config_item(
                 load_balance,
                 metadata: transport.metadata.clone(),
             }
-        },
+        }
         "webhook" => HookTransportConfig::Webhook {
             endpoint: transport.endpoint.clone(),
             secret: if transport.secret.is_empty() {
@@ -911,14 +968,17 @@ fn protobuf_to_hook_config_item(
         "local" => HookTransportConfig::Local {
             target: transport.target.clone(),
         },
-        _ => return Err(anyhow::anyhow!("Unsupported transport type: {}", transport.r#type)),
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Unsupported transport type: {}",
+                transport.r#type
+            ));
+        }
     };
 
     let retry_policy = req.retry_policy.as_ref();
-    let max_retries = retry_policy
-        .map(|p| p.max_retries as u32)
-        .unwrap_or(0);
-    
+    let max_retries = retry_policy.map(|p| p.max_retries as u32).unwrap_or(0);
+
     // 根据retry_policy推断error_policy
     // 如果有重试策略且max_retries > 0，则使用retry；否则使用fail_fast
     let error_policy = if max_retries > 0 {
@@ -952,7 +1012,7 @@ fn hook_config_item_to_protobuf(
     item: &HookConfigItem,
 ) -> Result<HookConfig> {
     let now = Utc::now();
-    
+
     Ok(HookConfig {
         hook_id: hook_id.to_string(),
         name: item.name.clone(),
@@ -961,50 +1021,58 @@ fn hook_config_item_to_protobuf(
         priority: item.priority,
         enabled: item.enabled,
         transport: Some(match &item.transport {
-            HookTransportConfig::Grpc { endpoint, service_name, registry_type, namespace, load_balance, metadata } => {
-                HookTransport {
-                    r#type: "grpc".to_string(),
-                    service_name: service_name.clone().unwrap_or_default(),
-                    endpoint: endpoint.clone().unwrap_or_default(),
-                    registry_type: registry_type.clone().unwrap_or_default(),
-                    namespace: namespace.clone().unwrap_or_default(),
-                    load_balance: load_balance.as_ref().map(|lb| format!("{:?}", lb)).unwrap_or_default(),
-                    secret: String::new(),
-                    headers: std::collections::HashMap::new(),
-                    target: String::new(),
-                    timeout_ms: item.timeout_ms as i32,
-                    metadata: metadata.clone(),
-                }
+            HookTransportConfig::Grpc {
+                endpoint,
+                service_name,
+                registry_type,
+                namespace,
+                load_balance,
+                metadata,
+            } => HookTransport {
+                r#type: "grpc".to_string(),
+                service_name: service_name.clone().unwrap_or_default(),
+                endpoint: endpoint.clone().unwrap_or_default(),
+                registry_type: registry_type.clone().unwrap_or_default(),
+                namespace: namespace.clone().unwrap_or_default(),
+                load_balance: load_balance
+                    .as_ref()
+                    .map(|lb| format!("{:?}", lb))
+                    .unwrap_or_default(),
+                secret: String::new(),
+                headers: std::collections::HashMap::new(),
+                target: String::new(),
+                timeout_ms: item.timeout_ms as i32,
+                metadata: metadata.clone(),
             },
-            HookTransportConfig::Webhook { endpoint, secret, headers } => {
-                HookTransport {
-                    r#type: "webhook".to_string(),
-                    service_name: String::new(),
-                    endpoint: endpoint.clone(),
-                    registry_type: String::new(),
-                    namespace: String::new(),
-                    load_balance: String::new(),
-                    secret: secret.clone().unwrap_or_default(),
-                    headers: headers.clone(),
-                    target: String::new(),
-                    timeout_ms: item.timeout_ms as i32,
-                    metadata: std::collections::HashMap::new(),
-                }
+            HookTransportConfig::Webhook {
+                endpoint,
+                secret,
+                headers,
+            } => HookTransport {
+                r#type: "webhook".to_string(),
+                service_name: String::new(),
+                endpoint: endpoint.clone(),
+                registry_type: String::new(),
+                namespace: String::new(),
+                load_balance: String::new(),
+                secret: secret.clone().unwrap_or_default(),
+                headers: headers.clone(),
+                target: String::new(),
+                timeout_ms: item.timeout_ms as i32,
+                metadata: std::collections::HashMap::new(),
             },
-            HookTransportConfig::Local { target } => {
-                HookTransport {
-                    r#type: "local".to_string(),
-                    service_name: String::new(),
-                    endpoint: String::new(),
-                    registry_type: String::new(),
-                    namespace: String::new(),
-                    load_balance: String::new(),
-                    secret: String::new(),
-                    headers: std::collections::HashMap::new(),
-                    target: target.clone(),
-                    timeout_ms: item.timeout_ms as i32,
-                    metadata: std::collections::HashMap::new(),
-                }
+            HookTransportConfig::Local { target } => HookTransport {
+                r#type: "local".to_string(),
+                service_name: String::new(),
+                endpoint: String::new(),
+                registry_type: String::new(),
+                namespace: String::new(),
+                load_balance: String::new(),
+                secret: String::new(),
+                headers: std::collections::HashMap::new(),
+                target: target.clone(),
+                timeout_ms: item.timeout_ms as i32,
+                metadata: std::collections::HashMap::new(),
             },
         }),
         selector: Some(HookSelector {
@@ -1015,7 +1083,7 @@ fn hook_config_item_to_protobuf(
         }),
         retry_policy: Some(HookRetryPolicy {
             max_retries: item.max_retries as i32,
-            retry_interval_ms: 1000, // 默认值
+            retry_interval_ms: 1000,                     // 默认值
             backoff_strategy: "exponential".to_string(), // 默认值
         }),
         created_at: Some(prost_types::Timestamp {
@@ -1037,9 +1105,10 @@ fn domain_to_protobuf_execution(
     result: crate::domain::model::HookExecutionResult,
 ) -> HookExecution {
     use std::time::SystemTime;
-    
+
     // 将执行时间转换为Timestamp
-    let executed_at = result.executed_at
+    let executed_at = result
+        .executed_at
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| prost_types::Timestamp {
             seconds: d.as_secs() as i64,
@@ -1049,7 +1118,7 @@ fn domain_to_protobuf_execution(
             seconds: 0,
             nanos: 0,
         });
-    
+
     // 解析错误信息
     let (_error_code, _error_message) = if let Some(ref err) = result.error_message {
         // 尝试从错误信息中提取错误码（格式：CODE: message）
@@ -1062,7 +1131,7 @@ fn domain_to_protobuf_execution(
     } else {
         (String::new(), String::new())
     };
-    
+
     HookExecution {
         execution_id,
         hook_id,
@@ -1074,4 +1143,3 @@ fn domain_to_protobuf_execution(
         executed_at: Some(executed_at),
     }
 }
-

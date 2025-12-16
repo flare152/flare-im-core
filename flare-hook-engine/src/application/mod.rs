@@ -7,4 +7,3 @@ pub mod handlers;
 pub mod queries;
 
 pub use handlers::{HookCommandHandler, HookQueryHandler};
-

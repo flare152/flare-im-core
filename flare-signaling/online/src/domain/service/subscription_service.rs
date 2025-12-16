@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use flare_proto::access_gateway::{
-    PublishSignalRequest, PublishSignalResponse, SubscribeRequest, SubscribeResponse, 
-    Subscription, UnsubscribeRequest, UnsubscribeResponse
+    PublishSignalRequest, PublishSignalResponse, SubscribeRequest, SubscribeResponse, Subscription,
+    UnsubscribeRequest, UnsubscribeResponse,
 };
 use tracing::{info, warn};
 
@@ -47,7 +47,7 @@ impl SubscriptionService {
         let mut granted = Vec::new();
         for subscription in subscriptions {
             let topic = &subscription.topic;
-            
+
             if topic.is_empty() {
                 warn!(user_id = %user_id, "empty topic in subscription request");
                 continue;
@@ -91,7 +91,11 @@ impl SubscriptionService {
             });
         }
 
-        if let Err(err) = self.subscription_repo.remove_subscription(user_id, topics).await {
+        if let Err(err) = self
+            .subscription_repo
+            .remove_subscription(user_id, topics)
+            .await
+        {
             warn!(user_id = %user_id, error = %err, "failed to remove subscriptions");
             return Ok(UnsubscribeResponse {
                 status: util::rpc_status_error(
@@ -109,7 +113,10 @@ impl SubscriptionService {
     }
 
     /// 发布信令消息
-    pub async fn publish_signal(&self, request: PublishSignalRequest) -> Result<PublishSignalResponse> {
+    pub async fn publish_signal(
+        &self,
+        request: PublishSignalRequest,
+    ) -> Result<PublishSignalResponse> {
         let envelope = request.envelope.as_ref().ok_or_else(|| {
             flare_server_core::error::ErrorBuilder::new(
                 flare_server_core::error::ErrorCode::InvalidParameter,
@@ -186,4 +193,3 @@ impl SubscriptionService {
         })
     }
 }
-

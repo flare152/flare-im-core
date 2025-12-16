@@ -15,7 +15,14 @@ use serde_json;
 use std::collections::HashMap;
 
 /// 时间戳转换为毫秒数
+///
+/// # 参数
+/// * `ts` - 时间戳
+///
+/// # 返回
+/// * `Option<i64>` - 如果时间戳有效，返回毫秒数；否则返回 None
 pub fn timestamp_to_millis(ts: &Timestamp) -> Option<i64> {
+    // 提前返回：如果时间戳为零值，直接返回 None
     if ts.seconds == 0 && ts.nanos == 0 {
         return None;
     }
@@ -23,6 +30,12 @@ pub fn timestamp_to_millis(ts: &Timestamp) -> Option<i64> {
 }
 
 /// 毫秒数转换为时间戳
+///
+/// # 参数
+/// * `ms` - 毫秒数
+///
+/// # 返回
+/// * `Option<Timestamp>` - 返回对应的时间戳
 pub fn millis_to_timestamp(ms: i64) -> Option<Timestamp> {
     let seconds = ms / 1000;
     let nanos = ((ms % 1000) * 1_000_000) as i32;
@@ -30,11 +43,23 @@ pub fn millis_to_timestamp(ms: i64) -> Option<Timestamp> {
 }
 
 /// 时间戳转换为 DateTime
+///
+/// # 参数
+/// * `ts` - 时间戳
+///
+/// # 返回
+/// * `Option<DateTime<Utc>>` - 如果时间戳有效，返回 DateTime；否则返回 None
 pub fn timestamp_to_datetime(ts: &Timestamp) -> Option<DateTime<Utc>> {
     timestamp_to_millis(ts).and_then(|ms| Utc.timestamp_millis_opt(ms).single())
 }
 
 /// DateTime 转换为时间戳
+///
+/// # 参数
+/// * `dt` - DateTime
+///
+/// # 返回
+/// * `Timestamp` - 返回对应的时间戳
 pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
     Timestamp {
         seconds: dt.timestamp(),
@@ -43,6 +68,9 @@ pub fn datetime_to_timestamp(dt: DateTime<Utc>) -> Timestamp {
 }
 
 /// 获取当前时间戳（毫秒）
+///
+/// # 返回
+/// * `i64` - 当前时间戳（毫秒）
 pub fn current_millis() -> i64 {
     Utc::now().timestamp_millis()
 }
@@ -60,58 +88,90 @@ pub struct TimelineMetadata {
 }
 
 /// 从消息的 extra 字段中提取时间线元数据
+///
+/// # 参数
+/// * `extra` - 消息的 extra 字段
+/// * `default_ingestion_ts` - 默认的 ingestion 时间戳
+///
+/// # 返回
+/// * `TimelineMetadata` - 时间线元数据
 pub fn extract_timeline_from_extra(
     extra: &HashMap<String, String>,
     default_ingestion_ts: i64,
 ) -> TimelineMetadata {
-    if let Some(raw) = extra.get("timeline") {
-        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(raw) {
+    // 提前返回：如果 extra 中没有 timeline 字段，直接返回默认值
+    let raw = match extra.get("timeline") {
+        Some(raw) => raw,
+        None => {
             return TimelineMetadata {
-                emit_ts: map.get("emit_ts").and_then(parse_i64),
-                ingestion_ts: map
-                    .get("ingestion_ts")
-                    .and_then(parse_i64)
-                    .unwrap_or(default_ingestion_ts),
-                persisted_ts: map.get("persisted_ts").and_then(parse_i64),
-                dispatched_ts: map.get("dispatched_ts").and_then(parse_i64),
-                acked_ts: map.get("acked_ts").and_then(parse_i64),
-                read_ts: map.get("read_ts").and_then(parse_i64),
-                deleted_ts: map.get("deleted_ts").and_then(parse_i64),
+                ingestion_ts: default_ingestion_ts,
+                ..TimelineMetadata::default()
             };
         }
-    }
+    };
+
+    // 解析 timeline JSON 字符串
+    let map = match serde_json::from_str::<HashMap<String, String>>(raw) {
+        Ok(map) => map,
+        Err(_) => {
+            return TimelineMetadata {
+                ingestion_ts: default_ingestion_ts,
+                ..TimelineMetadata::default()
+            };
+        }
+    };
 
     TimelineMetadata {
-        ingestion_ts: default_ingestion_ts,
-        ..TimelineMetadata::default()
+        emit_ts: map.get("emit_ts").and_then(parse_i64),
+        ingestion_ts: map
+            .get("ingestion_ts")
+            .and_then(parse_i64)
+            .unwrap_or(default_ingestion_ts),
+        persisted_ts: map.get("persisted_ts").and_then(parse_i64),
+        dispatched_ts: map.get("dispatched_ts").and_then(parse_i64),
+        acked_ts: map.get("acked_ts").and_then(parse_i64),
+        read_ts: map.get("read_ts").and_then(parse_i64),
+        deleted_ts: map.get("deleted_ts").and_then(parse_i64),
     }
 }
 
 /// 将时间线元数据嵌入到消息的 extra 字段中
+///
+/// # 参数
+/// * `message` - 消息对象（可变引用）
+/// * `timeline` - 时间线元数据
 pub fn embed_timeline_in_extra(
     message: &mut flare_proto::common::Message,
     timeline: &TimelineMetadata,
 ) {
     let mut timeline_map = HashMap::new();
+
+    // 使用 guard clause 减少嵌套
     if let Some(value) = timeline.emit_ts {
         timeline_map.insert("emit_ts".to_string(), value.to_string());
     }
+
     timeline_map.insert(
         "ingestion_ts".to_string(),
         timeline.ingestion_ts.to_string(),
     );
+
     if let Some(value) = timeline.persisted_ts {
         timeline_map.insert("persisted_ts".to_string(), value.to_string());
     }
+
     if let Some(value) = timeline.dispatched_ts {
         timeline_map.insert("dispatched_ts".to_string(), value.to_string());
     }
+
     if let Some(value) = timeline.acked_ts {
         timeline_map.insert("acked_ts".to_string(), value.to_string());
     }
+
     if let Some(value) = timeline.read_ts {
         timeline_map.insert("read_ts".to_string(), value.to_string());
     }
+
     if let Some(value) = timeline.deleted_ts {
         timeline_map.insert("deleted_ts".to_string(), value.to_string());
     }
@@ -120,6 +180,13 @@ pub fn embed_timeline_in_extra(
     message.extra.insert("timeline".to_string(), json);
 }
 
+/// 解析 i64 字符串
+///
+/// # 参数
+/// * `value` - 字符串值
+///
+/// # 返回
+/// * `Option<i64>` - 如果解析成功，返回 i64；否则返回 None
 fn parse_i64(value: &String) -> Option<i64> {
     value.parse::<i64>().ok()
 }
@@ -240,10 +307,9 @@ pub fn embed_seq_in_extra(extra: &mut HashMap<String, String>, seq: i64) {
 /// assert_eq!(unread_count, 0); // 不会返回负数
 /// ```
 pub fn calculate_unread_count(last_message_seq: Option<i64>, last_read_msg_seq: i64) -> i32 {
-    if let Some(last_seq) = last_message_seq {
-        (last_seq - last_read_msg_seq).max(0) as i32
-    } else {
-        0
+    // 使用 match 表达式替代 if let，提高可读性
+    match last_message_seq {
+        Some(last_seq) => (last_seq - last_read_msg_seq).max(0) as i32,
+        None => 0,
     }
 }
-

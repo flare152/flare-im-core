@@ -11,8 +11,7 @@ pub mod loader;
 pub mod watcher;
 
 pub use loader::{
-    ConfigLoader, ConfigMerger, ConfigValidator, DatabaseConfigLoader, FileConfigLoader,
-    ConfigCenterLoader,
+    ConfigCenterLoader, ConfigLoader, ConfigMerger, ConfigValidator, DatabaseConfigLoader,
+    FileConfigLoader,
 };
 pub use watcher::ConfigWatcher;
-

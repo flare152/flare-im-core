@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -29,7 +29,6 @@ impl KafkaAckPublisher {
         }
     }
 }
-
 
 #[async_trait]
 impl AckPublisher for KafkaAckPublisher {

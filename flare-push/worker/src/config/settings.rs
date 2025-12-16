@@ -53,65 +53,63 @@ impl PushWorkerConfig {
             .ok()
             .or_else(|| service.task_topic.clone())
             .unwrap_or_else(|| "flare.im.push.offline".to_string());
-        
+
         // 批量消费配置
         let max_poll_records = env::var("PUSH_WORKER_MAX_POLL_RECORDS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(100);
-        
+
         let fetch_min_bytes = env::var("PUSH_WORKER_FETCH_MIN_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1024);
-        
+
         let fetch_max_wait_ms = env::var("PUSH_WORKER_FETCH_MAX_WAIT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100);
-        
+
         // 推送重试配置
         let push_retry_max_attempts = env::var("PUSH_WORKER_RETRY_MAX_ATTEMPTS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(3);
-        
+
         let push_retry_initial_delay_ms = env::var("PUSH_WORKER_RETRY_INITIAL_DELAY_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(1000);
-        
+
         let push_retry_max_delay_ms = env::var("PUSH_WORKER_RETRY_MAX_DELAY_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30000);
-        
+
         let push_retry_backoff_multiplier = env::var("PUSH_WORKER_RETRY_BACKOFF_MULTIPLIER")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(2.0);
-        
+
         // ACK上报配置
-        let ack_topic = env::var("PUSH_WORKER_ACK_TOPIC")
-            .ok();
-        
+        let ack_topic = env::var("PUSH_WORKER_ACK_TOPIC").ok();
+
         let ack_timeout_seconds = env::var("PUSH_WORKER_ACK_TIMEOUT_SECONDS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
-        
+
         // 死信队列配置
         let dlq_topic = env::var("PUSH_WORKER_DLQ_TOPIC")
             .ok()
             .unwrap_or_else(|| "flare.im.push.dlq".to_string());
-        
+
         // 推送渠道配置
         let push_provider = env::var("PUSH_WORKER_PUSH_PROVIDER")
             .ok()
             .unwrap_or_else(|| "noop".to_string());
 
-        let signaling_service = env::var("PUSH_WORKER_SIGNALING_SERVICE")
-            .ok();
+        let signaling_service = env::var("PUSH_WORKER_SIGNALING_SERVICE").ok();
         let offline_provider = env::var("PUSH_WORKER_OFFLINE_PROVIDER")
             .ok()
             .or_else(|| service.offline_provider.clone());
@@ -123,11 +121,9 @@ impl PushWorkerConfig {
             .ok()
             .or_else(|| service.hook_config_dir.clone());
 
-        let access_gateway_service = env::var("PUSH_WORKER_ACCESS_GATEWAY_SERVICE")
-            .ok();
+        let access_gateway_service = env::var("PUSH_WORKER_ACCESS_GATEWAY_SERVICE").ok();
 
-        let hook_engine_endpoint = env::var("PUSH_WORKER_HOOK_ENGINE_ENDPOINT")
-            .ok();
+        let hook_engine_endpoint = env::var("PUSH_WORKER_HOOK_ENGINE_ENDPOINT").ok();
 
         Self {
             kafka_bootstrap,
@@ -159,18 +155,17 @@ impl KafkaProducerConfig for PushWorkerConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn message_timeout_ms(&self) -> u64 {
         5000 // 使用默认值 5 秒
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn enable_idempotence(&self) -> bool {
         true // ACK 和 DLQ 消息需要保证不丢失
     }
-    
+
     fn compression_type(&self) -> &str {
         "snappy" // 使用 snappy 压缩
     }
 }
-

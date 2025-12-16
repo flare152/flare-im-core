@@ -32,7 +32,7 @@ impl StorageWriterConfig {
     /// 从应用配置加载（新方式，推荐）
     pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
         let service_config = app.storage_writer_service();
-        
+
         // 解析 Kafka 配置引用
         let kafka_bootstrap = env::var("STORAGE_KAFKA_BOOTSTRAP_SERVERS")
             .ok()
@@ -62,7 +62,9 @@ impl StorageWriterConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .or_else(|| {
-                service_config.kafka.as_ref()
+                service_config
+                    .kafka
+                    .as_ref()
                     .and_then(|kafka_name| app.kafka_profile(kafka_name))
                     .and_then(|profile| profile.timeout_ms)
             })
@@ -73,28 +75,26 @@ impl StorageWriterConfig {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(100);
-        
+
         let fetch_min_bytes = env::var("STORAGE_FETCH_MIN_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1024);
-        
+
         let fetch_max_wait_ms = env::var("STORAGE_FETCH_MAX_WAIT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100);
 
         // 解析 Redis 配置引用（WAL 存储）
-        let redis_url = env::var("STORAGE_REDIS_URL")
-            .ok()
-            .or_else(|| {
-                if let Some(redis_name) = &service_config.wal_store {
-                    app.redis_profile(redis_name)
-                        .map(|profile| profile.url.clone())
-                } else {
-                    None
-                }
-            });
+        let redis_url = env::var("STORAGE_REDIS_URL").ok().or_else(|| {
+            if let Some(redis_name) = &service_config.wal_store {
+                app.redis_profile(redis_name)
+                    .map(|profile| profile.url.clone())
+            } else {
+                None
+            }
+        });
 
         let redis_hot_ttl_seconds = env::var("STORAGE_REDIS_HOT_TTL_SECONDS")
             .ok()
@@ -112,16 +112,14 @@ impl StorageWriterConfig {
             .or_else(|| redis_url.as_ref().map(|_| "storage:wal:buffer".to_string()));
 
         // 解析 PostgreSQL 配置引用（可选）
-        let postgres_url = env::var("STORAGE_POSTGRES_URL")
-            .ok()
-            .or_else(|| {
-                if let Some(postgres_name) = &service_config.postgres {
-                    app.postgres_profile(postgres_name)
-                        .map(|profile| profile.url.clone())
-                } else {
-                    None
-                }
-            });
+        let postgres_url = env::var("STORAGE_POSTGRES_URL").ok().or_else(|| {
+            if let Some(postgres_name) = &service_config.postgres {
+                app.postgres_profile(postgres_name)
+                    .map(|profile| profile.url.clone())
+            } else {
+                None
+            }
+        });
 
         // PostgreSQL 连接池配置（优化性能）
         let postgres_max_connections = env::var("STORAGE_POSTGRES_MAX_CONNECTIONS")
@@ -194,12 +192,12 @@ impl StorageWriterConfig {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(100);
-        
+
         let fetch_min_bytes = env::var("STORAGE_FETCH_MIN_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1024);
-        
+
         let fetch_max_wait_ms = env::var("STORAGE_FETCH_MAX_WAIT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -219,7 +217,7 @@ impl StorageWriterConfig {
             .or_else(|| redis_url.as_ref().map(|_| "storage:wal:buffer".to_string()));
 
         let postgres_url = env::var("STORAGE_POSTGRES_URL").ok();
-        
+
         // PostgreSQL 连接池配置（向后兼容，使用默认值）
         let postgres_max_connections = env::var("STORAGE_POSTGRES_MAX_CONNECTIONS")
             .ok()
@@ -241,7 +239,7 @@ impl StorageWriterConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(3600);
-        
+
         let media_service_endpoint = env::var("MEDIA_SERVICE_ENDPOINT").ok();
 
         Self {
@@ -273,32 +271,32 @@ impl KafkaConsumerConfig for StorageWriterConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn consumer_group(&self) -> &str {
         &self.kafka_group
     }
-    
+
     fn kafka_topic(&self) -> &str {
         &self.kafka_topic
     }
-    
+
     fn fetch_min_bytes(&self) -> usize {
         self.fetch_min_bytes
     }
-    
+
     fn fetch_max_wait_ms(&self) -> u64 {
         self.fetch_max_wait_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn session_timeout_ms(&self) -> u64 {
         6000 // storage-writer 使用较短的超时
     }
-    
+
     fn enable_auto_commit(&self) -> bool {
         false
     }
-    
+
     fn auto_offset_reset(&self) -> &str {
         // 开发阶段：从最新位置开始消费，跳过旧的有问题的消息
         // 生产环境应该改为 "earliest" 以确保不丢失消息
@@ -311,16 +309,16 @@ impl KafkaProducerConfig for StorageWriterConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn message_timeout_ms(&self) -> u64 {
         self.kafka_timeout_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn enable_idempotence(&self) -> bool {
         true // ACK 消息需要保证不丢失
     }
-    
+
     fn compression_type(&self) -> &str {
         "snappy" // ACK 消息使用 snappy 压缩
     }

@@ -35,33 +35,37 @@ pub async fn initialize(
 ) -> Result<ApplicationContext> {
     // 1. 加载代理配置
     let proxy_config = Arc::new(PushProxyConfig::from_app_config(app_config));
-    
+
     // 2. 构建事件发布器
     let publisher: Arc<dyn PushEventPublisher> = Arc::new(
         KafkaPushEventPublisher::new(proxy_config.clone())
-            .context("Failed to create Kafka push event publisher")?
+            .context("Failed to create Kafka push event publisher")?,
     );
-    
+
     // 3. 构建请求验证器
-    let validator = Arc::new(
-        crate::infrastructure::validator::RequestValidatorImpl::new()
-    );
-    
+    let validator = Arc::new(crate::infrastructure::validator::RequestValidatorImpl::new());
+
     // 4. 初始化 Hook 调度器
     let hook_dispatcher = HookDispatcher::new(flare_im_core::hooks::GlobalHookRegistry::get());
-    
+
     // 5. 构建领域服务
     let domain_service = Arc::new(PushDomainService::new(
         publisher,
         validator,
         hook_dispatcher.clone(),
     ));
-    
+
     // 6. 构建命令处理器
-    let command_handler = Arc::new(PushCommandHandler::new(domain_service, hook_dispatcher.clone()));
-    
+    let command_handler = Arc::new(PushCommandHandler::new(
+        domain_service,
+        hook_dispatcher.clone(),
+    ));
+
     // 7. 构建 gRPC 处理器
     let handler = PushGrpcHandler::new(command_handler, hook_dispatcher.clone());
-    
-    Ok(ApplicationContext { handler, hook_dispatcher })
+
+    Ok(ApplicationContext {
+        handler,
+        hook_dispatcher,
+    })
 }

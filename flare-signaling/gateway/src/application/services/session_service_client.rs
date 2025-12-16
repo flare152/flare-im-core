@@ -2,10 +2,10 @@
 //!
 //! 为消息应用服务提供对会话服务的访问能力
 
-use std::sync::Arc;
-use flare_core::common::error::{Result, FlareError};
-use flare_session::application::commands::UpdateCursorCommand;
+use flare_core::common::error::{FlareError, Result};
 use flare_session::application::SessionCommandHandler;
+use flare_session::application::commands::UpdateCursorCommand;
+use std::sync::Arc;
 
 /// 会话服务客户端
 ///
@@ -41,6 +41,8 @@ impl SessionServiceClient {
         self.session_command_handler
             .handle_update_cursor(command)
             .await
-            .map_err(|e| FlareError::general_error(format!("Failed to update session cursor: {}", e)))
+            .map_err(|e| {
+                FlareError::general_error(format!("Failed to update session cursor: {}", e))
+            })
     }
 }

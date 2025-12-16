@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flare_server_core::error::Result;
 use async_trait::async_trait;
+use flare_server_core::error::Result;
 use tokio::sync::RwLock;
 use tracing::{debug, trace};
 
@@ -61,15 +61,11 @@ impl CachedOnlineStatusRepository {
     }
 }
 
-
 #[async_trait]
 impl OnlineStatusRepository for CachedOnlineStatusRepository {
     async fn is_online(&self, user_id: &str) -> Result<bool> {
         let statuses = self.batch_get_online_status(&[user_id.to_string()]).await?;
-        Ok(statuses
-            .get(user_id)
-            .map(|s| s.online)
-            .unwrap_or(false))
+        Ok(statuses.get(user_id).map(|s| s.online).unwrap_or(false))
     }
 
     async fn batch_get_online_status(
@@ -106,7 +102,10 @@ impl OnlineStatusRepository for CachedOnlineStatusRepository {
                 "Querying online status for missing users"
             );
 
-            let fetched = self.inner.batch_get_online_status(&missing_user_ids).await?;
+            let fetched = self
+                .inner
+                .batch_get_online_status(&missing_user_ids)
+                .await?;
 
             // 3. 更新缓存
             {
@@ -133,10 +132,11 @@ impl OnlineStatusRepository for CachedOnlineStatusRepository {
 
         Ok(result)
     }
-    
+
     async fn get_all_online_users_for_session(&self, session_id: &str) -> Result<Vec<String>> {
         // 直接委托给 inner（不缓存，因为 session 的在线用户列表变化频繁）
-        self.inner.get_all_online_users_for_session(session_id).await
+        self.inner
+            .get_all_online_users_for_session(session_id)
+            .await
     }
 }
-

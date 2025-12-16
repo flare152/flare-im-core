@@ -87,12 +87,15 @@ pub trait RetryableError {
 
 impl RetryableError for anyhow::Error {
     fn is_retryable(&self) -> bool {
-        matches!(self.error_type(), ErrorType::Network | ErrorType::Timeout | ErrorType::TemporaryUnavailable)
+        matches!(
+            self.error_type(),
+            ErrorType::Network | ErrorType::Timeout | ErrorType::TemporaryUnavailable
+        )
     }
 
     fn error_type(&self) -> ErrorType {
         let error_str = self.to_string().to_lowercase();
-        
+
         if error_str.contains("user offline") || error_str.contains("users offline") {
             ErrorType::UserOffline
         } else if error_str.contains("timeout") {
@@ -112,15 +115,12 @@ impl RetryableError for anyhow::Error {
 }
 
 /// 带智能重试的执行函数
-/// 
+///
 /// 智能重试策略：
 /// - 网络错误、超时、临时不可用：指数退避重试
 /// - 用户离线：立即返回，不重试（需要重新查询在线状态）
 /// - 认证失败、参数错误：立即返回，不重试
-pub async fn execute_with_retry<F, Fut, T>(
-    policy: &RetryPolicy,
-    mut f: F,
-) -> Result<T, String>
+pub async fn execute_with_retry<F, Fut, T>(policy: &RetryPolicy, mut f: F) -> Result<T, String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, anyhow::Error>>,
@@ -132,10 +132,12 @@ where
             Ok(result) => return Ok(result),
             Err(e) => {
                 let error_type = e.error_type();
-                
+
                 // 根据错误类型决定是否重试
                 match error_type {
-                    ErrorType::UserOffline | ErrorType::AuthenticationFailed | ErrorType::InvalidParameter => {
+                    ErrorType::UserOffline
+                    | ErrorType::AuthenticationFailed
+                    | ErrorType::InvalidParameter => {
                         // 永久失败，不重试
                         return Err(e.to_string());
                     }
@@ -182,4 +184,3 @@ where
 
     Err(last_error.unwrap_or_else(|| "Max retries exceeded".to_string()))
 }
-

@@ -31,9 +31,11 @@ use std::env;
 
 use anyhow::Result;
 use flare_proto::access_gateway::{
-    access_gateway_client::AccessGatewayClient, PushMessageRequest, PushMessageResponse,
+    PushMessageRequest, PushMessageResponse, access_gateway_client::AccessGatewayClient,
 };
-use flare_proto::common::{Message, MessageType, MessageSource, MessageStatus, ContentType, MessageContent, TextContent};
+use flare_proto::common::{
+    ContentType, Message, MessageContent, MessageSource, MessageStatus, MessageType, TextContent,
+};
 use flare_server_core::TokenService;
 use tonic::Request;
 use tracing::{error, info, warn};
@@ -48,13 +50,13 @@ async fn main() -> Result<()> {
 
     // 从环境变量获取配置
     // 注意：生产环境应该使用服务发现，这里仅用于示例
-    let gateway_endpoint = env::var("CORE_GATEWAY_ENDPOINT")
-        .unwrap_or_else(|_| "http://127.0.0.1:50050".to_string());
-    
+    let gateway_endpoint =
+        env::var("CORE_GATEWAY_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:50050".to_string());
+
     let message_content = env::args()
         .nth(1)
         .unwrap_or_else(|| "这是一条来自业务系统的测试消息".to_string());
-    
+
     let target_user_ids: Vec<String> = env::var("USER_IDS")
         .map(|ids| ids.split(',').map(|s| s.trim().to_string()).collect())
         .unwrap_or_default(); // 如果为空，表示推送给所有在线用户（聊天室模式）
@@ -69,14 +71,11 @@ async fn main() -> Result<()> {
     // 生成 JWT Token（业务系统应该使用自己的密钥）
     let token_secret = env::var("TOKEN_SECRET").unwrap_or_else(|_| "insecure-secret".to_string());
     let tenant_id = env::var("TENANT_ID").unwrap_or_else(|_| "default-tenant".to_string());
-    let business_user_id = env::var("BUSINESS_USER_ID").unwrap_or_else(|_| "business-system".to_string());
-    
-    let token_service = TokenService::new(
-        token_secret.clone(),
-        "flare-im-core".to_string(),
-        3600,
-    );
-    
+    let business_user_id =
+        env::var("BUSINESS_USER_ID").unwrap_or_else(|_| "business-system".to_string());
+
+    let token_service = TokenService::new(token_secret.clone(), "flare-im-core".to_string(), 3600);
+
     let token = env::var("TOKEN").unwrap_or_else(|_| {
         match token_service.generate_token(&business_user_id, None, Some(&tenant_id)) {
             Ok(t) => {
@@ -114,16 +113,22 @@ async fn main() -> Result<()> {
             eprintln!("      ./scripts/start_server.sh [single|multi]");
             eprintln!("   2. 检查服务端口是否正确（默认: 50050）");
             eprintln!("   3. 可以通过环境变量指定其他地址：");
-            eprintln!("      CORE_GATEWAY_ENDPOINT=http://localhost:50050 cargo run --example business_push_client");
+            eprintln!(
+                "      CORE_GATEWAY_ENDPOINT=http://localhost:50050 cargo run --example business_push_client"
+            );
             eprintln!();
-            return Err(anyhow::anyhow!("Failed to connect to Core Gateway at {}: {}", gateway_endpoint, e));
+            return Err(anyhow::anyhow!(
+                "Failed to connect to Core Gateway at {}: {}",
+                gateway_endpoint,
+                e
+            ));
         }
     };
 
     // 构建推送消息请求
     // 如果 target_user_ids 为空，表示推送给所有在线用户（聊天室广播）
     let is_broadcast = target_user_ids.is_empty();
-    
+
     info!(
         is_broadcast = is_broadcast,
         target_count = target_user_ids.len(),
@@ -137,18 +142,18 @@ async fn main() -> Result<()> {
     if is_broadcast {
         extra.insert("chatroom".to_string(), "true".to_string());
     }
-    
+
     // 统一使用 "chatroom" 作为 session_id，确保所有消息都发送到同一个聊天室
     // 注意：business_push_client 和 chatroom_client 都使用相同的 session_id
     let session_id = "chatroom".to_string();
-    
+
     let message = Message {
         id: format!("msg-{}", Uuid::new_v4()),
         session_id: session_id.clone(),
         client_msg_id: String::new(), // 客户端消息ID（可选）
         sender_id: business_user_id.clone(),
-        receiver_id: String::new(), // 群聊场景：receiver_id 为空
-        channel_id: session_id.clone(), // 群聊场景：使用 channel_id（等同于 session_id）
+        receiver_id: String::new(),           // 群聊场景：receiver_id 为空
+        channel_id: session_id.clone(),       // 群聊场景：使用 channel_id（等同于 session_id）
         source: MessageSource::System as i32, // 业务系统消息
         seq: 0,
         timestamp: Some(prost_types::Timestamp {
@@ -156,7 +161,7 @@ async fn main() -> Result<()> {
             nanos: 0,
         }),
         session_type: flare_proto::common::SessionType::Group as i32, // 群聊类型
-        message_type: MessageType::Text as i32, // 文本消息
+        message_type: MessageType::Text as i32,                       // 文本消息
         business_type: "chatroom".to_string(),
         content: Some(MessageContent {
             content: Some(flare_proto::common::message_content::Content::Text(
@@ -207,7 +212,7 @@ async fn main() -> Result<()> {
     // 构建 PushMessageRequest（直接使用 StorageMessage）
     let mut metadata = std::collections::HashMap::new();
     metadata.insert("source".to_string(), "business_push_client".to_string());
-    
+
     let push_request = PushMessageRequest {
         request_id: Uuid::new_v4().to_string(),
         context: Some(flare_proto::common::RequestContext {
@@ -252,19 +257,27 @@ async fn main() -> Result<()> {
     // 发送推送请求
     info!("📨 发送推送请求...");
     let start_time = std::time::Instant::now();
-    
+
     match client.push_message(request).await {
         Ok(response) => {
             let elapsed = start_time.elapsed();
             let push_response: PushMessageResponse = response.into_inner();
-            
+
             info!(
                 elapsed_ms = elapsed.as_millis(),
-                success_count = push_response.statistics.as_ref().map(|s| s.success_count).unwrap_or(0),
-                failure_count = push_response.statistics.as_ref().map(|s| s.failure_count).unwrap_or(0),
+                success_count = push_response
+                    .statistics
+                    .as_ref()
+                    .map(|s| s.success_count)
+                    .unwrap_or(0),
+                failure_count = push_response
+                    .statistics
+                    .as_ref()
+                    .map(|s| s.failure_count)
+                    .unwrap_or(0),
                 "✅ 推送请求完成"
             );
-            
+
             if let Some(stats) = &push_response.statistics {
                 println!();
                 println!("📊 推送统计:");
@@ -275,20 +288,22 @@ async fn main() -> Result<()> {
                 println!("  失败推送: {} 用户", stats.failure_count);
                 println!("  耗时: {}ms", elapsed.as_millis());
             }
-            
+
             // 显示推送结果详情
             if !push_response.results.is_empty() {
                 println!();
                 println!("📋 推送结果详情:");
                 for result in &push_response.results {
-                    println!("  - {}: 成功 {} 连接, 失败 {} 连接", 
-                        result.user_id, result.success_count, result.failure_count);
+                    println!(
+                        "  - {}: 成功 {} 连接, 失败 {} 连接",
+                        result.user_id, result.success_count, result.failure_count
+                    );
                     if !result.error_message.is_empty() {
                         println!("    错误: {}", result.error_message);
                     }
                 }
             }
-            
+
             Ok(())
         }
         Err(e) => {
@@ -297,4 +312,3 @@ async fn main() -> Result<()> {
         }
     }
 }
-

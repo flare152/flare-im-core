@@ -23,33 +23,63 @@ impl GatewayConfig {
     pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
         // 优先从配置文件加载服务名，如果没有则使用默认服务名
         let cfg = app.core_gateway_service();
-        
+
         Ok(Self {
             // 注意：服务名必须与注册中心中的服务类型一致（不带 flare- 前缀）
-            signaling_service: cfg.signaling_service
-                .or_else(|| cfg._signaling_endpoint.as_ref().and_then(|_| Some("signaling-online".to_string())))
+            signaling_service: cfg
+                .signaling_service
+                .or_else(|| {
+                    cfg._signaling_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("signaling-online".to_string()))
+                })
                 .unwrap_or_else(|| "signaling-online".to_string()),
-            push_service: cfg.push_service
-                .or_else(|| cfg._push_endpoint.as_ref().and_then(|_| Some("push-server".to_string())))
+            push_service: cfg
+                .push_service
+                .or_else(|| {
+                    cfg._push_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("push-server".to_string()))
+                })
                 .unwrap_or_else(|| "push-server".to_string()),
-            message_service: cfg.message_service
-                .or_else(|| cfg._message_endpoint.as_ref().and_then(|_| Some("message-orchestrator".to_string())))
+            message_service: cfg
+                .message_service
+                .or_else(|| {
+                    cfg._message_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("message-orchestrator".to_string()))
+                })
                 .unwrap_or_else(|| "message-orchestrator".to_string()),
-            storage_service: cfg.storage_service
-                .or_else(|| cfg._storage_endpoint.as_ref().and_then(|_| Some("storage-reader".to_string())))
+            storage_service: cfg
+                .storage_service
+                .or_else(|| {
+                    cfg._storage_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("storage-reader".to_string()))
+                })
                 .unwrap_or_else(|| "storage-reader".to_string()),
-            media_service: cfg.media_service
-                .or_else(|| cfg._media_endpoint.as_ref().and_then(|_| Some("media".to_string())))
+            media_service: cfg
+                .media_service
+                .or_else(|| {
+                    cfg._media_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("media".to_string()))
+                })
                 .unwrap_or_else(|| "media".to_string()),
-            hook_engine_service: cfg.hook_engine_service
-                .or_else(|| cfg._hook_engine_endpoint.as_ref().and_then(|_| Some("hook-engine".to_string())))
+            hook_engine_service: cfg
+                .hook_engine_service
+                .or_else(|| {
+                    cfg._hook_engine_endpoint
+                        .as_ref()
+                        .and_then(|_| Some("hook-engine".to_string()))
+                })
                 .unwrap_or_else(|| "hook-engine".to_string()),
             access_gateway_service: "access-gateway".to_string(),
-            route_service: cfg.route_service
+            route_service: cfg
+                .route_service
                 .unwrap_or_else(|| "signaling-route".to_string()),
             use_route_service: cfg.use_route_service.unwrap_or(false),
-            default_svid: cfg.default_svid
-                .unwrap_or_else(|| "svid.im".to_string()),
+            default_svid: cfg.default_svid.unwrap_or_else(|| "svid.im".to_string()),
         })
     }
 
@@ -68,8 +98,7 @@ impl GatewayConfig {
                 .unwrap_or_else(|_| "flare-message-orchestrator".to_string()),
             storage_service: env::var("STORAGE_SERVICE")
                 .unwrap_or_else(|_| "flare-storage-reader".to_string()),
-            media_service: env::var("MEDIA_SERVICE")
-                .unwrap_or_else(|_| "flare-media".to_string()),
+            media_service: env::var("MEDIA_SERVICE").unwrap_or_else(|_| "flare-media".to_string()),
             hook_engine_service: env::var("HOOK_ENGINE_SERVICE")
                 .unwrap_or_else(|_| "flare-hook-engine".to_string()),
             route_service: env::var("ROUTE_SERVICE")
@@ -78,8 +107,7 @@ impl GatewayConfig {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse()
                 .unwrap_or(false),
-            default_svid: env::var("DEFAULT_SVID")
-                .unwrap_or_else(|_| "svid.im".to_string()),
+            default_svid: env::var("DEFAULT_SVID").unwrap_or_else(|_| "svid.im".to_string()),
         }
     }
 }

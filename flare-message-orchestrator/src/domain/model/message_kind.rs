@@ -1,4 +1,4 @@
-use flare_proto::common::{MessageType, Message as StorageMessage};
+use flare_proto::common::{Message as StorageMessage, MessageType};
 
 /// 消息处理类型（用于决定是否需要持久化）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,14 +27,30 @@ impl MessageProfile {
                 // 从 content 推断类型
                 if let Some(content) = &message.content {
                     match content.content.as_ref() {
-                        Some(flare_proto::common::message_content::Content::Text(_)) => Some("text".to_string()),
-                        Some(flare_proto::common::message_content::Content::Image(_)) => Some("image".to_string()),
-                        Some(flare_proto::common::message_content::Content::Video(_)) => Some("video".to_string()),
-                        Some(flare_proto::common::message_content::Content::Audio(_)) => Some("audio".to_string()),
-                        Some(flare_proto::common::message_content::Content::File(_)) => Some("file".to_string()),
-                        Some(flare_proto::common::message_content::Content::Location(_)) => Some("location".to_string()),
-                        Some(flare_proto::common::message_content::Content::Card(_)) => Some("card".to_string()),
-                        Some(flare_proto::common::message_content::Content::Notification(_)) => Some("notification".to_string()),
+                        Some(flare_proto::common::message_content::Content::Text(_)) => {
+                            Some("text".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Image(_)) => {
+                            Some("image".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Video(_)) => {
+                            Some("video".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Audio(_)) => {
+                            Some("audio".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::File(_)) => {
+                            Some("file".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Location(_)) => {
+                            Some("location".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Card(_)) => {
+                            Some("card".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Notification(_)) => {
+                            Some("notification".to_string())
+                        }
                         Some(flare_proto::common::message_content::Content::Custom(custom)) => {
                             if custom.r#type.is_empty() {
                                 Some("custom".to_string())
@@ -42,16 +58,26 @@ impl MessageProfile {
                                 Some(custom.r#type.clone())
                             }
                         }
-                        Some(flare_proto::common::message_content::Content::Forward(_)) => Some("forward".to_string()),
-                        Some(flare_proto::common::message_content::Content::Typing(_)) => Some("typing".to_string()),
+                        Some(flare_proto::common::message_content::Content::Forward(_)) => {
+                            Some("forward".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Typing(_)) => {
+                            Some("typing".to_string())
+                        }
                         // 注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除
                         // Some(flare_proto::common::message_content::Content::Vote(_)) => Some("vote".to_string()),
                         // Some(flare_proto::common::message_content::Content::Task(_)) => Some("task".to_string()),
                         // Some(flare_proto::common::message_content::Content::Schedule(_)) => Some("schedule".to_string()),
                         // Some(flare_proto::common::message_content::Content::Announcement(_)) => Some("announcement".to_string()),
-                        Some(flare_proto::common::message_content::Content::SystemEvent(_)) => Some("system_event".to_string()),
-                        Some(flare_proto::common::message_content::Content::Quote(_)) => Some("quote".to_string()),
-                        Some(flare_proto::common::message_content::Content::LinkCard(_)) => Some("link_card".to_string()),
+                        Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
+                            Some("system_event".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Quote(_)) => {
+                            Some("quote".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
+                            Some("link_card".to_string())
+                        }
                         None => None,
                     }
                 } else {
@@ -72,7 +98,7 @@ impl MessageProfile {
             "card" => MessageType::Card,
             "custom" | "json" | "sticker" | "command" | "event" | "system" => MessageType::Custom,
             "notification" => MessageType::Notification,
-            
+
             // 功能消息类型（8种）
             "typing" => MessageType::Typing,
             "recall" => MessageType::Recall,
@@ -83,7 +109,7 @@ impl MessageProfile {
             // "task" => MessageType::Task,
             // "schedule" => MessageType::Schedule,
             // "announcement" => MessageType::Announcement,
-            
+
             // 扩展消息类型（5种）
             "mini_program" | "miniprogram" => MessageType::MiniProgram,
             "link_card" | "linkcard" => MessageType::LinkCard,
@@ -91,7 +117,7 @@ impl MessageProfile {
             // 注意：Thread 在新版 protobuf 中已移除
             // "thread" => MessageType::Thread,
             "merge_forward" | "mergeforward" => MessageType::MergeForward,
-            
+
             _ => MessageType::Unspecified,
         };
 
@@ -115,7 +141,7 @@ impl MessageProfile {
     }
 
     /// 判断消息处理类型
-    /// 
+    ///
     /// 规则：
     /// - 如果 extra 中有 `notification_only=true`，则为 Notification
     /// - 如果 message_type_label 为 "notification"，则为 Notification
@@ -172,10 +198,14 @@ mod tests {
     fn message_with_extra(message_type_label: &str, message_type: i32) -> Message {
         let mut msg = Message::default();
         msg.message_type = message_type;
-        msg.extra.insert("message_type".to_string(), message_type_label.to_string());
+        msg.extra
+            .insert("message_type".to_string(), message_type_label.to_string());
         msg.content = Some(MessageContent {
             content: Some(flare_proto::common::message_content::Content::Text(
-                TextContent { text: "test".to_string(), mentions: vec![] }
+                TextContent {
+                    text: "test".to_string(),
+                    mentions: vec![],
+                },
             )),
             extensions: vec![],
         });

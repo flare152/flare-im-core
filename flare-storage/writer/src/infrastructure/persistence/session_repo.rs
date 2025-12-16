@@ -3,9 +3,9 @@
 //! 负责更新会话和参与者信息（last_message_seq、unread_count等）
 
 use anyhow::Result;
+use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tracing::{debug, instrument};
 
 use crate::domain::repository::SessionUpdateRepository;
@@ -20,7 +20,6 @@ impl PostgresSessionRepository {
         Self { pool }
     }
 }
-
 
 #[async_trait]
 impl SessionUpdateRepository for PostgresSessionRepository {
@@ -109,4 +108,3 @@ impl SessionUpdateRepository for PostgresSessionRepository {
         Ok(())
     }
 }
-

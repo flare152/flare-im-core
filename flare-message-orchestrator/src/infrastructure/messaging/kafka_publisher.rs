@@ -1,18 +1,18 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
-use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
-use flare_proto::storage::StoreMessageRequest as StorageStoreMessageRequest;
 use flare_proto::push::PushMessageRequest as PushPushMessageRequest;
+use flare_proto::storage::StoreMessageRequest as StorageStoreMessageRequest;
+use futures::FutureExt;
+use futures::future::try_join_all;
 use prost::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio::sync::Mutex;
-use futures::future::try_join_all;
-use futures::FutureExt;
 
-use crate::domain::repository::MessageEventPublisher;
 use crate::config::MessageOrchestratorConfig;
+use crate::domain::repository::MessageEventPublisher;
 
 /// Kafka 消息发布器（支持批量发送）
 pub struct KafkaMessagePublisher {
@@ -34,30 +34,30 @@ impl KafkaMessagePublisher {
             push_buffer: Arc::new(Mutex::new(Vec::new())),
             last_flush_time: Arc::new(Mutex::new(std::time::Instant::now())),
         });
-        
+
         // 启动自动刷新任务
         let publisher_clone = Arc::clone(&publisher);
         let flush_interval = Duration::from_millis(config.kafka_flush_interval_ms);
         tokio::spawn(async move {
             publisher_clone.auto_flush_loop(flush_interval).await;
         });
-        
+
         publisher
     }
-    
+
     /// 自动刷新循环
     async fn auto_flush_loop(self: Arc<Self>, flush_interval: Duration) {
         let mut interval = tokio::time::interval(flush_interval);
         loop {
             interval.tick().await;
-            
+
             // 刷新存储消息缓冲区
             let storage_messages = {
                 let mut buffer = self.storage_buffer.lock().await;
                 let last_flush = self.last_flush_time.lock().await;
                 let should_flush = buffer.len() >= self.config.kafka_batch_size
                     || last_flush.elapsed() >= flush_interval;
-                
+
                 if should_flush && !buffer.is_empty() {
                     let messages = buffer.drain(..).collect();
                     drop(buffer);
@@ -66,21 +66,21 @@ impl KafkaMessagePublisher {
                     None
                 }
             };
-            
+
             if let Some(messages) = storage_messages {
                 if let Err(e) = self.publish_storage_batch(messages).await {
                     tracing::error!(error = %e, "Failed to flush storage messages");
                 }
                 *self.last_flush_time.lock().await = std::time::Instant::now();
             }
-            
+
             // 刷新推送消息缓冲区
             let push_messages = {
                 let mut buffer = self.push_buffer.lock().await;
                 let last_flush = self.last_flush_time.lock().await;
                 let should_flush = buffer.len() >= self.config.kafka_batch_size
                     || last_flush.elapsed() >= flush_interval;
-                
+
                 if should_flush && !buffer.is_empty() {
                     let messages = buffer.drain(..).collect();
                     drop(buffer);
@@ -89,7 +89,7 @@ impl KafkaMessagePublisher {
                     None
                 }
             };
-            
+
             if let Some(messages) = push_messages {
                 if let Err(e) = self.publish_push_batch(messages).await {
                     tracing::error!(error = %e, "Failed to flush push messages");
@@ -97,44 +97,45 @@ impl KafkaMessagePublisher {
             }
         }
     }
-    
+
     /// 批量发布存储消息
     async fn publish_storage_batch(&self, payloads: Vec<StorageStoreMessageRequest>) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());
         }
-        
+
         // 批量编码和构建记录
         // 先编码所有 payload，保存到 Vec 中以保持生命周期
         let mut encoded_payloads = Vec::with_capacity(payloads.len());
         let mut valid_indices = Vec::new();
-        
+
         for (idx, payload) in payloads.iter().enumerate() {
-        let encoded = payload.encode_to_vec();
-        
-        // 验证消息大小
-        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        if encoded.len() > MAX_MESSAGE_SIZE {
-            tracing::error!(
-                payload_size = encoded.len(),
-                max_size = MAX_MESSAGE_SIZE,
-                session_id = %payload.session_id,
-                message_id = payload.message.as_ref().map(|m| m.id.as_str()).unwrap_or("unknown"),
-                "Storage message size exceeds maximum allowed size"
-            );
+            let encoded = payload.encode_to_vec();
+
+            // 验证消息大小
+            const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+            if encoded.len() > MAX_MESSAGE_SIZE {
+                tracing::error!(
+                    payload_size = encoded.len(),
+                    max_size = MAX_MESSAGE_SIZE,
+                    session_id = %payload.session_id,
+                    message_id = payload.message.as_ref().map(|m| m.id.as_str()).unwrap_or("unknown"),
+                    "Storage message size exceeds maximum allowed size"
+                );
                 continue; // 跳过过大的消息
-        }
+            }
 
             encoded_payloads.push(encoded);
             valid_indices.push(idx);
         }
-        
+
         if encoded_payloads.is_empty() {
             return Ok(());
         }
-        
+
         // 构建记录（借用 encoded_payloads）
-        let records: Vec<_> = valid_indices.iter()
+        let records: Vec<_> = valid_indices
+            .iter()
             .enumerate()
             .map(|(encoded_idx, &payload_idx)| {
                 FutureRecord::to(&self.config.kafka_storage_topic)
@@ -142,65 +143,70 @@ impl KafkaMessagePublisher {
                     .key(&payloads[payload_idx].session_id)
             })
             .collect();
-        
+
         // 批量发送（并发执行）
-        let futures: Vec<_> = records.into_iter()
+        let futures: Vec<_> = records
+            .into_iter()
             .map(|record| {
-                self.producer.send(record, Duration::from_millis(self.config.kafka_timeout_ms))
+                self.producer
+                    .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
                     .map(|result| result.map_err(|(err, _)| anyhow!("Kafka send error: {}", err)))
             })
             .collect();
-        
+
         // 等待所有发送完成（并发执行）
         try_join_all(futures).await?;
-        
+
         tracing::info!(
             topic = %self.config.kafka_storage_topic,
             batch_size = payloads.len(),
             "Successfully published batch of storage messages to Kafka"
         );
-        
-                Ok(())
-            }
-    
+
+        Ok(())
+    }
+
     /// 批量发布推送消息
     async fn publish_push_batch(&self, payloads: Vec<PushPushMessageRequest>) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());
         }
-        
+
         // 批量编码和构建记录
         // 先编码所有 payload，保存到 Vec 中以保持生命周期
         let mut encoded_payloads = Vec::with_capacity(payloads.len());
         let mut valid_indices = Vec::new();
-        
+
         for (idx, payload) in payloads.iter().enumerate() {
-        let encoded = payload.encode_to_vec();
-        
+            let encoded = payload.encode_to_vec();
+
             // 验证消息大小
-        const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB
-        if encoded.len() > MAX_MESSAGE_SIZE {
-            tracing::error!(
-                payload_size = encoded.len(),
-                max_size = MAX_MESSAGE_SIZE,
+            const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+            if encoded.len() > MAX_MESSAGE_SIZE {
+                tracing::error!(
+                    payload_size = encoded.len(),
+                    max_size = MAX_MESSAGE_SIZE,
                     "Push message size exceeds maximum allowed size"
                 );
                 continue; // 跳过过大的消息
             }
-            
+
             encoded_payloads.push(encoded);
             valid_indices.push(idx);
         }
-        
+
         if encoded_payloads.is_empty() {
             return Ok(());
         }
-        
+
         // 构建记录（借用 encoded_payloads）
-        let records: Vec<_> = valid_indices.iter()
+        let records: Vec<_> = valid_indices
+            .iter()
             .enumerate()
             .map(|(encoded_idx, &payload_idx)| {
-                let key = payloads[payload_idx].user_ids.first()
+                let key = payloads[payload_idx]
+                    .user_ids
+                    .first()
                     .map(|s| s.as_str())
                     .unwrap_or("");
                 FutureRecord::to(&self.config.kafka_push_topic)
@@ -208,15 +214,17 @@ impl KafkaMessagePublisher {
                     .key(key)
             })
             .collect();
-        
+
         // 批量发送（并发执行）
-        let futures: Vec<_> = records.into_iter()
+        let futures: Vec<_> = records
+            .into_iter()
             .map(|record| {
-                self.producer.send(record, Duration::from_millis(self.config.kafka_timeout_ms))
+                self.producer
+                    .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
                     .map(|result| result.map_err(|(err, _)| anyhow!("Kafka send error: {}", err)))
             })
             .collect();
-        
+
         // 等待所有发送完成（并发执行）
         try_join_all(futures).await?;
 
@@ -225,10 +233,10 @@ impl KafkaMessagePublisher {
             batch_size = payloads.len(),
             "Successfully published batch of push messages to Kafka"
         );
-        
-                Ok(())
+
+        Ok(())
     }
-    
+
     /// 立即刷新缓冲区（用于关键消息）
     pub async fn flush(&self) -> Result<()> {
         // 刷新存储消息
@@ -242,11 +250,11 @@ impl KafkaMessagePublisher {
                 None
             }
         };
-        
+
         if let Some(messages) = storage_messages {
             self.publish_storage_batch(messages).await?;
         }
-        
+
         // 刷新推送消息
         let push_messages = {
             let mut buffer = self.push_buffer.lock().await;
@@ -258,19 +266,22 @@ impl KafkaMessagePublisher {
                 None
             }
         };
-        
+
         if let Some(messages) = push_messages {
             self.publish_push_batch(messages).await?;
         }
-        
+
         *self.last_flush_time.lock().await = std::time::Instant::now();
-        
+
         Ok(())
     }
 }
 
 impl MessageEventPublisher for KafkaMessagePublisher {
-    fn publish_storage(&self, payload: StorageStoreMessageRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    fn publish_storage(
+        &self,
+        payload: StorageStoreMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             // 添加到缓冲区
             let should_flush = {
@@ -278,7 +289,7 @@ impl MessageEventPublisher for KafkaMessagePublisher {
                 buffer.push(payload);
                 buffer.len() >= self.config.kafka_batch_size
             };
-            
+
             // 如果缓冲区已满，立即刷新
             if should_flush {
                 let messages: Vec<StorageStoreMessageRequest> = {
@@ -288,12 +299,15 @@ impl MessageEventPublisher for KafkaMessagePublisher {
                 self.publish_storage_batch(messages).await?;
                 *self.last_flush_time.lock().await = std::time::Instant::now();
             }
-            
+
             Ok(())
         })
     }
 
-    fn publish_push(&self, payload: PushPushMessageRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    fn publish_push(
+        &self,
+        payload: PushPushMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             // 添加到缓冲区
             let should_flush = {
@@ -301,7 +315,7 @@ impl MessageEventPublisher for KafkaMessagePublisher {
                 buffer.push(payload);
                 buffer.len() >= self.config.kafka_batch_size
             };
-            
+
             // 如果缓冲区已满，立即刷新
             if should_flush {
                 let messages: Vec<PushPushMessageRequest> = {
@@ -310,7 +324,7 @@ impl MessageEventPublisher for KafkaMessagePublisher {
                 };
                 self.publish_push_batch(messages).await?;
             }
-            
+
             Ok(())
         })
     }
@@ -325,21 +339,21 @@ impl MessageEventPublisher for KafkaMessagePublisher {
             let (storage_should_flush, push_should_flush) = {
                 let mut storage_buffer = self.storage_buffer.lock().await;
                 let mut push_buffer = self.push_buffer.lock().await;
-                
+
                 storage_buffer.push(storage_payload);
                 push_buffer.push(push_payload);
-                
+
                 (
                     storage_buffer.len() >= self.config.kafka_batch_size,
                     push_buffer.len() >= self.config.kafka_batch_size,
                 )
             };
-            
+
             // 如果任一缓冲区已满，刷新所有缓冲区
             if storage_should_flush || push_should_flush {
                 self.flush().await?;
             }
-            
+
             Ok(())
         })
     }

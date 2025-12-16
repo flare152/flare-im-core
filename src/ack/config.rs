@@ -68,19 +68,19 @@ impl Default for AckServiceConfig {
             batch_size: 100,
             importance_config: AckImportanceConfig {
                 high: ImportanceLevelConfig {
-                    redis_ttl: 7200,      // 2小时
+                    redis_ttl: 7200, // 2小时
                     immediate_persistence: true,
-                    timeout_seconds: 30,  // 30秒超时
+                    timeout_seconds: 30, // 30秒超时
                     max_retries: 3,
                 },
                 medium: ImportanceLevelConfig {
-                    redis_ttl: 3600,      // 1小时
+                    redis_ttl: 3600, // 1小时
                     immediate_persistence: false,
-                    timeout_seconds: 60,  // 60秒超时
+                    timeout_seconds: 60, // 60秒超时
                     max_retries: 2,
                 },
                 low: ImportanceLevelConfig {
-                    redis_ttl: 1800,      // 30分钟
+                    redis_ttl: 1800, // 30分钟
                     immediate_persistence: false,
                     timeout_seconds: 120, // 120秒超时
                     max_retries: 1,
@@ -88,7 +88,7 @@ impl Default for AckServiceConfig {
             },
             business_scenarios: {
                 let mut scenarios = HashMap::new();
-                
+
                 // 即时通讯场景
                 let mut im_mapping = HashMap::new();
                 im_mapping.insert("text".to_string(), "high".to_string());
@@ -96,35 +96,45 @@ impl Default for AckServiceConfig {
                 im_mapping.insert("voice".to_string(), "high".to_string());
                 im_mapping.insert("video".to_string(), "high".to_string());
                 im_mapping.insert("file".to_string(), "medium".to_string());
-                scenarios.insert("instant_messaging".to_string(), BusinessScenarioConfig {
-                    scenario_name: "即时通讯".to_string(),
-                    message_type_mapping: im_mapping,
-                    default_importance: "medium".to_string(),
-                });
-                
+                scenarios.insert(
+                    "instant_messaging".to_string(),
+                    BusinessScenarioConfig {
+                        scenario_name: "即时通讯".to_string(),
+                        message_type_mapping: im_mapping,
+                        default_importance: "medium".to_string(),
+                    },
+                );
+
                 // 系统通知场景
                 let mut notification_mapping = HashMap::new();
                 notification_mapping.insert("system_alert".to_string(), "high".to_string());
                 notification_mapping.insert("friend_request".to_string(), "high".to_string());
                 notification_mapping.insert("group_invite".to_string(), "high".to_string());
-                notification_mapping.insert("general_notification".to_string(), "medium".to_string());
-                scenarios.insert("notification".to_string(), BusinessScenarioConfig {
-                    scenario_name: "系统通知".to_string(),
-                    message_type_mapping: notification_mapping,
-                    default_importance: "low".to_string(),
-                });
-                
+                notification_mapping
+                    .insert("general_notification".to_string(), "medium".to_string());
+                scenarios.insert(
+                    "notification".to_string(),
+                    BusinessScenarioConfig {
+                        scenario_name: "系统通知".to_string(),
+                        message_type_mapping: notification_mapping,
+                        default_importance: "low".to_string(),
+                    },
+                );
+
                 // 状态同步场景
                 let mut sync_mapping = HashMap::new();
                 sync_mapping.insert("presence".to_string(), "low".to_string());
                 sync_mapping.insert("typing_indicator".to_string(), "low".to_string());
                 sync_mapping.insert("read_receipt".to_string(), "medium".to_string());
-                scenarios.insert("status_sync".to_string(), BusinessScenarioConfig {
-                    scenario_name: "状态同步".to_string(),
-                    message_type_mapping: sync_mapping,
-                    default_importance: "low".to_string(),
-                });
-                
+                scenarios.insert(
+                    "status_sync".to_string(),
+                    BusinessScenarioConfig {
+                        scenario_name: "状态同步".to_string(),
+                        message_type_mapping: sync_mapping,
+                        default_importance: "low".to_string(),
+                    },
+                );
+
                 scenarios
             },
         }
@@ -141,9 +151,11 @@ impl AckServiceConfig {
         // 查找业务场景配置
         if let Some(scenario_config) = self.business_scenarios.get(scenario) {
             // 根据消息类型查找重要性级别
-            let importance_level = scenario_config.message_type_mapping.get(message_type)
+            let importance_level = scenario_config
+                .message_type_mapping
+                .get(message_type)
                 .unwrap_or(&scenario_config.default_importance);
-            
+
             // 返回对应的配置
             match importance_level.as_str() {
                 "high" => Some(&self.importance_config.high),
@@ -155,7 +167,7 @@ impl AckServiceConfig {
             None
         }
     }
-    
+
     /// 获取默认重要性级别配置
     pub fn get_default_importance_config(&self, level: &str) -> Option<&ImportanceLevelConfig> {
         match level {

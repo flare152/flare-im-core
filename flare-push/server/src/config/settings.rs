@@ -42,18 +42,18 @@ pub struct PushServerConfig {
     pub ack_monitor_interval_seconds: u64,
     pub ack_timeout_max_retries: u32,
     // ACK 监控性能优化配置
-    pub ack_scan_batch_size: usize,        // 每次 SCAN 的 keys 数量
-    pub ack_pipeline_batch_size: usize,   // Pipeline 批量获取的批次大小
-    pub ack_timeout_batch_size: usize,    // 批量处理超时事件的批次大小
+    pub ack_scan_batch_size: usize,          // 每次 SCAN 的 keys 数量
+    pub ack_pipeline_batch_size: usize,      // Pipeline 批量获取的批次大小
+    pub ack_timeout_batch_size: usize,       // 批量处理超时事件的批次大小
     pub ack_timeout_concurrent_limit: usize, // 并发处理超时事件的最大数量
     // ACK 服务配置（从业务模块配置中读取）
-    pub ack_redis_ttl: u64,                // Redis 默认过期时间（秒）
-    pub ack_cache_capacity: usize,         // 内存缓存容量
-    pub ack_batch_interval_ms: u64,        // 批量处理间隔（毫秒）
-    pub ack_batch_size: usize,             // 批量处理大小
+    pub ack_redis_ttl: u64,         // Redis 默认过期时间（秒）
+    pub ack_cache_capacity: usize,  // 内存缓存容量
+    pub ack_batch_interval_ms: u64, // 批量处理间隔（毫秒）
+    pub ack_batch_size: usize,      // 批量处理大小
     // ACK 超时重试配置（区别于推送重试，避免 Kafka 阻塞）
-    pub ack_retry_initial_delay_ms: u64,   // ACK 超时重试初始延迟（毫秒，较短）
-    pub ack_retry_max_delay_ms: u64,        // ACK 超时重试最大延迟（毫秒，较短）
+    pub ack_retry_initial_delay_ms: u64, // ACK 超时重试初始延迟（毫秒，较短）
+    pub ack_retry_max_delay_ms: u64,     // ACK 超时重试最大延迟（毫秒，较短）
     // 离线推送队列
     pub offline_topic: String,
     pub dlq_topic: String,
@@ -128,12 +128,12 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(500);
-        
+
         let fetch_min_bytes = env::var("PUSH_SERVER_FETCH_MIN_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1_048_576); // 1MB
-        
+
         let fetch_max_wait_ms = env::var("PUSH_SERVER_FETCH_MAX_WAIT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -144,7 +144,7 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(100);
-        
+
         let online_status_timeout_ms = env::var("PUSH_SERVER_ONLINE_STATUS_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -155,22 +155,24 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(10);
-        
-        let gateway_router_connection_timeout_ms = env::var("PUSH_SERVER_GATEWAY_ROUTER_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(5000);
-        
-        let gateway_router_connection_idle_timeout_ms = env::var("PUSH_SERVER_GATEWAY_ROUTER_IDLE_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(300_000); // 5分钟默认空闲超时
-        
-        let gateway_deployment_mode = env::var("GATEWAY_DEPLOYMENT_MODE")
-            .unwrap_or_else(|_| "single_region".to_string());
-        
+
+        let gateway_router_connection_timeout_ms =
+            env::var("PUSH_SERVER_GATEWAY_ROUTER_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(5000);
+
+        let gateway_router_connection_idle_timeout_ms =
+            env::var("PUSH_SERVER_GATEWAY_ROUTER_IDLE_TIMEOUT_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(300_000); // 5分钟默认空闲超时
+
+        let gateway_deployment_mode =
+            env::var("GATEWAY_DEPLOYMENT_MODE").unwrap_or_else(|_| "single_region".to_string());
+
         let local_gateway_id = env::var("LOCAL_GATEWAY_ID").ok();
-        
+
         // 注意：服务名已统一在 service_names.rs 中定义
         // 所有服务注册和发现都直接使用常量，不再从配置文件读取
         // 支持通过环境变量覆盖（例如：SESSION_SERVICE=flare-session-dev）
@@ -180,17 +182,17 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(3);
-        
+
         let push_retry_initial_delay_ms = env::var("PUSH_SERVER_RETRY_INITIAL_DELAY_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100);
-        
+
         let push_retry_max_delay_ms = env::var("PUSH_SERVER_RETRY_MAX_DELAY_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(5000);
-        
+
         let push_retry_backoff_multiplier = env::var("PUSH_SERVER_RETRY_BACKOFF_MULTIPLIER")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -201,12 +203,12 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
-        
+
         let ack_monitor_interval_seconds = env::var("PUSH_SERVER_ACK_MONITOR_INTERVAL_SECONDS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(1);
-        
+
         let ack_timeout_max_retries = env::var("PUSH_SERVER_ACK_TIMEOUT_MAX_RETRIES")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
@@ -215,48 +217,56 @@ impl PushServerConfig {
         // 离线推送队列
         let offline_topic = env::var("PUSH_SERVER_OFFLINE_TOPIC")
             .unwrap_or_else(|_| "flare.im.push.offline".to_string());
-        
-        let dlq_topic = env::var("PUSH_SERVER_DLQ_TOPIC")
-            .unwrap_or_else(|_| "flare.im.push.dlq".to_string());
-        
-        let ack_topic = env::var("PUSH_SERVER_ACK_TOPIC")
-            .unwrap_or_else(|_| "flare.im.push.acks".to_string());
+
+        let dlq_topic =
+            env::var("PUSH_SERVER_DLQ_TOPIC").unwrap_or_else(|_| "flare.im.push.dlq".to_string());
+
+        let ack_topic =
+            env::var("PUSH_SERVER_ACK_TOPIC").unwrap_or_else(|_| "flare.im.push.acks".to_string());
 
         // ACK 监控性能优化配置
         let ack_scan_batch_size = env::var("PUSH_SERVER_ACK_SCAN_BATCH_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(500); // 每次 SCAN 最多 500 个 keys
-        
+
         let ack_pipeline_batch_size = env::var("PUSH_SERVER_ACK_PIPELINE_BATCH_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1000); // Pipeline 每批最多 1000 个 keys
-        
+
         let ack_timeout_batch_size = env::var("PUSH_SERVER_ACK_TIMEOUT_BATCH_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(100); // 批量处理超时事件，每批 100 个
-        
+
         let ack_timeout_concurrent_limit = env::var("PUSH_SERVER_ACK_TIMEOUT_CONCURRENT_LIMIT")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(50); // 最多并发处理 50 个超时事件
 
         // ACK 服务配置（从业务模块配置中读取）
-        let ack_redis_ttl = service.ack.as_ref()
+        let ack_redis_ttl = service
+            .ack
+            .as_ref()
             .map(|ack| ack.redis_ttl)
             .unwrap_or(3600);
-        
-        let ack_cache_capacity = service.ack.as_ref()
+
+        let ack_cache_capacity = service
+            .ack
+            .as_ref()
             .map(|ack| ack.cache_capacity)
             .unwrap_or(10000);
-        
-        let ack_batch_interval_ms = service.ack.as_ref()
+
+        let ack_batch_interval_ms = service
+            .ack
+            .as_ref()
             .map(|ack| ack.batch_interval_ms)
             .unwrap_or(100);
-        
-        let ack_batch_size = service.ack.as_ref()
+
+        let ack_batch_size = service
+            .ack
+            .as_ref()
             .map(|ack| ack.batch_size)
             .unwrap_or(100);
 
@@ -266,7 +276,7 @@ impl PushServerConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(50); // 50ms，比推送重试更快
-        
+
         let ack_retry_max_delay_ms = env::var("PUSH_SERVER_ACK_RETRY_MAX_DELAY_MS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -323,32 +333,32 @@ impl KafkaConsumerConfig for PushServerConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn consumer_group(&self) -> &str {
         &self.consumer_group
     }
-    
+
     fn kafka_topic(&self) -> &str {
         &self.task_topic
     }
-    
+
     fn fetch_min_bytes(&self) -> usize {
         self.fetch_min_bytes
     }
-    
+
     fn fetch_max_wait_ms(&self) -> u64 {
         self.fetch_max_wait_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn session_timeout_ms(&self) -> u64 {
         30000
     }
-    
+
     fn enable_auto_commit(&self) -> bool {
         false
     }
-    
+
     fn auto_offset_reset(&self) -> &str {
         "earliest"
     }
@@ -359,16 +369,16 @@ impl KafkaProducerConfig for PushServerConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn message_timeout_ms(&self) -> u64 {
         self.kafka_timeout_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn enable_idempotence(&self) -> bool {
         true // 推送任务需要保证不丢失
     }
-    
+
     fn compression_type(&self) -> &str {
         "snappy" // 推送任务使用 snappy 压缩，平衡性能和压缩比
     }

@@ -21,15 +21,10 @@ impl PostgresMessageStateRepository {
     }
 }
 
-
 #[async_trait]
 impl MessageStateRepository for PostgresMessageStateRepository {
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_read(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_read(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_read, read_at, updated_at)
@@ -57,11 +52,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_deleted(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_deleted(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_deleted, deleted_at, updated_at)
@@ -89,11 +80,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_burned(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, burn_after_read, burned_at, updated_at)
@@ -121,11 +108,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn is_read(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<bool> {
+    async fn is_read(&self, message_id: &str, user_id: &str) -> Result<bool> {
         let row = sqlx::query(
             r#"
             SELECT is_read
@@ -143,11 +126,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn is_deleted(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<bool> {
+    async fn is_deleted(&self, message_id: &str, user_id: &str) -> Result<bool> {
         let row = sqlx::query(
             r#"
             SELECT is_deleted
@@ -165,11 +144,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn is_burned(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<bool> {
+    async fn is_burned(&self, message_id: &str, user_id: &str) -> Result<bool> {
         let row = sqlx::query(
             r#"
             SELECT burned_at IS NOT NULL as is_burned
@@ -210,7 +185,9 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         .await
         .context("Failed to batch check deleted messages")?;
 
-        Ok(rows.into_iter().map(|r| r.get::<String, _>("message_id")).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| r.get::<String, _>("message_id"))
+            .collect())
     }
 }
-

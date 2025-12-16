@@ -6,4 +6,3 @@ pub mod sequence_allocator;
 pub use hook_builder::*;
 pub use message_domain_service::MessageDomainService;
 pub use sequence_allocator::SequenceAllocator;
-

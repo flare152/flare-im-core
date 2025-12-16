@@ -27,13 +27,12 @@ impl DeviceRouteQueryService {
             return Ok(None);
         }
 
-        routes.sort_by(|a, b| {
-            match b.device_priority.cmp(&a.device_priority) {
-                std::cmp::Ordering::Equal => b.quality_score
-                    .partial_cmp(&a.quality_score)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                other => other,
-            }
+        routes.sort_by(|a, b| match b.device_priority.cmp(&a.device_priority) {
+            std::cmp::Ordering::Equal => b
+                .quality_score
+                .partial_cmp(&a.quality_score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            other => other,
         });
 
         Ok(routes.into_iter().next())

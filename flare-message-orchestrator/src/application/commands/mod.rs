@@ -15,4 +15,3 @@ pub struct BatchStoreMessageCommand {
     /// 批量请求
     pub requests: Vec<StoreMessageRequest>,
 }
-

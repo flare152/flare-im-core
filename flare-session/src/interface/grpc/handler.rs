@@ -1,36 +1,32 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use flare_proto::common;
+use flare_proto::common::DeviceState as ProtoDeviceState;
+use flare_proto::common::SessionSummary as ProtoSessionSummary;
 use flare_proto::session::session_service_server::SessionService;
 use flare_proto::session::{
-    BatchAcknowledgeRequest, BatchAcknowledgeResponse, CreateSessionRequest,
-    CreateSessionResponse, DeleteSessionRequest, DeleteSessionResponse,
-    DevicePresence as ProtoDevicePresence,
-    ForceSessionSyncRequest, ForceSessionSyncResponse, ListSessionsRequest,
-    ListSessionsResponse, ManageParticipantsRequest, ManageParticipantsResponse,
-    SearchSessionsRequest, SearchSessionsResponse, SessionBootstrapRequest,
-    SessionBootstrapResponse, SessionPolicy as ProtoSessionPolicy,
-    SyncMessagesRequest, SyncMessagesResponse,
+    BatchAcknowledgeRequest, BatchAcknowledgeResponse, CreateSessionRequest, CreateSessionResponse,
+    DeleteSessionRequest, DeleteSessionResponse, DevicePresence as ProtoDevicePresence,
+    ForceSessionSyncRequest, ForceSessionSyncResponse, ListSessionsRequest, ListSessionsResponse,
+    ManageParticipantsRequest, ManageParticipantsResponse, SearchSessionsRequest,
+    SearchSessionsResponse, SessionBootstrapRequest, SessionBootstrapResponse,
+    SessionPolicy as ProtoSessionPolicy, SyncMessagesRequest, SyncMessagesResponse,
     UpdateCursorRequest, UpdateCursorResponse, UpdatePresenceRequest, UpdatePresenceResponse,
     UpdateSessionRequest, UpdateSessionResponse,
 };
-use flare_proto::common::DeviceState as ProtoDeviceState;
-use flare_proto::common::SessionSummary as ProtoSessionSummary;
-use flare_proto::common;
 use flare_server_core::error;
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
-use crate::application::handlers::{SessionCommandHandler, SessionQueryHandler};
 use crate::application::commands::{
-    BatchAcknowledgeCommand, CreateSessionCommand, DeleteSessionCommand,
-    ForceSessionSyncCommand, ManageParticipantsCommand, UpdateCursorCommand,
-    UpdatePresenceCommand, UpdateSessionCommand,
+    BatchAcknowledgeCommand, CreateSessionCommand, DeleteSessionCommand, ForceSessionSyncCommand,
+    ManageParticipantsCommand, UpdateCursorCommand, UpdatePresenceCommand, UpdateSessionCommand,
 };
+use crate::application::handlers::{SessionCommandHandler, SessionQueryHandler};
 use crate::application::queries::{
-    ListSessionsQuery, SearchSessionsQuery, SessionBootstrapQuery,
-    SyncMessagesQuery,
+    ListSessionsQuery, SearchSessionsQuery, SessionBootstrapQuery, SyncMessagesQuery,
 };
 use crate::domain::model::{
     ConflictResolutionPolicy, DevicePresence, DeviceState, Session, SessionFilter,
@@ -582,9 +578,10 @@ impl SessionService for SessionGrpcHandler {
         request: Request<flare_proto::session::CreateThreadRequest>,
     ) -> Result<Response<flare_proto::session::CreateThreadResponse>, Status> {
         let req = request.into_inner();
-        let thread_service = self.thread_service.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Thread service not configured")
-        })?;
+        let thread_service = self
+            .thread_service
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         let operator_id = req
             .context
@@ -597,7 +594,11 @@ impl SessionService for SessionGrpcHandler {
             .create_thread(
                 &req.session_id,
                 &req.root_message_id,
-                if req.title.is_empty() { None } else { Some(&req.title) },
+                if req.title.is_empty() {
+                    None
+                } else {
+                    Some(&req.title)
+                },
                 &operator_id,
             )
             .await
@@ -614,9 +615,10 @@ impl SessionService for SessionGrpcHandler {
         request: Request<flare_proto::session::ListThreadsRequest>,
     ) -> Result<Response<flare_proto::session::ListThreadsResponse>, Status> {
         let req = request.into_inner();
-        let thread_service = self.thread_service.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Thread service not configured")
-        })?;
+        let thread_service = self
+            .thread_service
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         let sort_order = match req.sort_order() {
             flare_proto::session::SortOrder::Unspecified
@@ -652,9 +654,10 @@ impl SessionService for SessionGrpcHandler {
         request: Request<flare_proto::session::GetThreadRequest>,
     ) -> Result<Response<flare_proto::session::GetThreadResponse>, Status> {
         let req = request.into_inner();
-        let thread_service = self.thread_service.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Thread service not configured")
-        })?;
+        let thread_service = self
+            .thread_service
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         let thread = thread_service
             .get_thread(&req.thread_id)
@@ -707,9 +710,10 @@ impl SessionService for SessionGrpcHandler {
         let patches: Vec<flare_proto::common::SessionPatch> = candidates
             .into_iter()
             .map(|s| {
-                let patched_at = s
-                    .server_cursor_ts
-                    .map(|ms| Timestamp { seconds: ms / 1000, nanos: ((ms % 1000) * 1_000_000) as i32 });
+                let patched_at = s.server_cursor_ts.map(|ms| Timestamp {
+                    seconds: ms / 1000,
+                    nanos: ((ms % 1000) * 1_000_000) as i32,
+                });
                 flare_proto::common::SessionPatch {
                     session_id: s.session_id.clone(),
                     patch_type: flare_proto::common::SessionPatchType::SessionPatchSummary as i32,
@@ -757,11 +761,8 @@ impl SessionService for SessionGrpcHandler {
             .await
             .map_err(internal_error)?;
 
-        let sessions: Vec<ProtoSessionSummary> = bootstrap
-            .summaries
-            .into_iter()
-            .map(proto_summary)
-            .collect();
+        let sessions: Vec<ProtoSessionSummary> =
+            bootstrap.summaries.into_iter().map(proto_summary).collect();
 
         let server_cursor_ts = sessions
             .iter()
@@ -788,9 +789,10 @@ impl SessionService for SessionGrpcHandler {
         request: Request<flare_proto::session::UpdateThreadRequest>,
     ) -> Result<Response<flare_proto::session::UpdateThreadResponse>, Status> {
         let req = request.into_inner();
-        let thread_service = self.thread_service.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Thread service not configured")
-        })?;
+        let thread_service = self
+            .thread_service
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         let thread = thread_service
             .update_thread(
@@ -818,9 +820,10 @@ impl SessionService for SessionGrpcHandler {
         request: Request<flare_proto::session::DeleteThreadRequest>,
     ) -> Result<Response<flare_proto::session::DeleteThreadResponse>, Status> {
         let req = request.into_inner();
-        let thread_service = self.thread_service.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Thread service not configured")
-        })?;
+        let thread_service = self
+            .thread_service
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         thread_service
             .delete_thread(&req.thread_id)

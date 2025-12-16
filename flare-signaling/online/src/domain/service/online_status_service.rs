@@ -13,9 +13,11 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::domain::aggregate::{Session, SessionCreateParams};
-use crate::domain::value_object::{UserId, DeviceId, SessionId, DevicePriority, TokenVersion, ConnectionQuality};
-use crate::domain::model::{OnlineStatusRecord};
+use crate::domain::model::OnlineStatusRecord;
 use crate::domain::repository::SessionRepository;
+use crate::domain::value_object::{
+    ConnectionQuality, DeviceId, DevicePriority, SessionId, TokenVersion, UserId,
+};
 use crate::util;
 
 #[derive(Debug, Clone)]
@@ -24,7 +26,7 @@ struct InMemorySession {
 }
 
 /// 在线状态领域服务 - 包含所有业务逻辑
-/// 
+///
 /// 注意：领域服务不依赖基础设施层的配置，配置由应用层传入必要参数
 pub struct OnlineStatusService {
     repository: Arc<dyn SessionRepository + Send + Sync>,
@@ -62,9 +64,7 @@ impl OnlineStatusService {
                         device_id = %device_id,
                         "Exclusive strategy: removing all existing sessions"
                     );
-                    self.repository
-                        .remove_user_sessions(&user_vo, None)
-                        .await?;
+                    self.repository.remove_user_sessions(&user_vo, None).await?;
                 }
                 DeviceConflictStrategy::PlatformExclusive => {
                     // 平台互斥：只踢出同平台的旧设备
@@ -99,32 +99,31 @@ impl OnlineStatusService {
                         user_id = %user_id,
                         "No conflict strategy specified, using Exclusive"
                     );
-                    self.repository
-                        .remove_user_sessions(&user_vo, None)
-                        .await?;
+                    self.repository.remove_user_sessions(&user_vo, None).await?;
                 }
             }
         }
 
         // 从 metadata 中提取 gateway_id（用于跨地区路由）
         // 如果 metadata 中没有 gateway_id，使用配置的默认值
-        let gateway_id = request.metadata
+        let gateway_id = request
+            .metadata
             .get("gateway_id")
             .map(|s| s.clone())
             .unwrap_or_else(|| self.gateway_id.clone());
-        
+
         // 提取设备优先级（默认为普通优先级=2）
         let device_priority = request.device_priority;
-        
+
         // 提取 Token 版本（默认为0）
         let token_version = request.token_version;
-        
+
         // 提取初始链接质量
         let connection_quality = request
             .initial_quality
             .as_ref()
             .and_then(|q| ConnectionQuality::from_proto(q).ok());
-        
+
         // 创建新会话
         let user_vo = UserId::new(user_id.clone()).unwrap();
         let device_vo = DeviceId::new(device_id.clone()).unwrap();
@@ -227,8 +226,12 @@ impl OnlineStatusService {
             let mut map = self.sessions.write().await;
             if let Some(session) = map.get_mut(session_id) {
                 // 刷新心跳（含质量）
-                let quality_opt = connection_quality.and_then(|q| ConnectionQuality::from_proto(q).ok());
-                session.session.refresh_heartbeat(quality_opt).map_err(|e| anyhow::anyhow!(e))?;
+                let quality_opt =
+                    connection_quality.and_then(|q| ConnectionQuality::from_proto(q).ok());
+                session
+                    .session
+                    .refresh_heartbeat(quality_opt)
+                    .map_err(|e| anyhow::anyhow!(e))?;
             }
         }
 

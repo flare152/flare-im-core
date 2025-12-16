@@ -1,7 +1,7 @@
 //! TokenVersion 值对象
-//! 
+//!
 //! Token版本号，用于强制下线旧客户端
-//! 
+//!
 //! 设计参考：微信、钉钉的"顶号"机制
 //! - 同一用户在新设备登录时，可指定更高的 token_version
 //! - 系统自动踢出 token_version 更低的设备
@@ -34,7 +34,7 @@ impl TokenVersion {
     }
 
     /// 判断是否应该踢出旧版本
-    /// 
+    ///
     /// 规则：
     /// - 如果当前版本为0，不踢出（向后兼容）
     /// - 如果旧版本为0，不踢出（向后兼容）
@@ -84,7 +84,7 @@ mod tests {
     fn test_token_version_comparison() {
         let v1 = TokenVersion::new(1).unwrap();
         let v2 = TokenVersion::new(2).unwrap();
-        
+
         assert!(v2.is_newer_than(&v1));
         assert!(!v1.is_newer_than(&v2));
     }
@@ -94,11 +94,11 @@ mod tests {
         let v0 = TokenVersion::zero();
         let v1 = TokenVersion::new(1).unwrap();
         let v2 = TokenVersion::new(2).unwrap();
-        
+
         // 版本0不踢出
         assert!(!v1.should_kick(&v0));
         assert!(!v0.should_kick(&v1));
-        
+
         // 高版本踢出低版本
         assert!(v2.should_kick(&v1));
         assert!(!v1.should_kick(&v2));

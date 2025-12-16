@@ -24,11 +24,7 @@ impl PostgresMessageStateRepository {
 #[async_trait]
 impl MessageStateRepository for PostgresMessageStateRepository {
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_read(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_read(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_read, read_at, updated_at)
@@ -56,11 +52,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_deleted(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_deleted(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_deleted, deleted_at, updated_at)
@@ -88,11 +80,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_burned(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Result<()> {
+    async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, burn_after_read, burned_at, updated_at)
@@ -120,11 +108,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(user_id = %user_id, message_count = message_ids.len()))]
-    async fn batch_mark_as_read(
-        &self,
-        user_id: &str,
-        message_ids: &[String],
-    ) -> Result<()> {
+    async fn batch_mark_as_read(&self, user_id: &str, message_ids: &[String]) -> Result<()> {
         if message_ids.is_empty() {
             return Ok(());
         }
@@ -159,11 +143,7 @@ impl MessageStateRepository for PostgresMessageStateRepository {
     }
 
     #[instrument(skip(self), fields(user_id = %user_id, message_count = message_ids.len()))]
-    async fn batch_mark_as_deleted(
-        &self,
-        user_id: &str,
-        message_ids: &[String],
-    ) -> Result<()> {
+    async fn batch_mark_as_deleted(&self, user_id: &str, message_ids: &[String]) -> Result<()> {
         if message_ids.is_empty() {
             return Ok(());
         }
@@ -197,4 +177,3 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         Ok(())
     }
 }
-

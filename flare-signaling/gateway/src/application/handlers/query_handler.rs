@@ -6,20 +6,20 @@
 mod connection_queries {
     use std::sync::Arc;
 
+    use anyhow::Result;
+    use flare_proto::RpcStatus;
     use flare_proto::access_gateway::{
         ConnectionInfo as ProtoConnectionInfo, QueryUserConnectionsRequest,
         QueryUserConnectionsResponse, UserConnectionInfo,
     };
-    use tonic::Status;
-    use anyhow::Result;
-    use flare_proto::RpcStatus;
     use flare_proto::common::ErrorCode;
-    
+    use tonic::Status;
+
     // Helper function to create OK status
     fn ok_status() -> Status {
         Status::ok("")
     }
-    
+
     // Helper function to create OK RpcStatus
     fn ok_rpc_status() -> RpcStatus {
         RpcStatus {
@@ -147,4 +147,3 @@ mod session_queries {
 // 导出
 pub use connection_queries::{ConnectionQueryService, QueryUserConnectionsQuery};
 pub use session_queries::{GetOnlineStatusQuery, SessionQueryService};
-

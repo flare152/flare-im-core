@@ -33,12 +33,15 @@ impl RedisPresenceWatcher {
     #[allow(dead_code)]
     fn parse_presence_event(user_id: &str, payload: &str) -> Result<PresenceChangeEvent> {
         use serde_json::Value;
-        
-        let json: Value = serde_json::from_str(payload)
-            .context("failed to parse presence event")?;
+
+        let json: Value =
+            serde_json::from_str(payload).context("failed to parse presence event")?;
 
         let status = OnlineStatusRecord {
-            online: json.get("online").and_then(|v| v.as_bool()).unwrap_or(false),
+            online: json
+                .get("online")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             server_id: json
                 .get("server_id")
                 .and_then(|v| v.as_str())
@@ -83,11 +86,13 @@ impl RedisPresenceWatcher {
                     }
                 })
             }),
-            reason: json.get("reason").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            reason: json
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
         })
     }
 }
-
 
 #[async_trait]
 impl PresenceWatcher for RedisPresenceWatcher {
@@ -99,10 +104,10 @@ impl PresenceWatcher for RedisPresenceWatcher {
 
         // 简化实现：定期轮询检查在线状态变化
         // 实际生产环境应该使用 Redis Pub/Sub 或 Streams 实现真正的实时推送
-        // 
+        //
         // 当前实现返回一个空的接收器作为占位符
         // 实际的在线状态变化应该通过 Redis Pub/Sub 发布，这里接收并转发
-        // 
+        //
         // 未来改进：
         // 1. 使用 redis::aio::PubSub 订阅 Redis Pub/Sub 频道
         // 2. 监听 presence:{user_id} 频道的消息
@@ -111,4 +116,3 @@ impl PresenceWatcher for RedisPresenceWatcher {
         Ok(rx)
     }
 }
-

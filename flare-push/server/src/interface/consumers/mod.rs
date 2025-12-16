@@ -1,5 +1,5 @@
-pub mod consumer;
 pub mod ack_consumer;
+pub mod consumer;
 
-pub use consumer::PushKafkaConsumer;
 pub use ack_consumer::AckKafkaConsumer;
+pub use consumer::PushKafkaConsumer;

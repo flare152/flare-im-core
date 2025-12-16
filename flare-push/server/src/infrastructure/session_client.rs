@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use flare_proto::common::{ActorContext, RequestContext};
 use flare_proto::session::session_service_client::SessionServiceClient as SessionServiceClientProto;
 use flare_proto::session::{UpdateSessionRequest, UpdateSessionResponse};
-use flare_proto::common::{RequestContext, ActorContext};
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::discovery::ServiceClient;
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::debug;
@@ -51,19 +51,25 @@ impl SessionServiceClient {
                 .await
                 .map_err(|e| {
                     ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
-                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
+                        .details(format!(
+                            "Failed to create service discover for {}: {}",
+                            self.service_name, e
+                        ))
                         .build_error()
                 })?;
-            
+
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
-                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
-                    .details("Service discovery not configured")
-                    .build_error());
+                return Err(ErrorBuilder::new(
+                    ErrorCode::ServiceUnavailable,
+                    "session service unavailable",
+                )
+                .details("Service discovery not configured")
+                .build_error());
             }
         }
-        
+
         let service_client = service_client_guard.as_mut().ok_or_else(|| {
             ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
                 .details("Service client not initialized")
@@ -72,19 +78,20 @@ impl SessionServiceClient {
         // 添加超时保护，避免服务发现阻塞过长时间
         let channel = tokio::time::timeout(
             std::time::Duration::from_secs(3), // 3秒超时
-            service_client.get_channel()
-        ).await
-            .map_err(|_| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
-                    .details("Timeout waiting for service discovery to get channel (3s)")
-                    .build_error()
-            })?
-            .map_err(|e| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
-                    .details(format!("Failed to get channel: {}", e))
-                    .build_error()
-            })?;
-        
+            service_client.get_channel(),
+        )
+        .await
+        .map_err(|_| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+                .details("Timeout waiting for service discovery to get channel (3s)")
+                .build_error()
+        })?
+        .map_err(|e| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+                .details(format!("Failed to get channel: {}", e))
+                .build_error()
+        })?;
+
         debug!("Got channel for session service from service discovery");
 
         let client = SessionServiceClientProto::new(channel);
@@ -125,10 +132,10 @@ impl SessionServiceClient {
                 attributes: std::collections::HashMap::new(),
             }),
             session_id: session_id.to_string(),
-            display_name: String::new(), // 留空，不更新
+            display_name: String::new(),                  // 留空，不更新
             attributes: std::collections::HashMap::new(), // 留空，不更新
-            visibility: 0, // 留空，不更新
-            lifecycle_state: 0, // 留空，不更新
+            visibility: 0,                                // 留空，不更新
+            lifecycle_state: 0,                           // 留空，不更新
         };
 
         let response: UpdateSessionResponse = client
@@ -149,10 +156,11 @@ impl SessionServiceClient {
                 .map(|p| p.user_id)
                 .collect())
         } else {
-            Err(ErrorBuilder::new(ErrorCode::InvalidParameter, "session not found")
-                .details(format!("Session {} not found", session_id))
-                .build_error())
+            Err(
+                ErrorBuilder::new(ErrorCode::InvalidParameter, "session not found")
+                    .details(format!("Session {} not found", session_id))
+                    .build_error(),
+            )
         }
     }
 }
-

@@ -21,20 +21,22 @@ impl MetricsCollector {
             statistics: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     /// 记录Hook执行结果
     pub async fn record(&self, result: &HookExecutionResult) {
         let mut stats = self.statistics.write().await;
-        let hook_stats = stats.entry(result.hook_name.clone()).or_insert_with(Default::default);
+        let hook_stats = stats
+            .entry(result.hook_name.clone())
+            .or_insert_with(Default::default);
         hook_stats.update(result);
     }
-    
+
     /// 获取Hook统计信息
     pub async fn get_statistics(&self, hook_name: &str) -> Option<HookStatistics> {
         let stats = self.statistics.read().await;
         stats.get(hook_name).cloned()
     }
-    
+
     /// 获取所有Hook统计信息
     pub async fn get_all_statistics(&self) -> HashMap<String, HookStatistics> {
         let stats = self.statistics.read().await;
@@ -61,26 +63,22 @@ impl ExecutionRecorder {
             max_records: 10000, // 最多保留10000条记录
         }
     }
-    
+
     /// 记录Hook执行结果
     pub async fn record(&self, result: &HookExecutionResult) {
         let mut records = self.records.write().await;
         records.push(result.clone());
-        
+
         // 限制记录数量
         if records.len() > self.max_records {
             records.remove(0);
         }
     }
-    
+
     /// 查询执行记录
-    pub async fn query(
-        &self,
-        hook_name: Option<&str>,
-        limit: usize,
-    ) -> Vec<HookExecutionResult> {
+    pub async fn query(&self, hook_name: Option<&str>, limit: usize) -> Vec<HookExecutionResult> {
         let records = self.records.read().await;
-        
+
         let mut filtered: Vec<_> = records
             .iter()
             .filter(|r| {
@@ -92,10 +90,10 @@ impl ExecutionRecorder {
             })
             .cloned()
             .collect();
-        
+
         // 按时间倒序排序
         filtered.sort_by(|a, b| b.executed_at.cmp(&a.executed_at));
-        
+
         filtered.into_iter().take(limit).collect()
     }
 }
@@ -119,11 +117,11 @@ impl AlertTrigger {
             latency_threshold_ms,
         }
     }
-    
+
     /// 检查是否需要告警
     pub async fn check(&self, collector: &MetricsCollector) {
         let stats = collector.get_all_statistics().await;
-        
+
         for (hook_name, hook_stats) in stats {
             // 检查失败率
             let failure_rate = 1.0 - hook_stats.success_rate();
@@ -135,7 +133,7 @@ impl AlertTrigger {
                     "Hook failure rate exceeds threshold"
                 );
             }
-            
+
             // 检查平均延迟
             if hook_stats.avg_latency_ms > self.latency_threshold_ms as f64 {
                 warn!(
@@ -160,7 +158,11 @@ mod tests {
             executed_at: SystemTime::now(),
             success,
             latency_ms,
-            error_message: if success { None } else { Some("test error".to_string()) },
+            error_message: if success {
+                None
+            } else {
+                Some("test error".to_string())
+            },
         }
     }
 
@@ -169,7 +171,9 @@ mod tests {
         let collector = MetricsCollector::new();
 
         // 记录成功结果
-        collector.record(&create_test_result("test-hook", true, 100)).await;
+        collector
+            .record(&create_test_result("test-hook", true, 100))
+            .await;
         let stats = collector.get_statistics("test-hook").await.unwrap();
         assert_eq!(stats.total_count, 1);
         assert_eq!(stats.success_count, 1);
@@ -178,7 +182,9 @@ mod tests {
         assert_eq!(stats.success_rate(), 1.0);
 
         // 记录失败结果
-        collector.record(&create_test_result("test-hook", false, 200)).await;
+        collector
+            .record(&create_test_result("test-hook", false, 200))
+            .await;
         let stats = collector.get_statistics("test-hook").await.unwrap();
         assert_eq!(stats.total_count, 2);
         assert_eq!(stats.success_count, 1);
@@ -193,17 +199,23 @@ mod tests {
     async fn test_metrics_collector_multiple_hooks() {
         let collector = MetricsCollector::new();
 
-        collector.record(&create_test_result("hook-1", true, 100)).await;
-        collector.record(&create_test_result("hook-2", true, 200)).await;
-        collector.record(&create_test_result("hook-1", false, 150)).await;
+        collector
+            .record(&create_test_result("hook-1", true, 100))
+            .await;
+        collector
+            .record(&create_test_result("hook-2", true, 200))
+            .await;
+        collector
+            .record(&create_test_result("hook-1", false, 150))
+            .await;
 
         let all_stats = collector.get_all_statistics().await;
         assert_eq!(all_stats.len(), 2);
-        
+
         let hook1_stats = all_stats.get("hook-1").unwrap();
         assert_eq!(hook1_stats.total_count, 2);
         assert_eq!(hook1_stats.success_count, 1);
-        
+
         let hook2_stats = all_stats.get("hook-2").unwrap();
         assert_eq!(hook2_stats.total_count, 1);
         assert_eq!(hook2_stats.success_count, 1);
@@ -214,9 +226,15 @@ mod tests {
         let recorder = ExecutionRecorder::new();
 
         // 记录执行结果
-        recorder.record(&create_test_result("test-hook", true, 100)).await;
-        recorder.record(&create_test_result("test-hook", false, 200)).await;
-        recorder.record(&create_test_result("other-hook", true, 150)).await;
+        recorder
+            .record(&create_test_result("test-hook", true, 100))
+            .await;
+        recorder
+            .record(&create_test_result("test-hook", false, 200))
+            .await;
+        recorder
+            .record(&create_test_result("other-hook", true, 150))
+            .await;
 
         // 查询所有记录
         let all_records = recorder.query(None, 10).await;
@@ -238,7 +256,9 @@ mod tests {
 
         // 记录超过最大数量的记录
         for i in 0..15000 {
-            recorder.record(&create_test_result("test-hook", true, i as u64)).await;
+            recorder
+                .record(&create_test_result("test-hook", true, i as u64))
+                .await;
         }
 
         let records = recorder.query(None, 20000).await;
@@ -248,18 +268,24 @@ mod tests {
     #[tokio::test]
     async fn test_alert_trigger() {
         let collector = MetricsCollector::new();
-        
+
         // 创建高失败率的情况
         for _ in 0..10 {
-            collector.record(&create_test_result("test-hook", true, 100)).await;
+            collector
+                .record(&create_test_result("test-hook", true, 100))
+                .await;
         }
         for _ in 0..10 {
-            collector.record(&create_test_result("test-hook", false, 200)).await;
+            collector
+                .record(&create_test_result("test-hook", false, 200))
+                .await;
         }
 
         // 创建低失败率的情况
         for _ in 0..10 {
-            collector.record(&create_test_result("good-hook", true, 50)).await;
+            collector
+                .record(&create_test_result("good-hook", true, 50))
+                .await;
         }
 
         // 检查告警（失败率阈值 0.5）

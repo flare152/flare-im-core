@@ -1,5 +1,5 @@
 //! DeviceId 值对象
-//! 
+//!
 //! 设备ID的强类型封装
 
 use serde::{Deserialize, Serialize};
@@ -15,11 +15,11 @@ impl DeviceId {
         if id.is_empty() {
             return Err("DeviceId cannot be empty".to_string());
         }
-        
+
         if id.len() > 128 {
             return Err("DeviceId too long (max 128 characters)".to_string());
         }
-        
+
         Ok(Self(id))
     }
 

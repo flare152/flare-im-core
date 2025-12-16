@@ -37,7 +37,6 @@ impl RedisSubscriptionRepository {
     }
 }
 
-
 #[async_trait]
 impl SubscriptionRepository for RedisSubscriptionRepository {
     async fn add_subscription(
@@ -55,17 +54,20 @@ impl SubscriptionRepository for RedisSubscriptionRepository {
             "topic": topic,
             "params": params,
         });
-        let _: () = conn.hset(&user_key, topic, subscription_value.to_string())
+        let _: () = conn
+            .hset(&user_key, topic, subscription_value.to_string())
             .await
             .context("failed to add subscription")?;
 
         // 添加到主题的订阅者列表
-        let _: i64 = conn.sadd(&topic_key, user_id)
+        let _: i64 = conn
+            .sadd(&topic_key, user_id)
             .await
             .context("failed to add topic subscriber")?;
 
         // 设置过期时间
-        let _: bool = conn.expire(&user_key, self.config.redis_ttl_seconds as i64)
+        let _: bool = conn
+            .expire(&user_key, self.config.redis_ttl_seconds as i64)
             .await
             .context("failed to set subscription ttl")?;
 
@@ -78,13 +80,15 @@ impl SubscriptionRepository for RedisSubscriptionRepository {
 
         for topic in topics {
             // 从用户的订阅中移除
-            let _: i64 = conn.hdel(&user_key, topic)
+            let _: i64 = conn
+                .hdel(&user_key, topic)
                 .await
                 .context("failed to remove subscription")?;
 
             // 从主题的订阅者列表中移除
             let topic_key = self.topic_subscribers_key(topic);
-            let _: i64 = conn.srem(&topic_key, user_id)
+            let _: i64 = conn
+                .srem(&topic_key, user_id)
                 .await
                 .context("failed to remove topic subscriber")?;
         }
@@ -105,8 +109,8 @@ impl SubscriptionRepository for RedisSubscriptionRepository {
 
         let mut result = Vec::new();
         for (topic, value_str) in subscriptions {
-            let value: serde_json::Value = serde_json::from_str(&value_str)
-                .context("failed to parse subscription")?;
+            let value: serde_json::Value =
+                serde_json::from_str(&value_str).context("failed to parse subscription")?;
 
             let params: HashMap<String, String> = value
                 .get("params")
@@ -130,4 +134,3 @@ impl SubscriptionRepository for RedisSubscriptionRepository {
         Ok(subscribers)
     }
 }
-

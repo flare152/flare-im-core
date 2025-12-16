@@ -9,8 +9,8 @@ pub mod signaling;
 pub mod storage;
 
 // 新增的轻量级网关基础设施组件
-pub mod media;
 pub mod hook;
+pub mod media;
 pub mod message;
 pub mod online;
 pub mod session;
@@ -24,8 +24,8 @@ pub use signaling::GrpcSignalingClient;
 pub use storage::GrpcStorageClient;
 
 // 新增的轻量级网关基础设施组件导出
-pub use media::GrpcMediaClient;
 pub use hook::GrpcHookClient;
+pub use media::GrpcMediaClient;
 pub use message::GrpcMessageClient;
 pub use online::GrpcOnlineClient;
 pub use session::GrpcSessionClient;

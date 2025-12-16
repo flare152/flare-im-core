@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
+use crate::application::handlers::{GetOnlineStatusQuery, SessionQueryService};
 use crate::application::handlers::{
     HeartbeatCommand, LoginCommand, LogoutCommand, SessionCommandService,
 };
-use crate::application::handlers::{GetOnlineStatusQuery, SessionQueryService};
 use crate::interface::connection::LongConnectionHandler;
 use flare_core::server::connection::ConnectionManagerTrait;
 use flare_core::server::handle::ServerHandle;

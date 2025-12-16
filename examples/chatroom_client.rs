@@ -47,10 +47,11 @@ use flare_core::common::compression::CompressionAlgorithm;
 use flare_core::common::config_types::{HeartbeatConfig, TransportProtocol};
 use flare_core::common::device::{DeviceInfo, DevicePlatform};
 use flare_core::common::error::Result;
-use flare_core::common::protocol::{
-    Frame, Reliability, frame_with_message_command, generate_message_id, send_message, MessageCommand,
-};
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
+use flare_core::common::protocol::{
+    Frame, MessageCommand, Reliability, frame_with_message_command, generate_message_id,
+    send_message,
+};
 use prost::Message;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, warn};
@@ -69,23 +70,19 @@ async fn main() -> Result<()> {
     // 支持多网关连接：通过 NEGOTIATION_HOST 指定不同的网关地址
     // 示例：
     //   NEGOTIATION_HOST=localhost:60051 cargo run --example chatroom_client -- user1 user2  # 连接到网关1
-    let default_host = std::env::var("NEGOTIATION_HOST")
-        .unwrap_or_else(|_| "localhost:60051".to_string());
+    let default_host =
+        std::env::var("NEGOTIATION_HOST").unwrap_or_else(|_| "localhost:60051".to_string());
     let default_ws = format!("ws://{default_host}");
 
     let host = std::env::var("NEGOTIATION_HOST").unwrap_or(default_host);
     let ws_url = std::env::var("NEGOTIATION_WS_URL").unwrap_or(default_ws);
-    
+
     let platform = std::env::var("DEVICE_PLATFORM")
         .map(|value| DevicePlatform::from_str(&value))
         .unwrap_or(DevicePlatform::PC);
 
     let device_info = DeviceInfo::new(
-        format!(
-            "p2p-client-{}-{}",
-            platform.as_str(),
-            std::process::id()
-        ),
+        format!("p2p-client-{}-{}", platform.as_str(), std::process::id()),
         platform.clone(),
     )
     .with_model(platform.as_str().to_string())
@@ -138,7 +135,7 @@ async fn main() -> Result<()> {
     // 使用 FlareClientBuilder 构建客户端
     let mut client_builder = FlareClientBuilder::new(&ws_url)
         .with_listener(chat_listener.clone() as Arc<dyn MessageListener>)
-        .with_protocol_race(vec![TransportProtocol::WebSocket])  // 只使用 WebSocket，避免协议竞速超时
+        .with_protocol_race(vec![TransportProtocol::WebSocket]) // 只使用 WebSocket，避免协议竞速超时
         .with_protocol_url(TransportProtocol::WebSocket, ws_url.clone())
         .with_format(flare_core::common::protocol::SerializationFormat::Protobuf)
         .with_compression(CompressionAlgorithm::None)
@@ -148,14 +145,14 @@ async fn main() -> Result<()> {
         .with_connect_timeout(Duration::from_secs(10))
         .with_reconnect_interval(Duration::from_secs(3))
         .with_max_reconnect_attempts(Some(5));
-    
+
     // 如果提供了 token，添加到客户端配置
     if !token.is_empty() {
         client_builder = client_builder.with_token(token);
     }
-    
+
     let client = client_builder.build_with_race().await?;
-    
+
     // 设置客户端引用到监听器
     {
         let mut client_ref = chat_listener.client.lock().await;
@@ -217,28 +214,28 @@ async fn main() -> Result<()> {
                             text: message.clone(),
                             mentions: vec![],
                         };
-                        
+
                         let message_content = flare_proto::common::MessageContent {
                             content: Some(flare_proto::common::message_content::Content::Text(text_content)),
                             extensions: vec![],
                         };
-                        
+
                         // 构造完整的Message对象，将recipient_id作为session_id
                         let timestamp = prost_types::Timestamp {
                             seconds: chrono::Utc::now().timestamp(),
                             nanos: 0,
                         };
-                        
+
                         // 设置接收方用户ID到attributes中
                         let mut attributes = std::collections::HashMap::new();
                         attributes.insert("recipient_id".to_string(), recipient_id.clone());
-                        
+
                         // 确保消息的receiver_id正确设置
                         let receiver_id = recipient_id.clone();
-                        
+
                         // 使用工具类生成单聊会话ID（格式：1-{hash}）
                         let session_id = generate_single_chat_session_id(&user_id, &recipient_id);
-                        
+
                         let msg = flare_proto::common::Message {
                             id: generate_message_id(),
                             session_id,  // 使用正确的session_id格式
@@ -286,13 +283,13 @@ async fn main() -> Result<()> {
                             offline_push_info: None,
                             extensions: vec![],
                         };
-                        
+
                         // 序列化消息对象
                         let mut buf = Vec::new();
                         msg.encode(&mut buf).map_err(|e| flare_core::common::error::FlareError::serialization_error(
                             format!("Failed to encode message: {}", e)
                         ))?;
-                        
+
                         let cmd = send_message(
                             msg.id.clone(),
                             buf,
@@ -302,13 +299,13 @@ async fn main() -> Result<()> {
                         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
                         // 记录发送开始时间
                         let send_start = std::time::Instant::now();
-                        
+
                         // 记录待确认的消息ID
                         {
                             let mut pending = chat_listener.pending_acks.lock().unwrap();
                             pending.insert(msg.id.clone(), std::time::Instant::now());
                         }
-                        
+
                         // 使用较长的超时时间发送消息，确保消息真正发送
                         let frame_clone = frame.clone();
                         let listener_clone = chat_listener.clone();
@@ -400,13 +397,16 @@ fn print_help() {
 
 async fn resolve_user_and_recipient_id() -> (String, String) {
     let args: Vec<String> = std::env::args().collect();
-    
+
     // 1. 优先使用命令行参数
     if args.len() >= 3 {
-        info!("📝 使用命令行提供的用户ID: {} 和接收方ID: {}", args[1], args[2]);
+        info!(
+            "📝 使用命令行提供的用户ID: {} 和接收方ID: {}",
+            args[1], args[2]
+        );
         return (args[1].clone(), args[2].clone());
     }
-    
+
     // 2. 使用环境变量
     let user_id = if let Ok(env_user) = std::env::var("USER_ID") {
         info!("📝 使用环境变量 USER_ID: {env_user}");
@@ -436,7 +436,7 @@ async fn resolve_user_and_recipient_id() -> (String, String) {
             }
         }
     };
-    
+
     let recipient_id = if let Ok(env_recipient) = std::env::var("RECIPIENT_ID") {
         info!("📝 使用环境变量 RECIPIENT_ID: {env_recipient}");
         env_recipient
@@ -451,16 +451,14 @@ async fn resolve_user_and_recipient_id() -> (String, String) {
         let mut reader = BufReader::new(stdin);
         let mut buffer = String::new();
         match reader.read_line(&mut buffer).await {
-            Ok(_) => {
-                buffer.trim().to_string()
-            }
+            Ok(_) => buffer.trim().to_string(),
             Err(err) => {
                 error!(?err, "读取接收方用户ID失败");
                 "unknown".to_string()
             }
         }
     };
-    
+
     (user_id, recipient_id)
 }
 
@@ -499,27 +497,22 @@ fn parse_message_content(content: &MessageContent) -> String {
         Some(flare_proto::common::message_content::Content::Text(text_content)) => {
             text_content.text.clone()
         }
-        Some(flare_proto::common::message_content::Content::Image(_)) => {
-            "[图片消息]".to_string()
-        }
-        Some(flare_proto::common::message_content::Content::File(_)) => {
-            "[文件消息]".to_string()
-        }
-        Some(flare_proto::common::message_content::Content::Audio(_)) => {
-            "[音频消息]".to_string()
-        }
-        Some(flare_proto::common::message_content::Content::Video(_)) => {
-            "[视频消息]".to_string()
-        }
+        Some(flare_proto::common::message_content::Content::Image(_)) => "[图片消息]".to_string(),
+        Some(flare_proto::common::message_content::Content::File(_)) => "[文件消息]".to_string(),
+        Some(flare_proto::common::message_content::Content::Audio(_)) => "[音频消息]".to_string(),
+        Some(flare_proto::common::message_content::Content::Video(_)) => "[视频消息]".to_string(),
         Some(flare_proto::common::message_content::Content::Location(location_content)) => {
-            format!("[位置] 经度:{}, 纬度:{}", 
-                location_content.longitude,
-                location_content.latitude
+            format!(
+                "[位置] 经度:{}, 纬度:{}",
+                location_content.longitude, location_content.latitude
             )
         }
         Some(flare_proto::common::message_content::Content::Card(card_content)) => {
             // CardContent 包含用户信息，不是传统意义的卡片
-            format!("[名片] {} ({})", card_content.nickname, card_content.user_id)
+            format!(
+                "[名片] {} ({})",
+                card_content.nickname, card_content.user_id
+            )
         }
         _ => "[无法解析的消息内容]".to_string(),
     }
@@ -530,25 +523,27 @@ fn extract_message_id_fast(data: &[u8]) -> Option<String> {
     // 尝试快速提取消息ID，避免完整解析
     // 首先尝试解析为 ServerPacket -> Envelope -> Message
     if let Ok(server_packet) = ServerPacket::decode(data) {
-        if let Some(flare_proto::common::server_packet::Payload::Envelope(envelope)) = server_packet.payload {
+        if let Some(flare_proto::common::server_packet::Payload::Envelope(envelope)) =
+            server_packet.payload
+        {
             if let Some(first_msg) = envelope.messages.first() {
                 return Some(first_msg.id.clone());
             }
         }
     }
-    
+
     // 尝试解析为 MessageEnvelope
     if let Ok(envelope) = flare_proto::common::MessageEnvelope::decode(data) {
         if let Some(first_msg) = envelope.messages.first() {
             return Some(first_msg.id.clone());
         }
     }
-    
+
     // 尝试直接解析为 Message
     if let Ok(message) = ProtoMessage::decode(data) {
         return Some(message.id.clone());
     }
-    
+
     None
 }
 
@@ -564,12 +559,15 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
                     if let Some(message) = envelope.messages.first() {
                         return parse_single_message(message);
                     }
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::SendAck(ack)) => {
-                    debug!("收到 SendAck: message_id={}, status={}", ack.message_id, ack.status);
+                    debug!(
+                        "收到 SendAck: message_id={}, status={}",
+                        ack.message_id, ack.status
+                    );
                     // SendAck 不是我们要处理的消息类型，返回 None
                     return None;
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::SyncMessagesResp(sync_resp)) => {
                     // 处理同步响应中的消息（只处理第一条）
                     if let Some(envelope) = sync_resp.envelope {
@@ -578,29 +576,29 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
                         }
                     }
                     return None;
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::SyncSessionsResp(_)) => {
                     // 会话同步响应，暂不处理
                     return None;
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::SyncSessionsAllResp(_)) => {
                     // 全量会话同步响应，暂不处理
                     return None;
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::GetSessionDetailResp(_)) => {
                     // 会话详情响应，暂不处理
                     return None;
-                },
+                }
                 Some(flare_proto::common::server_packet::Payload::CustomPushData(_)) => {
                     // 自定义推送数据，暂不处理
                     return None;
-                },
+                }
                 None => {
                     // ServerPacket 没有 payload
                     return None;
                 }
             }
-        },
+        }
         Err(_) => {
             // 如果不是 ServerPacket，尝试解析为 MessageEnvelope
             match flare_proto::common::MessageEnvelope::decode(data) {
@@ -609,13 +607,13 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
                     if let Some(message) = envelope.messages.first() {
                         return parse_single_message(message);
                     }
-                },
+                }
                 Err(_) => {
                     // 尝试直接解析为 ProtoMessage（向后兼容）
                     match ProtoMessage::decode(data) {
                         Ok(message) => {
                             return parse_single_message(&message);
-                    }
+                        }
                         Err(_) => {
                             // 所有解析方式都失败
                             return None;
@@ -625,66 +623,70 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
             }
         }
     }
-    
+
     None
 }
 
 /// 解析单条消息（统一的消息解析逻辑）
 fn parse_single_message(message: &ProtoMessage) -> Option<MessageDisplayInfo> {
-            // 检查消息是否已撤回
-            if message.is_recalled {
-                return Some(MessageDisplayInfo {
+    // 检查消息是否已撤回
+    if message.is_recalled {
+        return Some(MessageDisplayInfo {
             id: message.id.clone(),
-                    sender_id: message.sender_id.clone(),
+            sender_id: message.sender_id.clone(),
             receiver_id: message.receiver_id.clone(),
-                    content: "[消息已撤回]".to_string(),
-                    message_type: "撤回".to_string(),
-                    timestamp: message.timestamp
-                        .as_ref()
-                        .map(|ts| format_timestamp(ts))
-                        .unwrap_or_else(|| "未知时间".to_string()),
-                    is_self: false, // 这个会在调用时设置
-                });
-            }
+            content: "[消息已撤回]".to_string(),
+            message_type: "撤回".to_string(),
+            timestamp: message
+                .timestamp
+                .as_ref()
+                .map(|ts| format_timestamp(ts))
+                .unwrap_or_else(|| "未知时间".to_string()),
+            is_self: false, // 这个会在调用时设置
+        });
+    }
 
-            // 解析消息内容
-            let content = if let Some(msg_content) = &message.content {
-                parse_message_content(msg_content)
-            } else {
-                "[空消息]".to_string()
-            };
+    // 解析消息内容
+    let content = if let Some(msg_content) = &message.content {
+        parse_message_content(msg_content)
+    } else {
+        "[空消息]".to_string()
+    };
 
-            let (type_name, _) = get_message_type_display(message.message_type);
-            
-            Some(MessageDisplayInfo {
+    let (type_name, _) = get_message_type_display(message.message_type);
+
+    Some(MessageDisplayInfo {
         id: message.id.clone(),
-                sender_id: message.sender_id.clone(),
+        sender_id: message.sender_id.clone(),
         receiver_id: message.receiver_id.clone(),
-                content,
-                message_type: type_name.to_string(),
-                timestamp: message.timestamp
-                    .as_ref()
-                    .map(|ts| format_timestamp(ts))
-                    .unwrap_or_else(|| "未知时间".to_string()),
-                is_self: false, // 这个会在调用时设置
-            })
-        }
+        content,
+        message_type: type_name.to_string(),
+        timestamp: message
+            .timestamp
+            .as_ref()
+            .map(|ts| format_timestamp(ts))
+            .unwrap_or_else(|| "未知时间".to_string()),
+        is_self: false, // 这个会在调用时设置
+    })
+}
 /// 格式化消息显示（简化版：只显示时间、发送者、接收者、内容）
 /// 使用当前时间而不是消息中的时间戳
 fn format_message_display(info: &MessageDisplayInfo, current_user_id: &str) -> String {
     let is_self = info.sender_id == current_user_id;
     let sender = if is_self { "我" } else { &info.sender_id };
     let receiver = if is_self { &info.receiver_id } else { "我" };
-    
+
     // 使用当前时间（客户端收到/发送消息的时间）
     let now = chrono::Local::now();
-    let current_time = format!("{}.{:03}", now.format("%H:%M:%S"), now.timestamp_subsec_millis());
-    
-    format!("[{}] {} → {}: {}", 
-        current_time,
-        sender,
-        receiver,
-        info.content
+    let current_time = format!(
+        "{}.{:03}",
+        now.format("%H:%M:%S"),
+        now.timestamp_subsec_millis()
+    );
+
+    format!(
+        "[{}] {} → {}: {}",
+        current_time, sender, receiver, info.content
     )
 }
 
@@ -699,7 +701,6 @@ struct MessageDisplayInfo {
     timestamp: String,
     is_self: bool,
 }
-
 
 /// 一对一聊天消息监听器
 struct ChatListener {
@@ -718,45 +719,54 @@ struct ChatListener {
 impl MessageListener for ChatListener {
     async fn on_message(&self, frame: &Frame) -> Result<Option<Frame>> {
         debug!("ChatListener::on_message 被调用");
-        
+
         // 为Frame生成唯一标识，用于调试
-        let frame_id = format!("{}-{:?}", frame.message_id, frame.metadata.get("timestamp").unwrap_or(&vec![]));
+        let frame_id = format!(
+            "{}-{:?}",
+            frame.message_id,
+            frame.metadata.get("timestamp").unwrap_or(&vec![])
+        );
         debug!("处理Frame: {}", frame_id);
-        
+
         // 首先检查 Frame 是否包含命令
         if let Some(command) = &frame.command {
             debug!("Frame 包含命令");
-            
+
             // 检查是否为消息命令
             if let Some(CommandType::Message(msg_cmd)) = &command.r#type {
-                debug!("收到消息命令: type={}, message_id={}, payload_len={}", 
-                    msg_cmd.r#type, msg_cmd.message_id, msg_cmd.payload.len());
-                
+                debug!(
+                    "收到消息命令: type={}, message_id={}, payload_len={}",
+                    msg_cmd.r#type,
+                    msg_cmd.message_id,
+                    msg_cmd.payload.len()
+                );
+
                 // 处理ACK消息（Type::Ack = 1）
                 if msg_cmd.r#type == 1 {
                     return self.handle_server_ack(msg_cmd).await;
                 }
-                
+
                 // 使用原来的解析逻辑解析消息负载
                 if msg_cmd.payload.len() < 10 {
                     debug!("忽略短消息(可能是心跳): {} 字节", msg_cmd.payload.len());
                     return Ok(None);
                 }
-                
+
                 // 快速提取消息ID用于去重（简化：只基于 message_id）
                 let message_id_for_dedup = extract_message_id_fast(&msg_cmd.payload);
-                
+
                 // 基于消息ID去重（服务端已处理重复推送，客户端只需简单去重）
                 // 修改去重逻辑：允许同一会话中的消息，但防止完全重复的消息显示
                 if let Some(msg_id) = &message_id_for_dedup {
-                        let now = std::time::Instant::now();
+                    let now = std::time::Instant::now();
                     let should_skip = {
                         let mut seen_ids = self.seen_message_ids.lock().unwrap();
-                        
+
                         // 检查是否在极短时间内收到过相同的消息ID（1秒内），防止完全重复
                         let should_skip = if let Some(&received_at) = seen_ids.get(msg_id) {
                             let elapsed = now.duration_since(received_at);
-                            if elapsed.as_millis() < 1000 {  // 缩短到1秒内
+                            if elapsed.as_millis() < 1000 {
+                                // 缩短到1秒内
                                 debug!("跳过重复消息: {} (距离上次接收: {:?})", msg_id, elapsed);
                                 true
                             } else {
@@ -765,70 +775,97 @@ impl MessageListener for ChatListener {
                         } else {
                             false
                         };
-                        
+
                         if !should_skip {
                             // 立即记录，防止并发处理
                             seen_ids.insert(msg_id.clone(), now);
-                        
+
                             // 清理过期的记录（超过1分钟的记录）
-                        seen_ids.retain(|_, &mut received_at| {
-                                now.duration_since(received_at).as_secs() < 60  // 缩短清理时间到1分钟
-                        });
-                    }
-                        
+                            seen_ids.retain(|_, &mut received_at| {
+                                now.duration_since(received_at).as_secs() < 60 // 缩短清理时间到1分钟
+                            });
+                        }
+
                         should_skip
                     };
-                    
+
                     if should_skip {
                         return Ok(None);
                     }
                 }
-                
+
                 debug!("开始调用 parse_received_message 解析消息");
                 // 解析收到的消息
                 if let Some(mut display_info) = parse_received_message(&msg_cmd.payload) {
-                    debug!("parse_received_message 返回了 Some 值，消息ID: {}", display_info.id);
-                    
+                    debug!(
+                        "parse_received_message 返回了 Some 值，消息ID: {}",
+                        display_info.id
+                    );
+
                     // 设置是否为自己的消息
                     display_info.is_self = display_info.sender_id == self.user_id;
-                    
+
                     // 检查是否是发给当前用户的单聊消息（只显示接收到的消息，不显示自己发送的消息）
                     // 修复逻辑：确保能正确显示来自接收方的消息，同时避免重复显示自己发送的消息
                     let is_from_recipient = display_info.sender_id == self.recipient_id;
-                    let is_to_me = display_info.receiver_id == self.user_id;  // 检查消息是否是发给我的
+                    let is_to_me = display_info.receiver_id == self.user_id; // 检查消息是否是发给我的
                     let is_system_message = display_info.sender_id == "system";
                     let is_from_self = display_info.sender_id == self.user_id;
-                    
-                    debug!("消息来源检查: sender_id={}, receiver_id={}, user_id={}, recipient_id={}, is_from_recipient={}, is_to_me={}, is_system_message={}, is_from_self={}", 
-                           display_info.sender_id, display_info.receiver_id, self.user_id, self.recipient_id, is_from_recipient, is_to_me, is_system_message, is_from_self);
-                    
+
+                    debug!(
+                        "消息来源检查: sender_id={}, receiver_id={}, user_id={}, recipient_id={}, is_from_recipient={}, is_to_me={}, is_system_message={}, is_from_self={}",
+                        display_info.sender_id,
+                        display_info.receiver_id,
+                        self.user_id,
+                        self.recipient_id,
+                        is_from_recipient,
+                        is_to_me,
+                        is_system_message,
+                        is_from_self
+                    );
+
                     // 修正消息显示逻辑：只要消息是发给我的(is_to_me)或者来自聊天对方(is_from_recipient)，都应该显示
                     // 特别注意：即使消息没有正确显示，也要确保发送ACK给服务器
-                    let should_display = ((is_from_recipient || is_to_me) || is_system_message) && !is_from_self;
-                    
+                    let should_display =
+                        ((is_from_recipient || is_to_me) || is_system_message) && !is_from_self;
+
                     if should_display {
                         // 格式化并显示消息（接收到的消息：发送者 → 我）
-                        let formatted_message = format_message_display(&display_info, &self.user_id);
+                        let formatted_message =
+                            format_message_display(&display_info, &self.user_id);
                         println!("{}", formatted_message);
-                        
+
                         // 更新消息计数
-                        self.message_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.message_count
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     } else {
-                        debug!("消息不会显示但会发送ACK: sender_id={}, receiver_id={}, user_id={}, recipient_id={}", 
-                               display_info.sender_id, display_info.receiver_id, self.user_id, self.recipient_id);
+                        debug!(
+                            "消息不会显示但会发送ACK: sender_id={}, receiver_id={}, user_id={}, recipient_id={}",
+                            display_info.sender_id,
+                            display_info.receiver_id,
+                            self.user_id,
+                            self.recipient_id
+                        );
                     }
-                        
-                        // 发送ACK给服务器（确认收到消息）
+
+                    // 发送ACK给服务器（确认收到消息）
                     // 注意：无论消息是否显示，都要发送ACK以确保消息正确处理
-                    if !is_from_self {  // 不要对自己发送的消息发送ACK
-                        if let Err(e) = self.send_client_ack(&display_info.id, &display_info.sender_id).await {
+                    if !is_from_self {
+                        // 不要对自己发送的消息发送ACK
+                        if let Err(e) = self
+                            .send_client_ack(&display_info.id, &display_info.sender_id)
+                            .await
+                        {
                             warn!(error = %e, message_id = %display_info.id, "Failed to send client ACK");
                         }
                     }
                 } else {
                     debug!("parse_received_message 返回了 None");
                     // 如果无法解析消息，不显示（避免干扰）
-                    debug!("收到无法解析的消息 (数据长度: {} 字节)", msg_cmd.payload.len());
+                    debug!(
+                        "收到无法解析的消息 (数据长度: {} 字节)",
+                        msg_cmd.payload.len()
+                    );
                 }
             } else {
                 debug!("收到非消息命令类型");
@@ -836,21 +873,21 @@ impl MessageListener for ChatListener {
         } else {
             debug!("收到空命令");
         }
-        
+
         Ok(None)
-    }    
+    }
     async fn on_connect(&self) -> Result<()> {
         info!("✅ 已连接到服务器");
         info!("   用户ID: {}", self.user_id);
         info!("   接收方ID: {}", self.recipient_id);
         Ok(())
     }
-    
+
     async fn on_disconnect(&self, reason: Option<&str>) -> Result<()> {
         warn!("🔴 连接断开: {}", reason.unwrap_or("未知原因"));
         Ok(())
     }
-    
+
     async fn on_error(&self, error: &str) -> Result<()> {
         error!("连接错误: {}", error);
         Ok(())
@@ -865,12 +902,12 @@ impl ChatListener {
             Ok(ack) => {
                 let message_id = &ack.message_id;
                 let status = ack.status;
-                
+
                 // 检查是否是我们发送的消息的ACK
                 let mut pending = self.pending_acks.lock().unwrap();
                 if let Some(sent_at) = pending.remove(message_id) {
                     let elapsed = sent_at.elapsed();
-                    
+
                     if status == flare_proto::common::AckStatus::Success as i32 {
                         debug!(
                             message_id = %message_id,
@@ -893,10 +930,10 @@ impl ChatListener {
                 warn!(error = %e, "解析SendEnvelopeAck失败");
             }
         }
-        
+
         Ok(None)
     }
-    
+
     /// 发送客户端ACK给服务器（确认收到消息）
     async fn send_client_ack(&self, message_id: &str, sender_id: &str) -> Result<()> {
         // 构建SendEnvelopeAck
@@ -906,36 +943,38 @@ impl ChatListener {
             error_code: 0,
             error_message: String::new(),
         };
-        
+
         // 序列化
         let mut payload = Vec::new();
         send_ack.encode(&mut payload).map_err(|e| {
-            flare_core::common::error::FlareError::serialization_error(
-                format!("Failed to encode SendEnvelopeAck: {}", e)
-            )
+            flare_core::common::error::FlareError::serialization_error(format!(
+                "Failed to encode SendEnvelopeAck: {}",
+                e
+            ))
         })?;
-        
+
         // 构建ACK metadata
         let mut metadata = std::collections::HashMap::new();
         // 可以添加session_id等元数据
         if let Some(session_id) = self.get_session_id_for_sender(sender_id) {
             metadata.insert("session_id".to_string(), session_id.as_bytes().to_vec());
         }
-        
+
         // 创建ACK命令
         let ack_cmd = flare_core::common::protocol::MessageCommand {
-            r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack as i32,
+            r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack
+                as i32,
             message_id: message_id.to_string(),
             payload,
             metadata,
             seq: 0,
         };
-        
+
         let ack_frame = flare_core::common::protocol::frame_with_message_command(
             ack_cmd,
-            flare_core::common::protocol::Reliability::AtLeastOnce
+            flare_core::common::protocol::Reliability::AtLeastOnce,
         );
-        
+
         // 发送ACK
         let client_guard = self.client.lock().await;
         if let Some(client) = client_guard.as_ref() {
@@ -943,13 +982,13 @@ impl ChatListener {
             debug!(message_id = %message_id, "客户端ACK已发送");
         } else {
             return Err(flare_core::common::error::FlareError::system(
-                "Client not initialized".to_string()
+                "Client not initialized".to_string(),
             ));
         }
-        
+
         Ok(())
     }
-    
+
     /// 获取会话ID（用于ACK metadata）
     fn get_session_id_for_sender(&self, sender_id: &str) -> Option<String> {
         // 使用工具类生成单聊会话ID（格式：1-{hash}，自动排序）

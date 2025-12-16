@@ -4,15 +4,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use flare_core::common::session_id::{
+    SessionType, generate_server_session_id, generate_single_chat_session_id, validate_session_id,
+};
 use flare_proto::common::Message;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use flare_core::common::session_id::{generate_single_chat_session_id, generate_server_session_id, SessionType, validate_session_id};
 
 use crate::domain::model::{
     ConflictResolutionPolicy, DevicePresence, DeviceState, MessageSyncResult, Session,
-    SessionDomainConfig, SessionFilter, SessionLifecycleState, SessionParticipant,
-    SessionPolicy, SessionSort, SessionSummary, SessionVisibility,
+    SessionDomainConfig, SessionFilter, SessionLifecycleState, SessionParticipant, SessionPolicy,
+    SessionSort, SessionSummary, SessionVisibility,
 };
 use crate::domain::repository::{
     MessageProvider, PresenceRepository, PresenceUpdate, SessionRepository,
@@ -64,28 +66,28 @@ impl SessionDomainService {
             .await?;
 
         let mut summaries = bootstrap.summaries;
-        
+
         // 优化：按优先级排序（未读会话优先，然后按更新时间降序）
         summaries.sort_by(|a, b| {
             // 优先级1：未读数（未读会话优先）
             let a_unread = a.unread_count;
             let b_unread = b.unread_count;
             if a_unread != b_unread {
-                return b_unread.cmp(&a_unread);  // 未读数多的优先
+                return b_unread.cmp(&a_unread); // 未读数多的优先
             }
-            
+
             // 优先级2：更新时间（最新的优先）
             let a_ts = a.server_cursor_ts.unwrap_or(0);
             let b_ts = b.server_cursor_ts.unwrap_or(0);
             b_ts.cmp(&a_ts)
         });
-        
+
         // 优化：限制返回的会话数量（默认最多 100 个，避免响应过大）
         let max_sessions = self.config.max_bootstrap_sessions.unwrap_or(100);
         if summaries.len() > max_sessions {
             summaries.truncate(max_sessions);
         }
-        
+
         // 如果有消息提供者，补充最后一条消息信息和未读数
         if let Some(provider) = &self.message_provider {
             // 为每个会话获取最后一条消息（如果有）
@@ -98,76 +100,82 @@ impl SessionDomainService {
                     {
                         if let Some(last_msg) = sync_result.messages.first() {
                             summary.last_message_id = Some(last_msg.id.clone());
-                            
+
                             // 转换 Timestamp 为 DateTime<Utc>
-                            summary.last_message_time = last_msg.timestamp.as_ref().and_then(|ts| {
-                                chrono::TimeZone::timestamp_opt(
-                                    &chrono::Utc,
-                                    ts.seconds,
-                                    ts.nanos as u32,
-                                )
-                                .single()
-                            });
-                            
+                            summary.last_message_time =
+                                last_msg.timestamp.as_ref().and_then(|ts| {
+                                    chrono::TimeZone::timestamp_opt(
+                                        &chrono::Utc,
+                                        ts.seconds,
+                                        ts.nanos as u32,
+                                    )
+                                    .single()
+                                });
+
                             summary.last_sender_id = Some(last_msg.sender_id.clone());
                             summary.last_message_type = Some(last_msg.message_type() as i32);
-                            
+
                             // 从消息内容推断内容类型
                             if let Some(ref content) = last_msg.content {
                                 summary.last_content_type = match &content.content {
-                                    Some(flare_proto::common::message_content::Content::Text(_)) => {
-                                        Some("text".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Image(_)) => {
-                                        Some("image".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Video(_)) => {
-                                        Some("video".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Audio(_)) => {
-                                        Some("audio".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::File(_)) => {
-                                        Some("file".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Location(_)) => {
-                                        Some("location".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Card(_)) => {
-                                        Some("card".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Notification(_)) => {
-                                        Some("notification".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Custom(_)) => {
-                                        Some("custom".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Forward(_)) => {
-                                        Some("forward".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Typing(_)) => {
-                                        Some("typing".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
-                                        Some("system_event".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                                        Some("quote".to_string())
-                                    }
-                                    Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
-                                        Some("link_card".to_string())
-                                    }
+                                    Some(flare_proto::common::message_content::Content::Text(
+                                        _,
+                                    )) => Some("text".to_string()),
+                                    Some(flare_proto::common::message_content::Content::Image(
+                                        _,
+                                    )) => Some("image".to_string()),
+                                    Some(flare_proto::common::message_content::Content::Video(
+                                        _,
+                                    )) => Some("video".to_string()),
+                                    Some(flare_proto::common::message_content::Content::Audio(
+                                        _,
+                                    )) => Some("audio".to_string()),
+                                    Some(flare_proto::common::message_content::Content::File(
+                                        _,
+                                    )) => Some("file".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::Location(_),
+                                    ) => Some("location".to_string()),
+                                    Some(flare_proto::common::message_content::Content::Card(
+                                        _,
+                                    )) => Some("card".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::Notification(
+                                            _,
+                                        ),
+                                    ) => Some("notification".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::Custom(_),
+                                    ) => Some("custom".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::Forward(_),
+                                    ) => Some("forward".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::Typing(_),
+                                    ) => Some("typing".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::SystemEvent(
+                                            _,
+                                        ),
+                                    ) => Some("system_event".to_string()),
+                                    Some(flare_proto::common::message_content::Content::Quote(
+                                        _,
+                                    )) => Some("quote".to_string()),
+                                    Some(
+                                        flare_proto::common::message_content::Content::LinkCard(_),
+                                    ) => Some("link_card".to_string()),
                                     None => None,
                                 };
                             }
-                            
+
                             // 更新server_cursor_ts为最后消息的时间戳
                             if let Some(ts) = last_msg.timestamp.as_ref() {
-                                summary.server_cursor_ts = Some(ts.seconds * 1_000 + (ts.nanos as i64 / 1_000_000));
+                                summary.server_cursor_ts =
+                                    Some(ts.seconds * 1_000 + (ts.nanos as i64 / 1_000_000));
                             }
                         }
                     }
-                    
+
                     // 未读数已在 load_bootstrap 中从数据库读取（基于 seq）
                     // 这里不再需要重新计算
                 }
@@ -177,10 +185,8 @@ impl SessionDomainService {
         let mut recent_messages = Vec::new();
         if include_recent {
             if let Some(provider) = &self.message_provider {
-                let session_ids: Vec<String> = summaries
-                    .iter()
-                    .map(|s| s.session_id.clone())
-                    .collect();
+                let session_ids: Vec<String> =
+                    summaries.iter().map(|s| s.session_id.clone()).collect();
                 if !session_ids.is_empty() {
                     recent_messages = provider
                         .recent_messages(
@@ -346,10 +352,10 @@ impl SessionDomainService {
     }
 
     /// 创建会话（业务逻辑）
-    /// 
+    ///
     /// 如果 attributes 中包含 "session_id" 且会话不存在，则使用指定的 session_id
     /// 否则生成新的 UUID 作为 session_id
-    /// 
+    ///
     /// 如果会话已存在，则更新参与者，确保所有参与者都在会话中
     pub async fn create_session(
         &self,
@@ -369,28 +375,30 @@ impl SessionDomainService {
                     "Invalid session ID format, but continuing for backward compatibility"
                 );
             }
-            
+
             // 检查会话是否已存在
-            if let Ok(Some(existing_session)) = self.session_repo.get_session(&requested_session_id).await {
+            if let Ok(Some(existing_session)) =
+                self.session_repo.get_session(&requested_session_id).await
+            {
                 // 会话已存在，更新参与者（确保所有参与者都在会话中）
                 debug!(
                     session_id = %requested_session_id,
                     participant_count = participants.len(),
                     "Session already exists, ensuring all participants are added"
                 );
-                
+
                 // 获取需要添加的参与者（不在现有参与者列表中的）
                 let existing_participant_ids: std::collections::HashSet<String> = existing_session
                     .participants
                     .iter()
                     .map(|p| p.user_id.clone())
                     .collect();
-                
+
                 let participants_to_add: Vec<SessionParticipant> = participants
                     .into_iter()
                     .filter(|p| !existing_participant_ids.contains(&p.user_id))
                     .collect();
-                
+
                 if !participants_to_add.is_empty() {
                     debug!(
                         session_id = %requested_session_id,
@@ -398,15 +406,10 @@ impl SessionDomainService {
                         "Adding new participants to existing session"
                     );
                     self.session_repo
-                        .manage_participants(
-                            &requested_session_id,
-                            &participants_to_add,
-                            &[],
-                            &[],
-                        )
+                        .manage_participants(&requested_session_id, &participants_to_add, &[], &[])
                         .await?;
                 }
-                
+
                 // 返回现有会话
                 Ok(existing_session)
             } else {
@@ -462,7 +465,7 @@ impl SessionDomainService {
                     Uuid::new_v4().to_string()
                 }
             };
-            
+
             let session = Session {
                 session_id: session_id.clone(),
                 session_type,
@@ -527,7 +530,9 @@ impl SessionDomainService {
 
     /// 删除会话（业务逻辑）
     pub async fn delete_session(&self, session_id: &str, hard_delete: bool) -> Result<()> {
-        self.session_repo.delete_session(session_id, hard_delete).await?;
+        self.session_repo
+            .delete_session(session_id, hard_delete)
+            .await?;
         info!(session_id = %session_id, hard_delete = hard_delete, "Session deleted");
         Ok(())
     }
@@ -568,14 +573,9 @@ impl SessionDomainService {
     }
 
     /// 标记消息为已读（业务逻辑）
-    /// 
+    ///
     /// 更新用户的 last_read_msg_seq，并重新计算未读数
-    pub async fn mark_as_read(
-        &self,
-        user_id: &str,
-        session_id: &str,
-        seq: i64,
-    ) -> Result<()> {
+    pub async fn mark_as_read(&self, user_id: &str, session_id: &str, seq: i64) -> Result<()> {
         self.session_repo
             .mark_as_read(user_id, session_id, seq)
             .await?;
@@ -589,11 +589,7 @@ impl SessionDomainService {
     }
 
     /// 获取未读数（业务逻辑）
-    pub async fn get_unread_count(
-        &self,
-        user_id: &str,
-        session_id: &str,
-    ) -> Result<i32> {
+    pub async fn get_unread_count(&self, user_id: &str, session_id: &str) -> Result<i32> {
         self.session_repo
             .get_unread_count(user_id, session_id)
             .await

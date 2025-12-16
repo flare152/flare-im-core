@@ -2,58 +2,51 @@ use std::sync::Arc;
 
 use flare_im_core::error::ok_status;
 use flare_proto::message::{
-    BatchSendMessageRequest, BatchSendMessageResponse,
-    DeleteMessageRequest as MessageDeleteMessageRequest,
-    DeleteMessageResponse as MessageDeleteMessageResponse,
-    GetMessageRequest as MessageGetMessageRequest,
-    GetMessageResponse as MessageGetMessageResponse,
-    MarkMessageReadRequest as MessageMarkMessageReadRequest,
-    MarkMessageReadResponse as MessageMarkMessageReadResponse,
-    QueryMessagesRequest as MessageQueryMessagesRequest,
-    QueryMessagesResponse as MessageQueryMessagesResponse,
-    RecallMessageRequest as MessageRecallMessageRequest,
-    RecallMessageResponse as MessageRecallMessageResponse,
-    SearchMessagesRequest as MessageSearchMessagesRequest,
-    SearchMessagesResponse as MessageSearchMessagesResponse,
-    SendMessageRequest,
-    SendMessageResponse,
-    SendSystemMessageRequest,
-    SendSystemMessageResponse,
-    EditMessageRequest as MessageEditMessageRequest,
-    EditMessageResponse as MessageEditMessageResponse,
-    ReplyMessageRequest as MessageReplyMessageRequest,
-    ReplyMessageResponse as MessageReplyMessageResponse,
-    AddThreadReplyRequest as MessageAddThreadReplyRequest,
-    AddThreadReplyResponse as MessageAddThreadReplyResponse,
     AddReactionRequest as MessageAddReactionRequest,
     AddReactionResponse as MessageAddReactionResponse,
-    RemoveReactionRequest as MessageRemoveReactionRequest,
-    RemoveReactionResponse as MessageRemoveReactionResponse,
-    ForwardMessageRequest as MessageForwardMessageRequest,
-    ForwardMessageResponse as MessageForwardMessageResponse,
-    QuoteMessageRequest as MessageQuoteMessageRequest,
-    QuoteMessageResponse as MessageQuoteMessageResponse,
-    PinMessageRequest as MessagePinMessageRequest,
-    PinMessageResponse as MessagePinMessageResponse,
-    UnpinMessageRequest as MessageUnpinMessageRequest,
-    UnpinMessageResponse as MessageUnpinMessageResponse,
+    AddThreadReplyRequest as MessageAddThreadReplyRequest,
+    AddThreadReplyResponse as MessageAddThreadReplyResponse,
+    BatchMarkMessageReadRequest as MessageBatchMarkMessageReadRequest,
+    BatchMarkMessageReadResponse as MessageBatchMarkMessageReadResponse, BatchSendMessageRequest,
+    BatchSendMessageResponse, DeleteMessageRequest as MessageDeleteMessageRequest,
+    DeleteMessageResponse as MessageDeleteMessageResponse,
+    EditMessageRequest as MessageEditMessageRequest,
+    EditMessageResponse as MessageEditMessageResponse,
     FavoriteMessageRequest as MessageFavoriteMessageRequest,
     FavoriteMessageResponse as MessageFavoriteMessageResponse,
-    UnfavoriteMessageRequest as MessageUnfavoriteMessageRequest,
-    UnfavoriteMessageResponse as MessageUnfavoriteMessageResponse,
+    ForwardMessageRequest as MessageForwardMessageRequest,
+    ForwardMessageResponse as MessageForwardMessageResponse,
+    GetMessageRequest as MessageGetMessageRequest, GetMessageResponse as MessageGetMessageResponse,
+    MarkMessageReadRequest as MessageMarkMessageReadRequest,
+    MarkMessageReadResponse as MessageMarkMessageReadResponse,
     MarkMessageRequest as MessageMarkMessageRequest,
     MarkMessageResponse as MessageMarkMessageResponse,
-    BatchMarkMessageReadRequest as MessageBatchMarkMessageReadRequest,
-    BatchMarkMessageReadResponse as MessageBatchMarkMessageReadResponse,
+    PinMessageRequest as MessagePinMessageRequest, PinMessageResponse as MessagePinMessageResponse,
+    QueryMessagesRequest as MessageQueryMessagesRequest,
+    QueryMessagesResponse as MessageQueryMessagesResponse,
+    QuoteMessageRequest as MessageQuoteMessageRequest,
+    QuoteMessageResponse as MessageQuoteMessageResponse,
+    RecallMessageRequest as MessageRecallMessageRequest,
+    RecallMessageResponse as MessageRecallMessageResponse,
+    RemoveReactionRequest as MessageRemoveReactionRequest,
+    RemoveReactionResponse as MessageRemoveReactionResponse,
+    ReplyMessageRequest as MessageReplyMessageRequest,
+    ReplyMessageResponse as MessageReplyMessageResponse,
+    SearchMessagesRequest as MessageSearchMessagesRequest,
+    SearchMessagesResponse as MessageSearchMessagesResponse, SendMessageRequest,
+    SendMessageResponse, SendSystemMessageRequest, SendSystemMessageResponse,
+    UnfavoriteMessageRequest as MessageUnfavoriteMessageRequest,
+    UnfavoriteMessageResponse as MessageUnfavoriteMessageResponse,
+    UnpinMessageRequest as MessageUnpinMessageRequest,
+    UnpinMessageResponse as MessageUnpinMessageResponse,
 };
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
 use flare_proto::storage::{
-    DeleteMessageRequest, GetMessageRequest, MarkMessageReadRequest,
-    RecallMessageRequest, StoreMessageRequest,
-    SetMessageAttributesRequest,
+    DeleteMessageRequest, GetMessageRequest, MarkMessageReadRequest, RecallMessageRequest,
+    SetMessageAttributesRequest, StoreMessageRequest,
 };
-use prost_types;
 use prost::Message as ProstMessage;
+use prost_types;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument, warn};
 
@@ -63,7 +56,7 @@ use crate::domain::repository::MessageEventPublisher;
 use flare_proto::message::message_service_server::MessageService;
 
 /// 消息 gRPC 处理器 - 处理所有消息相关的 gRPC 请求（接口层）
-/// 
+///
 /// 职责：
 /// 1. 将 gRPC 请求转换为领域命令/查询
 /// 2. 调用应用层 handlers
@@ -98,10 +91,11 @@ impl MessageGrpcHandler {
         request: Request<SendMessageRequest>,
     ) -> Result<Response<SendMessageResponse>, Status> {
         let req = request.into_inner();
-        let message = req.message.as_ref().ok_or_else(|| 
-            Status::invalid_argument("message required")
-        )?;
-        
+        let message = req
+            .message
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("message required"))?;
+
         // 检查是否是操作消息（根据架构优化方案，操作消息通过 NotificationContent 传递）
         if message.message_type == flare_proto::MessageType::Notification as i32 {
             tracing::debug!(
@@ -117,7 +111,9 @@ impl MessageGrpcHandler {
                     "Extracted message operation, handling"
                 );
                 // 统一处理所有操作
-                return self.handle_message_operation(operation, message, &req).await;
+                return self
+                    .handle_message_operation(operation, message, &req)
+                    .await;
             } else {
                 tracing::warn!(
                     message_id = %message.id,
@@ -125,11 +121,11 @@ impl MessageGrpcHandler {
                 );
             }
         }
-        
+
         // 普通消息处理（存储编排）
         self.handle_normal_message(message, &req).await
     }
-    
+
     /// 内部方法：直接发送普通消息（不检查操作消息，避免递归）
     async fn send_normal_message_internal(
         &self,
@@ -138,15 +134,15 @@ impl MessageGrpcHandler {
     ) -> Result<Response<SendMessageResponse>, Status> {
         self.handle_normal_message(message, request).await
     }
-    
+
     /// 从 Message 中提取 MessageOperation
     fn extract_operation_from_message(
         &self,
         message: &flare_proto::Message,
     ) -> Result<Option<flare_proto::common::MessageOperation>, Status> {
-        use flare_proto::common::message_content::Content;
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-        
+        use flare_proto::common::message_content::Content;
+
         // 从 NotificationContent 中提取 MessageOperation
         if let Some(ref content) = message.content {
             if let Some(Content::Notification(notif)) = &content.content {
@@ -154,18 +150,23 @@ impl MessageGrpcHandler {
                     // 从 data 中提取 operation_data（base64 编码）
                     if let Some(operation_data_str) = notif.data.get("operation_data") {
                         // 解码 base64
-                        let operation_bytes = BASE64.decode(operation_data_str)
-                            .map_err(|e| Status::invalid_argument(
-                                format!("Failed to decode operation_data: {}", e)
-                            ))?;
-                        
+                        let operation_bytes = BASE64.decode(operation_data_str).map_err(|e| {
+                            Status::invalid_argument(format!(
+                                "Failed to decode operation_data: {}",
+                                e
+                            ))
+                        })?;
+
                         // 解析 MessageOperation
-                        let operation = flare_proto::common::MessageOperation::decode(
-                            &operation_bytes[..]
-                        ).map_err(|e| Status::invalid_argument(
-                            format!("Failed to decode MessageOperation: {}", e)
-                        ))?;
-                        
+                        let operation =
+                            flare_proto::common::MessageOperation::decode(&operation_bytes[..])
+                                .map_err(|e| {
+                                    Status::invalid_argument(format!(
+                                        "Failed to decode MessageOperation: {}",
+                                        e
+                                    ))
+                                })?;
+
                         return Ok(Some(operation));
                     }
                 }
@@ -173,7 +174,7 @@ impl MessageGrpcHandler {
         }
         Ok(None)
     }
-    
+
     /// 处理普通消息（存储编排）
     async fn handle_normal_message(
         &self,
@@ -189,13 +190,13 @@ impl MessageGrpcHandler {
                     sender_id = %message.sender_id,
                     "Single chat message missing receiver_id in gRPC handler"
                 );
-                return Err(Status::invalid_argument(
-                    format!("Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}", 
-                        message.id, message.session_id, message.sender_id)
-                ));
+                return Err(Status::invalid_argument(format!(
+                    "Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}",
+                    message.id, message.session_id, message.sender_id
+                )));
             }
         }
-        
+
         // 将 SendMessageRequest 转换为 StoreMessageRequest
         let store_request = StoreMessageRequest {
             session_id: req.session_id.clone(),
@@ -243,7 +244,7 @@ impl MessageGrpcHandler {
             }
         }
     }
-    
+
     /// 统一处理所有操作消息
     async fn handle_message_operation(
         &self,
@@ -252,23 +253,26 @@ impl MessageGrpcHandler {
         request: &SendMessageRequest,
     ) -> Result<Response<SendMessageResponse>, Status> {
         use crate::domain::service::operation_classifier::OperationClassifier;
-        
+
         let operation_type = operation.operation_type;
-        
+
         // 操作分类
         if OperationClassifier::can_delegate_directly(operation_type) {
             // 简单操作：直接委托给 Storage Reader/Writer
             return self.handle_simple_operation(operation, request).await;
         } else if OperationClassifier::requires_orchestration(operation_type) {
             // 复杂操作：需要编排
-            return self.handle_complex_operation(operation, message, request).await;
+            return self
+                .handle_complex_operation(operation, message, request)
+                .await;
         } else {
-            return Err(Status::invalid_argument(
-                format!("Unsupported operation type: {}", operation_type)
-            ));
+            return Err(Status::invalid_argument(format!(
+                "Unsupported operation type: {}",
+                operation_type
+            )));
         }
     }
-    
+
     /// 处理简单操作（直接委托给 Storage Reader/Writer）
     async fn handle_simple_operation(
         &self,
@@ -277,29 +281,35 @@ impl MessageGrpcHandler {
     ) -> Result<Response<SendMessageResponse>, Status> {
         use flare_proto::common::OperationType;
         use flare_proto::common::message_operation::OperationData;
-        
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
-        
+
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
+
         match OperationType::try_from(operation.operation_type) {
             Ok(OperationType::Read) => {
                 // 标记已读：直接委托给 Storage Reader
                 // 验证操作数据存在（虽然当前不需要使用具体数据）
                 if !matches!(operation.operation_data, Some(OperationData::Read(_))) {
-                    return Err(Status::invalid_argument("Read operation requires ReadOperationData"));
+                    return Err(Status::invalid_argument(
+                        "Read operation requires ReadOperationData",
+                    ));
                 }
-                
+
                 let read_req = MarkMessageReadRequest {
                     message_id: operation.target_message_id.clone(),
                     user_id: operation.operator_id.clone(),
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
-                let resp = client.clone().mark_message_read(Request::new(read_req)).await?;
+
+                let resp = client
+                    .clone()
+                    .mark_message_read(Request::new(read_req))
+                    .await?;
                 let inner = resp.into_inner();
-                
+
                 // 转换为 SendMessageResponse
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
@@ -314,12 +324,13 @@ impl MessageGrpcHandler {
                 let reaction_data = match operation.operation_data {
                     Some(OperationData::Reaction(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Reaction operation requires ReactionOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Reaction operation requires ReactionOperationData",
+                        ));
                     }
                 };
-                
+
                 let is_add = operation.operation_type == OperationType::ReactionAdd as i32;
-                
 
                 let reaction_req = flare_proto::storage::AddOrRemoveReactionRequest {
                     message_id: operation.target_message_id.clone(),
@@ -329,12 +340,13 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
-                let resp = client.clone()
+
+                let resp = client
+                    .clone()
                     .add_or_remove_reaction(Request::new(reaction_req))
                     .await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.as_ref().map(|s| s.code == 0).unwrap_or(false),
                     message_id: operation.target_message_id,
@@ -351,10 +363,10 @@ impl MessageGrpcHandler {
                 } else {
                     "false".to_string()
                 };
-                
+
                 let mut attributes = std::collections::HashMap::new();
                 attributes.insert(pin_key, pin_value);
-                
+
                 let set_req = SetMessageAttributesRequest {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
@@ -362,10 +374,13 @@ impl MessageGrpcHandler {
                     attributes,
                     tags: vec![],
                 };
-                
-                let resp = client.clone().set_message_attributes(Request::new(set_req)).await?;
+
+                let resp = client
+                    .clone()
+                    .set_message_attributes(Request::new(set_req))
+                    .await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
                     message_id: operation.target_message_id,
@@ -382,10 +397,10 @@ impl MessageGrpcHandler {
                 } else {
                     "false".to_string()
                 };
-                
+
                 let mut attributes = std::collections::HashMap::new();
                 attributes.insert(favorite_key, favorite_value);
-                
+
                 let set_req = SetMessageAttributesRequest {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
@@ -393,10 +408,13 @@ impl MessageGrpcHandler {
                     attributes,
                     tags: vec![],
                 };
-                
-                let resp = client.clone().set_message_attributes(Request::new(set_req)).await?;
+
+                let resp = client
+                    .clone()
+                    .set_message_attributes(Request::new(set_req))
+                    .await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
                     message_id: operation.target_message_id,
@@ -410,13 +428,16 @@ impl MessageGrpcHandler {
                 let mark_data = match operation.operation_data {
                     Some(OperationData::Mark(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Mark operation requires MarkOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Mark operation requires MarkOperationData",
+                        ));
                     }
                 };
-                
-                let mark_key = format!("mark:{}:{}", 
+
+                let mark_key = format!(
+                    "mark:{}:{}",
                     match mark_data.mark_type {
-                        0 => "important",  // MarkType::Important
+                        0 => "important", // MarkType::Important
                         1 => "todo",      // MarkType::Todo
                         2 => "processed", // MarkType::Done
                         3 => "custom",    // MarkType::Custom
@@ -424,10 +445,10 @@ impl MessageGrpcHandler {
                     },
                     operation.operator_id
                 );
-                
+
                 let mut attributes = std::collections::HashMap::new();
                 attributes.insert(mark_key, "true".to_string());
-                
+
                 let set_req = SetMessageAttributesRequest {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
@@ -435,10 +456,13 @@ impl MessageGrpcHandler {
                     attributes,
                     tags: vec![],
                 };
-                
-                let resp = client.clone().set_message_attributes(Request::new(set_req)).await?;
+
+                let resp = client
+                    .clone()
+                    .set_message_attributes(Request::new(set_req))
+                    .await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
                     message_id: operation.target_message_id,
@@ -452,20 +476,25 @@ impl MessageGrpcHandler {
                 let _delete_data = match operation.operation_data {
                     Some(OperationData::Delete(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Delete operation requires DeleteOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Delete operation requires DeleteOperationData",
+                        ));
                     }
                 };
-                
+
                 let delete_req = DeleteMessageRequest {
                     session_id: request.session_id.clone(),
                     message_ids: vec![operation.target_message_id.clone()],
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
-                let resp = client.clone().delete_message(Request::new(delete_req)).await?;
+
+                let resp = client
+                    .clone()
+                    .delete_message(Request::new(delete_req))
+                    .await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: operation.target_message_id,
@@ -477,7 +506,7 @@ impl MessageGrpcHandler {
             _ => Err(Status::invalid_argument("Not a simple operation")),
         }
     }
-    
+
     /// 处理复杂操作（需要编排）
     async fn handle_complex_operation(
         &self,
@@ -487,17 +516,19 @@ impl MessageGrpcHandler {
     ) -> Result<Response<SendMessageResponse>, Status> {
         use flare_proto::common::OperationType;
         use flare_proto::common::message_operation::OperationData;
-        
+
         match OperationType::try_from(operation.operation_type) {
             Ok(OperationType::Recall) => {
                 // 撤回：需要编排（权限验证 → 状态更新 → 事件发布）
                 let recall_data = match operation.operation_data {
                     Some(OperationData::Recall(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Recall operation requires RecallOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Recall operation requires RecallOperationData",
+                        ));
                     }
                 };
-                
+
                 let recall_req = MessageRecallMessageRequest {
                     message_id: operation.target_message_id.clone(),
                     operator_id: operation.operator_id.clone(),
@@ -506,10 +537,10 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.recall_message(Request::new(recall_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: operation.target_message_id,
@@ -523,10 +554,12 @@ impl MessageGrpcHandler {
                 let edit_data = match operation.operation_data {
                     Some(OperationData::Edit(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Edit operation requires EditOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Edit operation requires EditOperationData",
+                        ));
                     }
                 };
-                
+
                 let edit_req = MessageEditMessageRequest {
                     message_id: operation.target_message_id.clone(),
                     operator_id: operation.operator_id.clone(),
@@ -537,10 +570,10 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.edit_message(Request::new(edit_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: operation.target_message_id,
@@ -554,10 +587,12 @@ impl MessageGrpcHandler {
                 let forward_data = match operation.operation_data {
                     Some(OperationData::Forward(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Forward operation requires ForwardOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Forward operation requires ForwardOperationData",
+                        ));
                     }
                 };
-                
+
                 let forward_req = MessageForwardMessageRequest {
                     message_ids: forward_data.message_ids,
                     target_session_id: forward_data.target_session_id,
@@ -566,15 +601,17 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.forward_message(Request::new(forward_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 // 使用第一条转发的消息ID作为返回
-                let message_id = inner.forwarded_message_ids.first()
+                let message_id = inner
+                    .forwarded_message_ids
+                    .first()
                     .cloned()
                     .unwrap_or_else(|| operation.target_message_id.clone());
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id,
@@ -588,10 +625,12 @@ impl MessageGrpcHandler {
                 let reply_data = match operation.operation_data {
                     Some(OperationData::Reply(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Reply operation requires ReplyOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Reply operation requires ReplyOperationData",
+                        ));
                     }
                 };
-                
+
                 // 构建回复消息
                 let reply_content = reply_data.reply_content.ok_or_else(|| {
                     Status::invalid_argument("Reply operation requires reply_content")
@@ -601,12 +640,12 @@ impl MessageGrpcHandler {
                     session_id: request.session_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 回复消息：receiver_id 由原消息决定
-                    channel_id: String::new(), // 回复消息：channel_id 由原消息决定
+                    channel_id: String::new(),  // 回复消息：channel_id 由原消息决定
                     content: Some(reply_content),
                     timestamp: operation.timestamp.clone(),
                     ..Default::default()
                 };
-                
+
                 let reply_req = MessageReplyMessageRequest {
                     session_id: request.session_id.clone(),
                     reply_to_message_id: reply_data.reply_to_message_id,
@@ -615,10 +654,10 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.reply_message(Request::new(reply_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: inner.message_id,
@@ -632,10 +671,12 @@ impl MessageGrpcHandler {
                 let quote_data = match operation.operation_data {
                     Some(OperationData::Quote(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("Quote operation requires QuoteOperationData"));
+                        return Err(Status::invalid_argument(
+                            "Quote operation requires QuoteOperationData",
+                        ));
                     }
                 };
-                
+
                 // 使用传入的 message 作为引用消息（已经包含引用内容）
                 let quote_req = MessageQuoteMessageRequest {
                     session_id: request.session_id.clone(),
@@ -647,10 +688,10 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.quote_message(Request::new(quote_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: inner.message_id,
@@ -664,10 +705,12 @@ impl MessageGrpcHandler {
                 let thread_data = match operation.operation_data {
                     Some(OperationData::Thread(data)) => data,
                     _ => {
-                        return Err(Status::invalid_argument("ThreadReply operation requires ThreadOperationData"));
+                        return Err(Status::invalid_argument(
+                            "ThreadReply operation requires ThreadOperationData",
+                        ));
                     }
                 };
-                
+
                 // 构建话题回复消息
                 let thread_reply_content = thread_data.reply_content.ok_or_else(|| {
                     Status::invalid_argument("ThreadReply operation requires reply_content")
@@ -677,12 +720,12 @@ impl MessageGrpcHandler {
                     session_id: request.session_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 话题回复：receiver_id 由话题决定
-                    channel_id: String::new(), // 话题回复：channel_id 由话题决定
+                    channel_id: String::new(),  // 话题回复：channel_id 由话题决定
                     content: Some(thread_reply_content),
                     timestamp: operation.timestamp.clone(),
                     ..Default::default()
                 };
-                
+
                 let thread_req = MessageAddThreadReplyRequest {
                     session_id: request.session_id.clone(),
                     thread_id: thread_data.thread_id,
@@ -691,10 +734,10 @@ impl MessageGrpcHandler {
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
                 };
-                
+
                 let resp = self.add_thread_reply(Request::new(thread_req)).await?;
                 let inner = resp.into_inner();
-                
+
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
                     message_id: inner.message_id,
@@ -714,12 +757,12 @@ impl MessageGrpcHandler {
         request: Request<BatchSendMessageRequest>,
     ) -> Result<Response<BatchSendMessageResponse>, Status> {
         let req = request.into_inner();
-        
+
         info!(
             "Orchestrator received batch: {} messages",
             req.messages.len()
         );
-        
+
         let mut success_count = 0;
         let mut fail_count = 0;
         let mut message_ids = Vec::new();
@@ -737,7 +780,9 @@ impl MessageGrpcHandler {
 
             match self
                 .command_handler
-                .handle_store_message(StoreMessageCommand { request: store_request })
+                .handle_store_message(StoreMessageCommand {
+                    request: store_request,
+                })
                 .await
             {
                 Ok(message_id) => {
@@ -778,9 +823,9 @@ impl MessageGrpcHandler {
             return Err(Status::invalid_argument("session_id is required"));
         }
 
-        let mut message = req.message.ok_or_else(|| {
-            Status::invalid_argument("message is required")
-        })?;
+        let mut message = req
+            .message
+            .ok_or_else(|| Status::invalid_argument("message is required"))?;
 
         if req.system_message_type.is_empty() {
             return Err(Status::invalid_argument("system_message_type is required"));
@@ -788,12 +833,16 @@ impl MessageGrpcHandler {
 
         // 构建 StoreMessageRequest，添加系统消息类型标签
         let mut tags = std::collections::HashMap::new();
-        tags.insert("system_message_type".to_string(), req.system_message_type.clone());
+        tags.insert(
+            "system_message_type".to_string(),
+            req.system_message_type.clone(),
+        );
         tags.insert("is_system_message".to_string(), "true".to_string());
         // 确保消息类型标记为系统消息
-        message
-            .extra
-            .insert("system_message_type".to_string(), req.system_message_type.clone());
+        message.extra.insert(
+            "system_message_type".to_string(),
+            req.system_message_type.clone(),
+        );
         message
             .extra
             .insert("sender_type".to_string(), "system".to_string());
@@ -852,13 +901,26 @@ impl MessageGrpcHandler {
         let query = crate::application::queries::QueryMessagesQuery {
             session_id: req.session_id.clone(),
             limit: Some(req.limit),
-            cursor: if req.cursor.is_empty() { None } else { Some(req.cursor.clone()) },
-            start_time: if req.start_time == 0 { None } else { Some(req.start_time) },
-            end_time: if req.end_time == 0 { None } else { Some(req.end_time) },
+            cursor: if req.cursor.is_empty() {
+                None
+            } else {
+                Some(req.cursor.clone())
+            },
+            start_time: if req.start_time == 0 {
+                None
+            } else {
+                Some(req.start_time)
+            },
+            end_time: if req.end_time == 0 {
+                None
+            } else {
+                Some(req.end_time)
+            },
         };
 
         // 调用查询处理器
-        let result = self.query_handler
+        let result = self
+            .query_handler
             .query_messages_with_pagination(query)
             .await
             .map_err(|err| {
@@ -899,16 +961,21 @@ impl MessageGrpcHandler {
 
         // 构建搜索查询对象
         let query = crate::application::queries::SearchMessagesQuery {
-            session_id: None, // SearchMessagesRequest中没有session_id字段
+            session_id: None,       // SearchMessagesRequest中没有session_id字段
             keyword: String::new(), // SearchMessagesRequest中没有keyword字段，应在filters中处理
-            limit: req.pagination.as_ref()
-                .map(|p| p.limit),
-            cursor: req.pagination.as_ref()
-                .and_then(|p| if !p.cursor.is_empty() { Some(p.cursor.clone()) } else { None }),
+            limit: req.pagination.as_ref().map(|p| p.limit),
+            cursor: req.pagination.as_ref().and_then(|p| {
+                if !p.cursor.is_empty() {
+                    Some(p.cursor.clone())
+                } else {
+                    None
+                }
+            }),
         };
 
         // 调用查询处理器
-        let messages = self.query_handler
+        let messages = self
+            .query_handler
             .search_messages(query)
             .await
             .map_err(|err| {
@@ -944,7 +1011,8 @@ impl MessageGrpcHandler {
         };
 
         // 调用查询处理器
-        let message = self.query_handler
+        let message = self
+            .query_handler
             .query_message(query)
             .await
             .map_err(|err| {
@@ -972,9 +1040,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageRecallMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let storage_req = RecallMessageRequest {
             message_id: req.message_id.clone(),
@@ -1003,22 +1072,20 @@ impl MessageGrpcHandler {
                 tenant: req.tenant.clone(),
                 message_id: req.message_id.clone(),
             };
-            
-            if let Ok(current) = client
-                .clone()
-                .get_message(Request::new(get_req))
-                .await
-            {
+
+            if let Ok(current) = client.clone().get_message(Request::new(get_req)).await {
                 if let Some(original_message) = current.into_inner().message {
                     // 确定接收者（优先使用 receiver_id 和 channel_id）
                     let mut user_ids = Vec::new();
-                    
+
                     // 单聊：使用 receiver_id
-                    if original_message.session_type == flare_proto::common::SessionType::Single as i32 {
+                    if original_message.session_type
+                        == flare_proto::common::SessionType::Single as i32
+                    {
                         if !original_message.receiver_id.is_empty() {
                             user_ids.push(original_message.receiver_id.clone());
-                                        }
-                                    }
+                        }
+                    }
                     // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 session_id 查询成员
 
                     // 构建撤回后的消息（用于推送通知）
@@ -1090,9 +1157,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageDeleteMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let storage_req = DeleteMessageRequest {
             session_id: req.session_id,
@@ -1126,9 +1194,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageMarkMessageReadResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let storage_req = MarkMessageReadRequest {
             message_id: req.message_id,
@@ -1163,9 +1232,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageEditMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         // 获取原消息
         let get_req = GetMessageRequest {
@@ -1183,23 +1253,27 @@ impl MessageGrpcHandler {
             })?
             .into_inner();
 
-        let original_message = current.message.ok_or_else(|| {
-            Status::not_found("Message not found")
-        })?;
+        let original_message = current
+            .message
+            .ok_or_else(|| Status::not_found("Message not found"))?;
 
         // 验证操作者权限（只有发送者可以编辑）
-        let operator_id = req.context.as_ref()
+        let operator_id = req
+            .context
+            .as_ref()
             .and_then(|c| c.actor.as_ref())
             .map(|a| a.actor_id.as_str())
             .unwrap_or("");
-        
+
         if original_message.sender_id != operator_id {
-            return Err(Status::permission_denied("Only message sender can edit message"));
+            return Err(Status::permission_denied(
+                "Only message sender can edit message",
+            ));
         }
 
         // 构建编辑后的消息内容
         let mut attrs = std::collections::HashMap::new();
-        
+
         // 记录编辑信息
         let now = chrono::Utc::now();
         attrs.insert("edited_at".to_string(), now.to_rfc3339());
@@ -1218,7 +1292,10 @@ impl MessageGrpcHandler {
         if let Some(new_content) = &req.new_content {
             // 将新内容序列化存储到attributes中（临时方案）
             // 实际应该通过Storage Writer直接更新content字段
-            attrs.insert("edited_content_type".to_string(), format!("{:?}", new_content));
+            attrs.insert(
+                "edited_content_type".to_string(),
+                format!("{:?}", new_content),
+            );
         }
 
         let storage_req = SetMessageAttributesRequest {
@@ -1248,7 +1325,7 @@ impl MessageGrpcHandler {
 
         // 确定接收者（优先使用 receiver_id 和 channel_id）
         let mut user_ids = Vec::new();
-        
+
         // 单聊：使用 receiver_id
         if original_message.session_type == flare_proto::common::SessionType::Single as i32 {
             if !original_message.receiver_id.is_empty() {
@@ -1318,9 +1395,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageAddReactionResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let get_req = GetMessageRequest {
             context: req.context.clone(),
@@ -1341,14 +1419,22 @@ impl MessageGrpcHandler {
         if let Some(msg) = current.message {
             let key = format!("reaction:{}:count", req.emoji);
             if let Some(v) = msg.attributes.get(&key) {
-                if let Ok(n) = v.parse::<i32>() { count = n; }
+                if let Ok(n) = v.parse::<i32>() {
+                    count = n;
+                }
             }
         }
         let new_count = count.saturating_add(1);
 
         let mut attrs = std::collections::HashMap::new();
-        attrs.insert(format!("reaction:{}:count", req.emoji), new_count.to_string());
-        attrs.insert(format!("reaction:{}:last_by", req.emoji), req.user_id.clone());
+        attrs.insert(
+            format!("reaction:{}:count", req.emoji),
+            new_count.to_string(),
+        );
+        attrs.insert(
+            format!("reaction:{}:last_by", req.emoji),
+            req.user_id.clone(),
+        );
 
         let set_req = SetMessageAttributesRequest {
             context: req.context,
@@ -1381,9 +1467,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageRemoveReactionResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let get_req = GetMessageRequest {
             context: req.context.clone(),
@@ -1404,14 +1491,22 @@ impl MessageGrpcHandler {
         if let Some(msg) = current.message {
             let key = format!("reaction:{}:count", req.emoji);
             if let Some(v) = msg.attributes.get(&key) {
-                if let Ok(n) = v.parse::<i32>() { count = n; }
+                if let Ok(n) = v.parse::<i32>() {
+                    count = n;
+                }
             }
         }
         let new_count = (count - 1).max(0);
 
         let mut attrs = std::collections::HashMap::new();
-        attrs.insert(format!("reaction:{}:count", req.emoji), new_count.to_string());
-        attrs.insert(format!("reaction:{}:last_by", req.emoji), req.user_id.clone());
+        attrs.insert(
+            format!("reaction:{}:count", req.emoji),
+            new_count.to_string(),
+        );
+        attrs.insert(
+            format!("reaction:{}:last_by", req.emoji),
+            req.user_id.clone(),
+        );
 
         let set_req = SetMessageAttributesRequest {
             context: req.context,
@@ -1444,7 +1539,9 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageReplyMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let mut message = req.message.ok_or_else(|| Status::invalid_argument("message required"))?;
+        let mut message = req
+            .message
+            .ok_or_else(|| Status::invalid_argument("message required"))?;
         message
             .attributes
             .insert("reply_to".to_string(), req.reply_to_message_id.clone());
@@ -1462,9 +1559,10 @@ impl MessageGrpcHandler {
             .await?
             .into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let get_req = flare_proto::storage::GetMessageRequest {
             context: req.context.clone(),
@@ -1479,13 +1577,14 @@ impl MessageGrpcHandler {
                 error!(error = ?err, "Failed to get original message for reply");
                 Status::internal("reply get original failed")
             })?
-            .into_inner()
-            ;
+            .into_inner();
 
         let mut count = 0i32;
         if let Some(msg) = current.message {
             if let Some(v) = msg.attributes.get("reply_count") {
-                if let Ok(n) = v.parse::<i32>() { count = n; }
+                if let Ok(n) = v.parse::<i32>() {
+                    count = n;
+                }
             }
         }
         let new_count = count.saturating_add(1);
@@ -1527,7 +1626,9 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageAddThreadReplyResponse>, Status> {
         let req = request.into_inner();
 
-        let mut message = req.message.ok_or_else(|| Status::invalid_argument("message required"))?;
+        let mut message = req
+            .message
+            .ok_or_else(|| Status::invalid_argument("message required"))?;
         message
             .attributes
             .insert("thread_id".to_string(), req.thread_id.clone());
@@ -1545,9 +1646,10 @@ impl MessageGrpcHandler {
             .await?
             .into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let get_req = flare_proto::storage::GetMessageRequest {
             context: req.context.clone(),
@@ -1562,13 +1664,14 @@ impl MessageGrpcHandler {
                 error!(error = ?err, "Failed to get thread head message");
                 Status::internal("thread get head failed")
             })?
-            .into_inner()
-            ;
+            .into_inner();
 
         let mut count = 0i32;
         if let Some(msg) = current.message {
             if let Some(v) = msg.attributes.get("thread_reply_count") {
-                if let Ok(n) = v.parse::<i32>() { count = n; }
+                if let Ok(n) = v.parse::<i32>() {
+                    count = n;
+                }
             }
         }
         let new_count = count.saturating_add(1);
@@ -1619,9 +1722,10 @@ impl MessageGrpcHandler {
             return Err(Status::invalid_argument("message_ids cannot exceed 100"));
         }
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         // 获取被转发的消息
         let mut messages_to_forward = Vec::new();
@@ -1639,7 +1743,7 @@ impl MessageGrpcHandler {
                     error!(error = ?err, message_id = %message_id, "Failed to get message for forward");
                     Status::internal("get message failed")
                 })?;
-            
+
             if let Some(msg) = resp.into_inner().message {
                 messages_to_forward.push(msg);
             }
@@ -1664,10 +1768,12 @@ impl MessageGrpcHandler {
             let forward_message = flare_proto::common::Message {
                 session_id: req.target_session_id.clone(),
                 receiver_id: String::new(), // 转发消息：receiver_id 由目标会话决定
-                channel_id: String::new(), // 转发消息：channel_id 由目标会话决定
+                channel_id: String::new(),  // 转发消息：channel_id 由目标会话决定
                 message_type: flare_proto::common::MessageType::Forward as i32,
                 content: Some(flare_proto::common::MessageContent {
-                    content: Some(flare_proto::common::message_content::Content::Forward(forward_content)),
+                    content: Some(flare_proto::common::message_content::Content::Forward(
+                        forward_content,
+                    )),
                     // 注意：extensions 字段是必需的，类型为 Vec<prost_types::Any>
                     extensions: vec![],
                 }),
@@ -1704,13 +1810,13 @@ impl MessageGrpcHandler {
                 let mut forward_message = msg.clone();
                 forward_message.session_id = req.target_session_id.clone();
                 forward_message.message_type = flare_proto::common::MessageType::Forward as i32;
-                
-            // 设置转发信息（注意：forward_info 字段在新版 Message 中已移除）
-            // forward_message.forward_info = Some(flare_proto::common::ForwardContent {
-            //     message_ids: vec![msg.id.clone()],
-            //     forward_reason: req.reason.clone(),
-            //     metadata: std::collections::HashMap::new(),
-            // });
+
+                // 设置转发信息（注意：forward_info 字段在新版 Message 中已移除）
+                // forward_message.forward_info = Some(flare_proto::common::ForwardContent {
+                //     message_ids: vec![msg.id.clone()],
+                //     forward_reason: req.reason.clone(),
+                //     metadata: std::collections::HashMap::new(),
+                // });
 
                 let send_req = SendMessageRequest {
                     session_id: req.target_session_id.clone(),
@@ -1752,9 +1858,10 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageQuoteMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         // 获取被引用的消息
         let get_req = GetMessageRequest {
@@ -1777,9 +1884,8 @@ impl MessageGrpcHandler {
         // 构建引用消息内容
         // 注意：quoted_content在proto中定义为optional MessageContent，Rust生成的是Option<Box<MessageContent>>
         // quoted_msg.content是Option<MessageContent>，需要转换为Option<Box<MessageContent>>
-        let quoted_content = quoted_msg.content.clone()
-            .map(|c| Box::new(c));
-        
+        let quoted_content = quoted_msg.content.clone().map(|c| Box::new(c));
+
         let quote_content = flare_proto::common::QuoteContent {
             quoted_message_id: req.quoted_message_id.clone(),
             quoted_sender_id: quoted_msg.sender_id.clone(),
@@ -1789,16 +1895,22 @@ impl MessageGrpcHandler {
             // quote_range: req.quote_range.clone(),
         };
 
-        let mut message = req.message.ok_or_else(|| Status::invalid_argument("message required"))?;
+        let mut message = req
+            .message
+            .ok_or_else(|| Status::invalid_argument("message required"))?;
         message.content = Some(flare_proto::common::MessageContent {
-            content: Some(flare_proto::common::message_content::Content::Quote(Box::new(quote_content))),
+            content: Some(flare_proto::common::message_content::Content::Quote(
+                Box::new(quote_content),
+            )),
             // 注意：extensions 字段是必需的
             extensions: vec![],
         });
         message.message_type = flare_proto::common::MessageType::Quote as i32;
 
         // 设置引用关系
-        message.attributes.insert("quote_to".to_string(), req.quoted_message_id.clone());
+        message
+            .attributes
+            .insert("quote_to".to_string(), req.quoted_message_id.clone());
 
         let send_req = SendMessageRequest {
             session_id: req.session_id,
@@ -1829,26 +1941,32 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessagePinMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let mut attrs = std::collections::HashMap::new();
         attrs.insert("pinned".to_string(), "true".to_string());
         attrs.insert("pinned_by".to_string(), req.operator_id.clone());
-        
+
         let now = chrono::Utc::now();
         attrs.insert("pinned_at".to_string(), now.to_rfc3339());
-        
+
         if !req.reason.is_empty() {
             attrs.insert("pin_reason".to_string(), req.reason);
         }
-        
+
         if let Some(expire_at) = req.expire_at {
-            attrs.insert("pin_expire_at".to_string(), 
-                chrono::DateTime::<chrono::Utc>::from_timestamp(expire_at.seconds, expire_at.nanos as u32)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default());
+            attrs.insert(
+                "pin_expire_at".to_string(),
+                chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    expire_at.seconds,
+                    expire_at.nanos as u32,
+                )
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default(),
+            );
         }
 
         let storage_req = SetMessageAttributesRequest {
@@ -1887,14 +2005,15 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageUnpinMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let mut attrs = std::collections::HashMap::new();
         attrs.insert("pinned".to_string(), "false".to_string());
         attrs.insert("unpinned_by".to_string(), req.operator_id.clone());
-        
+
         let now = chrono::Utc::now();
         attrs.insert("unpinned_at".to_string(), now.to_rfc3339());
 
@@ -1930,20 +2049,21 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageFavoriteMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let mut attrs = std::collections::HashMap::new();
         attrs.insert(format!("favorited_by:{}", req.user_id), "true".to_string());
-        
+
         let now = chrono::Utc::now();
         attrs.insert(format!("favorited_at:{}", req.user_id), now.to_rfc3339());
-        
+
         if !req.tags.is_empty() {
             attrs.insert(format!("favorite_tags:{}", req.user_id), req.tags.join(","));
         }
-        
+
         if !req.note.is_empty() {
             attrs.insert(format!("favorite_note:{}", req.user_id), req.note);
         }
@@ -1984,13 +2104,17 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageUnfavoriteMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let mut attrs = std::collections::HashMap::new();
         attrs.insert(format!("favorited_by:{}", req.user_id), "false".to_string());
-        attrs.insert(format!("unfavorited_at:{}", req.user_id), chrono::Utc::now().to_rfc3339());
+        attrs.insert(
+            format!("unfavorited_at:{}", req.user_id),
+            chrono::Utc::now().to_rfc3339(),
+        );
 
         let storage_req = SetMessageAttributesRequest {
             context: req.context,
@@ -2024,16 +2148,20 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageMarkMessageResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let mut attrs = std::collections::HashMap::new();
-        attrs.insert(format!("marked_by:{}", req.user_id), format!("{}", req.mark_type as i32));
-        
+        attrs.insert(
+            format!("marked_by:{}", req.user_id),
+            format!("{}", req.mark_type as i32),
+        );
+
         let now = chrono::Utc::now();
         attrs.insert(format!("marked_at:{}", req.user_id), now.to_rfc3339());
-        
+
         if !req.color.is_empty() {
             attrs.insert(format!("mark_color:{}", req.user_id), req.color);
         }
@@ -2074,14 +2202,18 @@ impl MessageGrpcHandler {
     ) -> Result<Response<MessageBatchMarkMessageReadResponse>, Status> {
         let req = request.into_inner();
 
-        let client = self.reader_client.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Storage Reader not configured")
-        })?;
+        let client = self
+            .reader_client
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
-        let read_at = req.read_at.map(|ts| {
-            chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
-                .unwrap_or_else(|| chrono::Utc::now())
-        }).unwrap_or_else(|| chrono::Utc::now());
+        let read_at = req
+            .read_at
+            .map(|ts| {
+                chrono::DateTime::<chrono::Utc>::from_timestamp(ts.seconds, ts.nanos as u32)
+                    .unwrap_or_else(|| chrono::Utc::now())
+            })
+            .unwrap_or_else(|| chrono::Utc::now());
 
         let mut read_count = 0i32;
 

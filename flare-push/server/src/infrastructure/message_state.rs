@@ -163,11 +163,7 @@ impl MessageStateTracker {
     }
 
     /// 获取消息状态
-    pub async fn get_status(
-        &self,
-        message_id: &str,
-        user_id: &str,
-    ) -> Option<MessageState> {
+    pub async fn get_status(&self, message_id: &str, user_id: &str) -> Option<MessageState> {
         let key = format!("{}:{}", message_id, user_id);
         let cache = self.state_cache.read().await;
         cache.get(&key).cloned()
@@ -185,14 +181,14 @@ impl MessageStateTracker {
     /// 获取推送统计信息
     pub async fn get_statistics(&self) -> PushStatistics {
         let cache = self.state_cache.read().await;
-        
+
         let mut stats = PushStatistics::default();
         let mut total_delivery_time_ms = 0u64;
         let mut delivered_with_time_count = 0u64;
-        
+
         for state in cache.values() {
             stats.total_pushes += 1;
-            
+
             match state.status {
                 MessageStatus::Pending => stats.pending_count += 1,
                 MessageStatus::Delivered => {
@@ -201,26 +197,27 @@ impl MessageStateTracker {
                     let created = state.created_at.timestamp_millis();
                     if let Some(delivered) = state.ack_received_at.map(|dt| dt.timestamp_millis()) {
                         let delivery_time = delivered.saturating_sub(created);
-                        total_delivery_time_ms = total_delivery_time_ms.saturating_add(delivery_time as u64);
+                        total_delivery_time_ms =
+                            total_delivery_time_ms.saturating_add(delivery_time as u64);
                         delivered_with_time_count += 1;
                     }
-                },
+                }
                 MessageStatus::Failed => stats.failed_count += 1,
                 _ => {}
             }
         }
-        
+
         // 计算成功率
         if stats.total_pushes > 0 {
             stats.success_rate = (stats.delivered_count as f64) / (stats.total_pushes as f64);
         }
-        
+
         // 计算平均推送时间
         if delivered_with_time_count > 0 {
-            stats.average_delivery_time_ms = (total_delivery_time_ms as f64) / (delivered_with_time_count as f64);
+            stats.average_delivery_time_ms =
+                (total_delivery_time_ms as f64) / (delivered_with_time_count as f64);
         }
-        
+
         stats
     }
 }
-

@@ -2,9 +2,8 @@
 //!
 //! 提供Hook引擎的gRPC服务接口
 
-pub mod server;
 pub mod hook_service;
+pub mod server;
 
-pub use server::HookExtensionServer;
 pub use hook_service::HookServiceServer;
-
+pub use server::HookExtensionServer;

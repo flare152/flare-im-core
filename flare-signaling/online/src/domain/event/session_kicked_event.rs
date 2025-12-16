@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{DeviceId, SessionId, UserId};
 use super::DomainEvent;
+use crate::domain::value_object::{DeviceId, SessionId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionKickedEvent {
@@ -14,6 +14,10 @@ pub struct SessionKickedEvent {
 }
 
 impl DomainEvent for SessionKickedEvent {
-    fn event_type(&self) -> &'static str { "SessionKicked" }
-    fn occurred_at(&self) -> DateTime<Utc> { self.occurred_at }
+    fn event_type(&self) -> &'static str {
+        "SessionKicked"
+    }
+    fn occurred_at(&self) -> DateTime<Utc> {
+        self.occurred_at
+    }
 }

@@ -2,11 +2,11 @@
 //!
 //! 提供Hook Engine的gRPC客户端，用于Gateway代理转发HookService请求
 
-use std::sync::Arc;
 use anyhow::Result;
-use tonic::transport::Channel;
 use flare_proto::hooks::hook_service_client::HookServiceClient;
 use flare_proto::hooks::*;
+use std::sync::Arc;
+use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
 /// Hook Engine gRPC客户端
@@ -20,7 +20,7 @@ impl HookEngineClient {
         let client = HookServiceClient::connect(endpoint)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to Hook Engine: {}", e))?;
-        
+
         Ok(Self { client })
     }
 
@@ -104,4 +104,3 @@ impl HookEngineClientWrapper {
         HookEngineClient::new(self.endpoint.clone()).await
     }
 }
-

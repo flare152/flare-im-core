@@ -29,27 +29,27 @@ impl ConfigWatcher {
             refresh_interval,
         }
     }
-    
+
     /// 获取当前配置
     pub async fn get_config(&self) -> HookConfig {
         self.current_config.read().await.clone()
     }
-    
+
     /// 启动配置监听
     pub async fn start(&self) -> Result<()> {
         // 初始加载
         self.reload().await?;
-        
+
         // 启动定时刷新任务
         let config = Arc::clone(&self.current_config);
         let loaders = self.loaders.clone();
         let interval = self.refresh_interval;
-        
+
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(interval);
             loop {
                 interval_timer.tick().await;
-                
+
                 match Self::load_all(&loaders).await {
                     Ok(new_config) => {
                         // 验证配置
@@ -57,7 +57,7 @@ impl ConfigWatcher {
                             error!(error = %e, "Failed to validate hook config");
                             continue;
                         }
-                        
+
                         // 更新配置
                         *config.write().await = new_config;
                         info!("Hook config reloaded successfully");
@@ -68,10 +68,10 @@ impl ConfigWatcher {
                 }
             }
         });
-        
+
         Ok(())
     }
-    
+
     /// 重新加载配置
     pub async fn reload(&self) -> Result<()> {
         let new_config = Self::load_all(&self.loaders).await?;
@@ -79,10 +79,10 @@ impl ConfigWatcher {
         *self.current_config.write().await = new_config;
         Ok(())
     }
-    
+
     async fn load_all(loaders: &[Arc<ConfigLoaderItem>]) -> Result<HookConfig> {
         let mut configs = Vec::new();
-        
+
         for loader in loaders {
             match loader.load().await {
                 Ok(config) => configs.push(config),
@@ -91,8 +91,7 @@ impl ConfigWatcher {
                 }
             }
         }
-        
+
         Ok(ConfigMerger::merge(configs))
     }
 }
-

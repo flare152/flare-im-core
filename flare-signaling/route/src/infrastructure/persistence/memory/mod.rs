@@ -1,5 +1,5 @@
-pub mod repository;
 pub mod device_route_repository;
+pub mod repository;
 
-pub use repository::InMemoryRouteRepository;
 pub use device_route_repository::InMemoryDeviceRouteRepository;
+pub use repository::InMemoryRouteRepository;

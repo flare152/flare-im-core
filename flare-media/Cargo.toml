@@ -43,6 +43,6 @@ base64 = { workspace = true }
 anyhow = { workspace = true }
 tokio-stream = { workspace = true }
 futures-util = { workspace = true }
+image = { workspace = true }
 
 # Media processing dependencies
-image = "0.24"

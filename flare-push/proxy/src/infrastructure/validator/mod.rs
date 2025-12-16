@@ -15,4 +15,3 @@ pub trait RequestValidator: Send + Sync {
     /// 校验推送通知请求
     fn validate_notification_request(&self, request: &PushNotificationRequest) -> Result<()>;
 }
-

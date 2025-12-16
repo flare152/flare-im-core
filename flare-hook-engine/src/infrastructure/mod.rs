@@ -6,4 +6,3 @@ pub mod adapters;
 pub mod config;
 pub mod monitoring;
 pub mod persistence;
-

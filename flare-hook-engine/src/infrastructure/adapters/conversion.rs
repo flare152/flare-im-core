@@ -5,14 +5,13 @@
 use prost_types::Timestamp;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use flare_proto::hooks::{
-    HookInvocationContext, HookMessageDraft, HookMessageRecord, HookDeliveryEvent,
-    HookRecallEvent, PreSendHookResponse, RecallHookResponse,
+use flare_im_core::{
+    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
 use flare_proto::common::{RequestContext, TenantContext};
-use flare_im_core::{
-    HookContext, MessageDraft, MessageRecord, DeliveryEvent, RecallEvent,
-    PreSendDecision,
+use flare_proto::hooks::{
+    HookDeliveryEvent, HookInvocationContext, HookMessageDraft, HookMessageRecord, HookRecallEvent,
+    PreSendHookResponse, RecallHookResponse,
 };
 
 /// 将 HookContext 转换为 HookInvocationContext
@@ -37,7 +36,11 @@ pub fn hook_context_to_proto(ctx: &HookContext) -> HookInvocationContext {
         }),
         session_id: ctx.session_id.clone().unwrap_or_default(),
         session_type: ctx.session_type.clone().unwrap_or_default(),
-        corridor: ctx.attributes.get("corridor").cloned().unwrap_or_else(|| "messaging".to_string()),
+        corridor: ctx
+            .attributes
+            .get("corridor")
+            .cloned()
+            .unwrap_or_else(|| "messaging".to_string()),
         tags: ctx.tags.clone(),
         attributes: ctx.attributes.clone(),
     }
@@ -82,7 +85,7 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
         client_msg_id: record.client_message_id.clone().unwrap_or_default(),
         sender_id: record.sender_id.clone(),
         receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
-        channel_id: String::new(), // 从数据库读取：channel_id 可能为空（旧数据）
+        channel_id: String::new(),  // 从数据库读取：channel_id 可能为空（旧数据）
         source: 1,
         seq: 0,
         timestamp: Some(ts.clone()),
@@ -170,14 +173,10 @@ pub fn proto_to_pre_send_decision(
         use flare_im_core::error::{ErrorBuilder, ErrorCode};
         let error = if let Some(ref status) = response.status {
             let code = ErrorCode::from_u32(status.code as u32).unwrap_or(ErrorCode::GeneralError);
-            ErrorBuilder::new(code, &status.message)
-                .build_error()
+            ErrorBuilder::new(code, &status.message).build_error()
         } else {
-            ErrorBuilder::new(
-                ErrorCode::PermissionDenied,
-                "Hook rejected the request",
-            )
-            .build_error()
+            ErrorBuilder::new(ErrorCode::PermissionDenied, "Hook rejected the request")
+                .build_error()
         };
         PreSendDecision::Reject { error }
     }
@@ -191,8 +190,7 @@ pub fn proto_to_recall_decision(response: &RecallHookResponse) -> PreSendDecisio
         use flare_im_core::error::{ErrorBuilder, ErrorCode};
         let error = if let Some(ref status) = response.status {
             let code = ErrorCode::from_u32(status.code as u32).unwrap_or(ErrorCode::GeneralError);
-            ErrorBuilder::new(code, &status.message)
-                .build_error()
+            ErrorBuilder::new(code, &status.message).build_error()
         } else {
             ErrorBuilder::new(
                 ErrorCode::PermissionDenied,
@@ -219,6 +217,7 @@ pub fn system_time_to_timestamp(time: SystemTime) -> Timestamp {
 
 /// 将 Timestamp 转换为 SystemTime
 pub fn timestamp_to_system_time(ts: &Timestamp) -> SystemTime {
-    UNIX_EPOCH + std::time::Duration::from_secs(ts.seconds as u64)
+    UNIX_EPOCH
+        + std::time::Duration::from_secs(ts.seconds as u64)
         + std::time::Duration::from_nanos(ts.nanos as u64)
 }

@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{ConnectionQuality, DeviceId, SessionId, UserId};
 use super::DomainEvent;
+use crate::domain::value_object::{ConnectionQuality, DeviceId, SessionId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityChangedEvent {
@@ -15,6 +15,10 @@ pub struct QualityChangedEvent {
 }
 
 impl DomainEvent for QualityChangedEvent {
-    fn event_type(&self) -> &'static str { "QualityChanged" }
-    fn occurred_at(&self) -> DateTime<Utc> { self.occurred_at }
+    fn event_type(&self) -> &'static str {
+        "QualityChanged"
+    }
+    fn occurred_at(&self) -> DateTime<Utc> {
+        self.occurred_at
+    }
 }

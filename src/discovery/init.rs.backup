@@ -5,35 +5,11 @@
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use crate::config::FlareAppConfig;
 use flare_server_core::{
     RegistryConfig,
-    discovery::{
-        BackendType, DiscoveryFactory, ServiceDiscover, ServiceDiscoverUpdater, ServiceInstance,
-        ServiceRegistry,
-    },
+    discovery::{BackendType, DiscoveryFactory, ServiceInstance, ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater},
 };
-
-/// 将注册中心类型字符串转换为 BackendType
-///
-/// 这是一个内部辅助函数，用于统一处理 backend type 的转换逻辑
-fn parse_backend_type(registry_type: &str) -> Result<BackendType, String> {
-    match registry_type.to_lowercase().as_str() {
-        "etcd" => Ok(BackendType::Etcd),
-        "consul" => Ok(BackendType::Consul),
-        "dns" => Ok(BackendType::Dns),
-        "mesh" => Ok(BackendType::Mesh),
-        _ => Err(format!("Unsupported registry type: {}", registry_type)),
-    }
-}
-
-/// 生成实例 ID（如果未提供）
-///
-/// 生成格式: `{service_type}-{uuid_short}`
-/// 例如: `session-a1b2c3d4`
-fn generate_instance_id(service_type: &str, instance_id: Option<String>) -> String {
-    instance_id.unwrap_or_else(|| format!("{}-{}", service_type, &Uuid::new_v4().to_string()[..8]))
-}
+use crate::config::FlareAppConfig;
 
 /// 从全局配置自动初始化服务注册发现（服务注册 + 发现）
 ///
@@ -66,14 +42,9 @@ pub async fn init_from_app_config(
     service_type: &str,
     service_address: SocketAddr,
     instance_id: Option<String>,
-) -> Result<
-    Option<(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater)>,
-    Box<dyn std::error::Error + Send + Sync>,
-> {
-    // 获取全局配置
+) -> Result<Option<(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater)>, Box<dyn std::error::Error + Send + Sync>> {
     use crate::config::app_config;
     let app_config = app_config();
-    // 从配置初始化服务注册发现
     init_from_config(app_config, service_type, service_address, instance_id).await
 }
 
@@ -95,18 +66,11 @@ pub async fn init_from_config(
     service_type: &str,
     service_address: SocketAddr,
     instance_id: Option<String>,
-) -> Result<
-    Option<(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater)>,
-    Box<dyn std::error::Error + Send + Sync>,
-> {
-    // 检查是否配置了注册中心
+) -> Result<Option<(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater)>, Box<dyn std::error::Error + Send + Sync>> {
+    // 如果配置了 registry，创建服务注册和发现实例
     if let Some(registry_config) = &app_config.core.registry {
-        // 如果配置了注册中心，则初始化服务注册发现
-        init_from_registry_config(registry_config, service_type, service_address, instance_id)
-            .await
-            .map(Some)
+        init_from_registry_config(registry_config, service_type, service_address, instance_id).await.map(Some)
     } else {
-        // 如果未配置注册中心，则返回 None
         Ok(None)
     }
 }
@@ -126,19 +90,28 @@ pub async fn init_from_registry_config(
     service_type: &str,
     service_address: SocketAddr,
     instance_id: Option<String>,
-) -> Result<
-    (ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater),
-    Box<dyn std::error::Error + Send + Sync>,
-> {
-    // 解析注册中心类型
-    let backend_type = parse_backend_type(&registry_config.registry_type)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::from(e) })?;
-
-    // 生成实例 ID
-    let instance_id = generate_instance_id(service_type, instance_id);
+) -> Result<(ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater), Box<dyn std::error::Error + Send + Sync>> {
+    // 将 RegistryConfig 转换为 BackendType
+    let backend_type = match registry_config.registry_type.to_lowercase().as_str() {
+        "etcd" => BackendType::Etcd,
+        "consul" => BackendType::Consul,
+        "dns" => BackendType::Dns,
+        "mesh" => BackendType::Mesh,
+        _ => {
+            return Err(format!("Unsupported registry type: {}", registry_config.registry_type).into());
+        }
+    };
 
     // 创建服务实例
-    let mut instance = ServiceInstance::new(service_type, instance_id, service_address);
+    let instance_id = instance_id.unwrap_or_else(|| {
+        format!("{}-{}", service_type, &Uuid::new_v4().to_string()[..8])
+    });
+    
+    let mut instance = ServiceInstance::new(
+        service_type,
+        instance_id,
+        service_address,
+    );
 
     // 设置命名空间（如果配置了）
     if !registry_config.namespace.is_empty() {
@@ -155,7 +128,7 @@ pub async fn init_from_registry_config(
     .await
     .map_err(|e| format!("Failed to register and discover service: {}", e))?;
 
-    tracing::info!(
+        tracing::info!(
         service_type = %service_type,
         registry_type = %registry_config.registry_type,
         "✅ Service registered and discovery initialized"
@@ -194,10 +167,8 @@ pub async fn register_service_only(
     service_address: SocketAddr,
     instance_id: Option<String>,
 ) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
-    // 获取全局配置
     use crate::config::app_config;
     let app_config = app_config();
-    // 从配置注册服务
     register_service_from_config(app_config, service_type, service_address, instance_id).await
 }
 
@@ -219,14 +190,7 @@ pub async fn register_service_from_config(
 ) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
     // 如果配置了 registry，只注册服务
     if let Some(registry_config) = &app_config.core.registry {
-        register_service_from_registry_config(
-            registry_config,
-            service_type,
-            service_address,
-            instance_id,
-        )
-        .await
-        .map(Some)
+        register_service_from_registry_config(registry_config, service_type, service_address, instance_id).await.map(Some)
     } else {
         Ok(None)
     }
@@ -248,12 +212,20 @@ pub async fn register_service_from_registry_config(
     service_address: SocketAddr,
     instance_id: Option<String>,
 ) -> Result<ServiceRegistry, Box<dyn std::error::Error + Send + Sync>> {
-    let backend_type = parse_backend_type(&registry_config.registry_type)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::from(e) })?;
+    // 将 RegistryConfig 转换为 BackendType
+    let backend_type = match registry_config.registry_type.to_lowercase().as_str() {
+        "etcd" => BackendType::Etcd,
+        "consul" => BackendType::Consul,
+        "dns" => BackendType::Dns,
+        "mesh" => BackendType::Mesh,
+        _ => {
+            return Err(format!("Unsupported registry type: {}", registry_config.registry_type).into());
+    }
+    };
 
     // 创建后端配置
-    use serde_json::json;
     use std::collections::HashMap;
+    use serde_json::json;
     let mut backend_config = HashMap::new();
     match backend_type {
         BackendType::Etcd => {
@@ -262,15 +234,7 @@ pub async fn register_service_from_registry_config(
             backend_config.insert("ttl".to_string(), json!(90)); // TTL = 心跳间隔 * 3
         }
         BackendType::Consul => {
-            backend_config.insert(
-                "url".to_string(),
-                json!(
-                    registry_config
-                        .endpoints
-                        .first()
-                        .unwrap_or(&"http://localhost:8500".to_string())
-                ),
-            );
+            backend_config.insert("url".to_string(), json!(registry_config.endpoints.first().unwrap_or(&"http://localhost:8500".to_string())));
             backend_config.insert("service_type".to_string(), json!(service_type));
         }
         _ => {
@@ -300,9 +264,15 @@ pub async fn register_service_from_registry_config(
     let backend = DiscoveryFactory::create_backend(&config).await?;
 
     // 创建服务实例
-    let instance_id = generate_instance_id(service_type, instance_id);
-
-    let mut instance = ServiceInstance::new(service_type, instance_id, service_address);
+    let instance_id = instance_id.unwrap_or_else(|| {
+        format!("{}-{}", service_type, &Uuid::new_v4().to_string()[..8])
+    });
+    
+    let mut instance = ServiceInstance::new(
+        service_type,
+        instance_id,
+        service_address,
+    );
 
     // 设置命名空间（如果配置了）
     if !registry_config.namespace.is_empty() {
@@ -310,9 +280,7 @@ pub async fn register_service_from_registry_config(
     }
 
     // 注册服务实例
-    backend
-        .register(instance.clone())
-        .await
+    backend.register(instance.clone()).await
         .map_err(|e| format!("Failed to register service: {}", e))?;
 
     tracing::info!(
@@ -330,8 +298,12 @@ pub async fn register_service_from_registry_config(
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(20); // 默认 20 秒（平衡模式）
-
-    let registry = ServiceRegistry::new(backend, instance, heartbeat_interval);
+    
+    let registry = ServiceRegistry::new(
+        backend,
+        instance,
+        heartbeat_interval,
+    );
 
     Ok(registry)
 }
@@ -382,9 +354,7 @@ pub async fn create_discover_from_config(
 ) -> Result<Option<ServiceDiscover>, Box<dyn std::error::Error + Send + Sync>> {
     // 如果配置了 registry，创建服务发现器
     if let Some(registry_config) = &app_config.core.registry {
-        create_discover_from_registry_config(registry_config, service_type)
-            .await
-            .map(Some)
+        create_discover_from_registry_config(registry_config, service_type).await.map(Some)
     } else {
         Ok(None)
     }
@@ -409,11 +379,7 @@ pub async fn create_discover_from_registry_config(
         "dns" => BackendType::Dns,
         "mesh" => BackendType::Mesh,
         _ => {
-            return Err(format!(
-                "Unsupported registry type: {}",
-                registry_config.registry_type
-            )
-            .into());
+            return Err(format!("Unsupported registry type: {}", registry_config.registry_type).into());
         }
     };
 

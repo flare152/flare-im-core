@@ -4,4 +4,6 @@
 
 pub mod ack_publisher;
 
-pub use ack_publisher::{AckPublisher, GrpcAckPublisher, NoopAckPublisher, AckData, AckAuditEvent, AckStatusValue};
+pub use ack_publisher::{
+    AckAuditEvent, AckData, AckPublisher, AckStatusValue, GrpcAckPublisher, NoopAckPublisher,
+};

@@ -32,7 +32,6 @@ impl RedisPresenceRepository {
     }
 }
 
-
 #[async_trait]
 impl PresenceRepository for RedisPresenceRepository {
     async fn list_devices(&self, user_id: &str) -> Result<Vec<DevicePresence>> {

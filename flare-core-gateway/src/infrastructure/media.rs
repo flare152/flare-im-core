@@ -1,10 +1,10 @@
 //! 媒体服务客户端
 
+use futures_util::stream::StreamExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
-use futures_util::stream::StreamExt;
 
 use flare_proto::media::media_service_client::MediaServiceClient;
 use flare_proto::media::*;
@@ -54,7 +54,10 @@ impl GrpcMediaClient {
         if let Some(service_client) = &self.service_client {
             let mut client = service_client.lock().await;
             let channel = client.get_channel().await.map_err(|e| {
-                Status::unavailable(format!("Failed to get channel from service discovery: {}", e))
+                Status::unavailable(format!(
+                    "Failed to get channel from service discovery: {}",
+                    e
+                ))
             })?;
             Ok(MediaServiceClient::new(channel))
         } else if let Some(ref address) = self.direct_address {
@@ -62,7 +65,9 @@ impl GrpcMediaClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", address, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!("Failed to connect to {}: {}", address, e))
+                })?;
             Ok(MediaServiceClient::new(channel))
         } else {
             // 使用服务名称进行直连（假设服务名称可以直接解析）
@@ -70,7 +75,12 @@ impl GrpcMediaClient {
                 .map_err(|e| Status::invalid_argument(format!("Invalid service name: {}", e)))?
                 .connect()
                 .await
-                .map_err(|e| Status::unavailable(format!("Failed to connect to {}: {}", self.service_name, e)))?;
+                .map_err(|e| {
+                    Status::unavailable(format!(
+                        "Failed to connect to {}: {}",
+                        self.service_name, e
+                    ))
+                })?;
             Ok(MediaServiceClient::new(channel))
         }
     }
@@ -83,14 +93,14 @@ impl GrpcMediaClient {
         // 收集流中的所有元素，处理Result类型
         let stream = request.into_inner();
         let items: Vec<Result<UploadFileRequest, Status>> = stream.collect().await;
-        
+
         // 检查是否有错误
         let upload_requests: Result<Vec<UploadFileRequest>, Status> = items.into_iter().collect();
         let upload_requests = upload_requests?;
-        
+
         // 创建一个新的流
         let new_stream = tokio_stream::iter(upload_requests);
-        
+
         let mut client = self.get_client().await?;
         client.upload_file(new_stream).await
     }

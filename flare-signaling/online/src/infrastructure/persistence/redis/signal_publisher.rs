@@ -35,7 +35,6 @@ impl RedisSignalPublisher {
     }
 }
 
-
 #[async_trait]
 impl SignalPublisher for RedisSignalPublisher {
     async fn publish_signal(
@@ -53,7 +52,7 @@ impl SignalPublisher for RedisSignalPublisher {
         for byte in payload {
             write!(&mut payload_hex, "{:02x}", byte).unwrap();
         }
-        
+
         let message = json!({
             "payload": payload_hex,
             "metadata": metadata,
@@ -61,11 +60,11 @@ impl SignalPublisher for RedisSignalPublisher {
         });
 
         // 发布到 Redis Pub/Sub
-        let _: i64 = conn.publish(&channel, message.to_string())
+        let _: i64 = conn
+            .publish(&channel, message.to_string())
             .await
             .context("failed to publish signal")?;
 
         Ok(())
     }
 }
-

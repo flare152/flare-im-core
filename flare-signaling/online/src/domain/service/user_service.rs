@@ -16,8 +16,8 @@ use tracing::{info, warn};
 // 引入ConnectionQuality转换适配器
 use crate::domain::value_object::ConnectionQuality;
 
-use crate::domain::repository::SessionRepository;
 use crate::domain::aggregate::Session;
+use crate::domain::repository::SessionRepository;
 use crate::util;
 
 /// 用户领域服务 - 包含所有业务逻辑
@@ -27,9 +27,7 @@ pub struct UserService {
 
 impl UserService {
     pub fn new(session_repository: Arc<dyn SessionRepository + Send + Sync>) -> Self {
-        Self {
-            session_repository,
-        }
+        Self { session_repository }
     }
 
     /// 查询用户在线状态
@@ -40,9 +38,13 @@ impl UserService {
         let user_id = &request.user_id;
 
         // 获取用户的所有会话
-        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sessions = self.session_repository.get_user_sessions(&user_id_vo).await?;
-        
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let sessions = self
+            .session_repository
+            .get_user_sessions(&user_id_vo)
+            .await?;
+
         // 计算在线状态
         let is_online = !sessions.is_empty();
         let last_seen = sessions
@@ -112,11 +114,14 @@ impl UserService {
         let mut presences = std::collections::HashMap::new();
 
         for user_id in user_ids {
-            match self.get_user_presence(GetUserPresenceRequest {
-                user_id: user_id.clone(),
-                context: request.context.clone(),
-                tenant: request.tenant.clone(),
-            }).await {
+            match self
+                .get_user_presence(GetUserPresenceRequest {
+                    user_id: user_id.clone(),
+                    context: request.context.clone(),
+                    tenant: request.tenant.clone(),
+                })
+                .await
+            {
                 Ok(response) => {
                     if let Some(presence) = response.presence {
                         presences.insert(user_id.clone(), presence);
@@ -142,8 +147,12 @@ impl UserService {
         let user_id = &request.user_id;
 
         // 获取用户的所有会话
-        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sessions = self.session_repository.get_user_sessions(&user_id_vo).await?;
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let sessions = self
+            .session_repository
+            .get_user_sessions(&user_id_vo)
+            .await?;
 
         Ok(ListUserDevicesResponse {
             devices: sessions
@@ -175,8 +184,10 @@ impl UserService {
         let device_id = &request.device_id;
 
         // 查找设备对应的会话
-        let user_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let user_vo = crate::domain::value_object::UserId::new(user_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
         let session = self
             .session_repository
             .get_session_by_device(&user_vo, &device_vo)
@@ -202,10 +213,7 @@ impl UserService {
         } else {
             Ok(KickDeviceResponse {
                 success: false,
-                status: util::rpc_status_error(
-                    ErrorCode::UserNotFound,
-                    "device not found",
-                ),
+                status: util::rpc_status_error(ErrorCode::UserNotFound, "device not found"),
             })
         }
     }
@@ -215,9 +223,14 @@ impl UserService {
         let user_id = &request.user_id;
         let device_id = &request.device_id;
 
-        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let session = self.session_repository.get_session_by_device(&user_id_vo, &device_vo).await?;
+        let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let session = self
+            .session_repository
+            .get_session_by_device(&user_id_vo, &device_vo)
+            .await?;
 
         if let Some(session) = session {
             Ok(GetDeviceResponse {

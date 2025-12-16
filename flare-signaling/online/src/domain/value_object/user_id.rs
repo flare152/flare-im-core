@@ -1,5 +1,5 @@
 //! UserId 值对象
-//! 
+//!
 //! 用户ID的强类型封装
 
 use serde::{Deserialize, Serialize};
@@ -15,11 +15,11 @@ impl UserId {
         if id.is_empty() {
             return Err("UserId cannot be empty".to_string());
         }
-        
+
         if id.len() > 128 {
             return Err("UserId too long (max 128 characters)".to_string());
         }
-        
+
         Ok(Self(id))
     }
 

@@ -1,5 +1,5 @@
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 
 use anyhow::Result;
 use flare_proto::common::{RequestContext, TenantContext};
@@ -35,11 +35,11 @@ impl SessionRepository for GrpcSessionClient {
         let session_type = session_type.to_string();
         let business_type = business_type.to_string();
         let tenant_id = tenant_id.map(|s| s.to_string());
-        
+
         // 将 session_id 放入 attributes，确保会话服务使用传入的 session_id
         let mut attributes = std::collections::HashMap::new();
         attributes.insert("session_id".to_string(), session_id.clone());
-        
+
         let request = CreateSessionRequest {
             context: Some(RequestContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
@@ -60,13 +60,16 @@ impl SessionRepository for GrpcSessionClient {
             }),
             session_type: session_type.to_string(),
             business_type: business_type.to_string(),
-            participants: participants.into_iter().map(|p| SessionParticipant {
-                user_id: p,
-                roles: vec![],
-                muted: false,
-                pinned: false,
-                attributes: std::collections::HashMap::new(),
-            }).collect(),
+            participants: participants
+                .into_iter()
+                .map(|p| SessionParticipant {
+                    user_id: p,
+                    roles: vec![],
+                    muted: false,
+                    pinned: false,
+                    attributes: std::collections::HashMap::new(),
+                })
+                .collect(),
             attributes,
             visibility: 0,
         };

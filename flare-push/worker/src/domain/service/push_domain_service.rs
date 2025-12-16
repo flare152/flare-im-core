@@ -11,8 +11,10 @@ use tracing::{error, info, instrument, warn};
 
 use crate::config::PushWorkerConfig;
 use crate::domain::model::PushDispatchTask;
-use crate::domain::repository::{AckPublisher, DlqPublisher, OfflinePushSender, OnlinePushSender, PushAckEvent};
-use crate::infrastructure::hook::{build_delivery_context, build_delivery_event, HookExecutor};
+use crate::domain::repository::{
+    AckPublisher, DlqPublisher, OfflinePushSender, OnlinePushSender, PushAckEvent,
+};
+use crate::infrastructure::hook::{HookExecutor, build_delivery_context, build_delivery_event};
 use crate::infrastructure::retry::{RetryPolicy, RetryableError};
 
 /// 推送领域服务 - 包含所有业务逻辑
@@ -69,7 +71,11 @@ impl PushDomainService {
 
         // 提取租户ID和平台用于指标
         let tenant_id = task.tenant_id.as_deref().unwrap_or("unknown");
-        let platform = task.metadata.get("platform").map(|s| s.as_str()).unwrap_or("unknown");
+        let platform = task
+            .metadata
+            .get("platform")
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
 
         // 如果要求在线但用户离线，跳过
         if task.require_online && !task.online {
@@ -91,7 +97,8 @@ impl PushDomainService {
 
         // 记录推送耗时
         let duration = start.elapsed();
-        self.metrics.push_duration_seconds
+        self.metrics
+            .push_duration_seconds
             .with_label_values(&[platform, tenant_id])
             .observe(duration.as_secs_f64());
 
@@ -103,14 +110,16 @@ impl PushDomainService {
 
                 // 记录离线推送成功（仅离线推送）
                 if !task.online {
-                    self.metrics.offline_push_success_total
+                    self.metrics
+                        .offline_push_success_total
                         .with_label_values(&[platform, tenant_id])
                         .inc();
                 }
 
                 // PostDelivery Hook
                 let ctx = build_delivery_context(tenant_id, &task);
-                let event = build_delivery_event(&task, if task.online { "online" } else { "offline" });
+                let event =
+                    build_delivery_event(&task, if task.online { "online" } else { "offline" });
                 if let Err(e) = self.hook_executor.post_delivery(&ctx, &event).await {
                     warn!(error = %e, "PostDelivery hook execution failed");
                 }
@@ -131,7 +140,8 @@ impl PushDomainService {
                 if !task.online {
                     // 注意：metrics 的 label_values 需要 &str，error_str 已经是 String
                     let error_label = error_str.as_str();
-                    self.metrics.offline_push_failure_total
+                    self.metrics
+                        .offline_push_failure_total
                         .with_label_values(&[platform, error_label, tenant_id])
                         .inc();
                 }
@@ -143,7 +153,8 @@ impl PushDomainService {
                 self.dlq_publisher.publish_to_dlq(&task, &error_str).await?;
 
                 // 记录死信队列消息数
-                self.metrics.dlq_messages_total
+                self.metrics
+                    .dlq_messages_total
                     .with_label_values(&[error_str.as_str(), tenant_id])
                     .inc();
 
@@ -185,11 +196,7 @@ impl PushDomainService {
             }
         }
 
-        info!(
-            success_count,
-            fail_count,
-            "Batch push tasks completed"
-        );
+        info!(success_count, fail_count, "Batch push tasks completed");
 
         Ok(())
     }
@@ -201,14 +208,13 @@ impl PushDomainService {
         if let Some(router) = &self.gateway_router {
             // 需要查询用户的 gateway_id（从 Signaling Online 服务）
             // 简化处理：假设 task.metadata 中包含 gateway_id
-            let gateway_id = task.metadata.get("gateway_id")
-                .ok_or_else(|| {
-                    ErrorBuilder::new(
-                        ErrorCode::InvalidParameter,
-                        "gateway_id not found in task metadata",
-                    )
-                    .build_error()
-                })?;
+            let gateway_id = task.metadata.get("gateway_id").ok_or_else(|| {
+                ErrorBuilder::new(
+                    ErrorCode::InvalidParameter,
+                    "gateway_id not found in task metadata",
+                )
+                .build_error()
+            })?;
 
             // 构建 PushMessageRequest
             let push_request = self.build_push_message_request(task)?;
@@ -229,7 +235,8 @@ impl PushDomainService {
                     let mut has_failure = false;
                     for result in &response.results {
                         let status_value = result.status as i32;
-                        if status_value == 3 { // PushStatusUserOffline = 3
+                        if status_value == 3 {
+                            // PushStatusUserOffline = 3
                             has_failure = true;
                             break;
                         }
@@ -258,26 +265,26 @@ impl PushDomainService {
             }
         } else {
             // 没有 Gateway Router，使用 OnlinePushSender（可能是 Noop）
-            self.execute_with_retry(|| self.online_sender.send(task)).await
-                .map_err(|e| ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    "Online push failed",
-                )
-                .details(e)
-                .build_error())
+            self.execute_with_retry(|| self.online_sender.send(task))
+                .await
+                .map_err(|e| {
+                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "Online push failed")
+                        .details(e)
+                        .build_error()
+                })
         }
     }
 
     /// 执行离线推送（通过外部渠道）
     #[instrument(skip(self))]
     async fn execute_offline_push(&self, task: &PushDispatchTask) -> Result<()> {
-        self.execute_with_retry(|| self.offline_sender.send(task)).await
-            .map_err(|e| ErrorBuilder::new(
-                ErrorCode::ServiceUnavailable,
-                "Offline push failed",
-            )
-            .details(e)
-            .build_error())
+        self.execute_with_retry(|| self.offline_sender.send(task))
+            .await
+            .map_err(|e| {
+                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "Offline push failed")
+                    .details(e)
+                    .build_error()
+            })
     }
 
     /// 带重试的执行推送
@@ -328,7 +335,7 @@ impl PushDomainService {
                         description: String::new(),
                         metadata: std::collections::HashMap::new(),
                         extensions: Vec::new(), // 添加缺失的 extensions 字段
-                    }
+                    },
                 )),
                 extensions: Vec::new(), // 添加缺失的 extensions 字段
             })
@@ -344,8 +351,8 @@ impl PushDomainService {
                 client_msg_id: String::new(),
                 sender_id: String::new(),
                 receiver_id: String::new(), // 离线推送：receiver_id 由任务决定
-                channel_id: String::new(), // 离线推送：channel_id 由任务决定
-                source: 1, // MessageSource::User
+                channel_id: String::new(),  // 离线推送：channel_id 由任务决定
+                source: 1,                  // MessageSource::User
                 seq: 0,
                 timestamp: Some(prost_types::Timestamp {
                     seconds: chrono::Utc::now().timestamp(),
@@ -356,7 +363,7 @@ impl PushDomainService {
                 business_type: String::new(),
                 content: message_content,
                 content_type: 1, // ContentType::PlainText
-                status: 1, // MessageStatus::Created = 1
+                status: 1,       // MessageStatus::Created = 1
                 extra: HashMap::new(),
                 attributes: HashMap::new(),
                 is_recalled: false,
@@ -419,14 +426,21 @@ impl PushDomainService {
     }
 
     /// 获取推送任务状态
-    pub async fn get_push_task_status(&self, message_id: &str, user_id: &str) -> Result<Option<String>> {
+    pub async fn get_push_task_status(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> Result<Option<String>> {
         // 这是一个占位实现，实际实现需要查询存储或缓存来获取任务状态
         // 在实际系统中，这可能涉及查询Redis、数据库或其他存储系统
         Ok(None)
     }
 
     /// 获取推送统计信息
-    pub async fn get_push_statistics(&self, _query: &crate::application::queries::QueryPushStatisticsQuery) -> Result<crate::application::dto::PushStatsResponse> {
+    pub async fn get_push_statistics(
+        &self,
+        _query: &crate::application::queries::QueryPushStatisticsQuery,
+    ) -> Result<crate::application::dto::PushStatsResponse> {
         // 这是一个占位实现，实际实现需要从指标系统或存储中获取统计数据
         Ok(crate::application::dto::PushStatsResponse {
             total_pushes: 0,
@@ -437,4 +451,3 @@ impl PushDomainService {
         })
     }
 }
-

@@ -13,7 +13,7 @@ impl OnlineConfig {
     /// 从应用配置加载（新方式，推荐）
     pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
         let service_config = app.signaling_online_service();
-        
+
         // 解析 Redis 配置引用
         let redis_url = env::var("SIGNALING_ONLINE_REDIS_URL")
             .ok()

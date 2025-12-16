@@ -57,10 +57,7 @@ impl RetryableError for anyhow::Error {
 }
 
 /// 带重试的执行函数
-pub async fn execute_with_retry<F, Fut, T>(
-    policy: &RetryPolicy,
-    mut f: F,
-) -> Result<T, String>
+pub async fn execute_with_retry<F, Fut, T>(policy: &RetryPolicy, mut f: F) -> Result<T, String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, anyhow::Error>>,
@@ -87,4 +84,3 @@ where
 
     Err(last_error.unwrap_or_else(|| "Max retries exceeded".to_string()))
 }
-

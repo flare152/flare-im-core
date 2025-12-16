@@ -37,4 +37,3 @@ pub struct SyncMessagesQuery {
     pub cursor: Option<String>,
     pub limit: i32,
 }
-

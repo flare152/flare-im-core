@@ -22,7 +22,7 @@ impl SessionConfig {
     /// 从应用配置加载（新方式，推荐）
     pub fn from_app_config(app: &FlareAppConfig) -> Result<Self> {
         let service_config = app.session_service();
-        
+
         // 解析 Redis 配置引用
         let redis_url = env::var("SESSION_REDIS_URL")
             .or_else(|_| env::var("STORAGE_REDIS_URL"))
@@ -37,16 +37,14 @@ impl SessionConfig {
             })
             .unwrap_or_else(|| "redis://127.0.0.1:6379/0".to_string());
 
-        let postgres_url = env::var("SESSION_POSTGRES_URL")
-            .ok()
-            .or_else(|| {
-                if let Some(postgres_name) = &service_config.postgres {
-                    app.postgres_profile(postgres_name)
-                        .map(|profile| profile.url.clone())
-                } else {
-                    None
-                }
-            });
+        let postgres_url = env::var("SESSION_POSTGRES_URL").ok().or_else(|| {
+            if let Some(postgres_name) = &service_config.postgres {
+                app.postgres_profile(postgres_name)
+                    .map(|profile| profile.url.clone())
+            } else {
+                None
+            }
+        });
 
         let session_state_prefix = env::var("SESSION_STATE_PREFIX")
             .ok()
@@ -81,7 +79,7 @@ impl SessionConfig {
 
         // 解析策略配置
         let policy_cfg = service_config.default_policy.as_ref();
-        
+
         let conflict_resolution = env::var("SESSION_CONFLICT_RESOLUTION")
             .ok()
             .and_then(|s| ConflictResolutionPolicy::from_str(s.trim()))
@@ -141,5 +139,4 @@ impl SessionConfig {
             default_policy,
         })
     }
-
 }

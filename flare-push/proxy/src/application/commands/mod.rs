@@ -1,7 +1,7 @@
 //! 命令结构体定义（Command DTO）
 
-use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_proto::flare::push::v1::PushAckRequest;
+use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 
 /// 入队推送消息命令
 #[derive(Debug, Clone)]

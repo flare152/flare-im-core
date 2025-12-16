@@ -32,4 +32,4 @@ prost-types = { workspace = true }
 chrono = { workspace = true }
 prometheus = { workspace = true }
 redis = { workspace = true }
-parking_lot = "0.12"
+parking_lot = { workspace = true }

@@ -4,12 +4,12 @@
 //! Gateway 作为接入层，通过轻量的 gRPC 上报，不直接依赖 Kafka
 
 use async_trait::async_trait;
-use flare_server_core::discovery::{ServiceClient, DiscoveryFactory};
+use flare_server_core::discovery::{DiscoveryFactory, ServiceClient};
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;
-use tracing::{warn, debug};
+use tracing::{debug, warn};
 
 /// ACK 状态值
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -55,8 +55,6 @@ pub trait AckPublisher: Send + Sync {
     async fn publish_ack(&self, event: &AckAuditEvent) -> Result<()>;
 }
 
-
-
 /// gRPC ACK发布器
 pub struct GrpcAckPublisher {
     /// 服务发现客户端（用于获取 Push 服务地址）
@@ -68,18 +66,23 @@ pub struct GrpcAckPublisher {
 }
 
 impl GrpcAckPublisher {
-    pub fn new(discovery_factory: Arc<flare_server_core::discovery::DiscoveryFactory>, service_type: String) -> Arc<Self> {
+    pub fn new(
+        discovery_factory: Arc<flare_server_core::discovery::DiscoveryFactory>,
+        service_type: String,
+    ) -> Arc<Self> {
         Arc::new(Self {
             service_client: Arc::new(RwLock::new(None)),
             discovery_factory,
             service_type,
         })
     }
-    
+
     /// 确保 Push Proxy gRPC 客户端已初始化（懒加载）
-    /// 
+    ///
     /// 注意：跨区域部署时，Push Proxy 在本地区域，延迟更低
-    async fn ensure_client(&self) -> Result<flare_proto::push::push_service_client::PushServiceClient<Channel>> {
+    async fn ensure_client(
+        &self,
+    ) -> Result<flare_proto::push::push_service_client::PushServiceClient<Channel>> {
         // 检查客户端是否已经初始化
         {
             let client_guard = self.service_client.read().await;
@@ -89,7 +92,7 @@ impl GrpcAckPublisher {
                 // 但由于 ServiceClient 不支持 Clone，我们需要重新创建
             }
         }
-        
+
         // 初始化服务发现器
         let service_discover = flare_im_core::discovery::create_discover(&self.service_type)
             .await
@@ -97,36 +100,38 @@ impl GrpcAckPublisher {
                 ErrorBuilder::new(
                     ErrorCode::ServiceUnavailable,
                     format!("Failed to create service discover: {}", e),
-                ).build_error()
+                )
+                .build_error()
             })?
             .ok_or_else(|| {
                 ErrorBuilder::new(
                     ErrorCode::ServiceUnavailable,
                     "Service discovery not configured".to_string(),
-                ).build_error()
+                )
+                .build_error()
             })?;
-        
+
         // 创建服务客户端
         let mut service_client = flare_server_core::discovery::ServiceClient::new(service_discover);
-        
+
         // 获取 Channel
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                ErrorBuilder::new(
-                    ErrorCode::ServiceUnavailable,
-                    format!("Failed to get channel from service client: {}", e),
-                ).build_error()
-            })?;
-        
+        let channel = service_client.get_channel().await.map_err(|e| {
+            ErrorBuilder::new(
+                ErrorCode::ServiceUnavailable,
+                format!("Failed to get channel from service client: {}", e),
+            )
+            .build_error()
+        })?;
+
         // 创建 Push Proxy gRPC 客户端（Push Proxy 提供 PushService 接口）
         let grpc_client = flare_proto::push::push_service_client::PushServiceClient::new(channel);
-        
+
         // 更新服务客户端缓存
         {
             let mut client_guard = self.service_client.write().await;
             *client_guard = Some(service_client);
         }
-        
+
         Ok(grpc_client)
     }
 }
@@ -147,7 +152,9 @@ impl AckPublisher for GrpcAckPublisher {
                     ack: Some(flare_proto::common::SendEnvelopeAck {
                         message_id: event.ack.message_id.clone(),
                         status: match event.ack.status {
-                            AckStatusValue::Success => flare_proto::common::AckStatus::Success as i32,
+                            AckStatusValue::Success => {
+                                flare_proto::common::AckStatus::Success as i32
+                            }
                             AckStatusValue::Failed => flare_proto::common::AckStatus::Failed as i32,
                         },
                         error_code: event.ack.error_code.unwrap_or(0),
@@ -156,7 +163,7 @@ impl AckPublisher for GrpcAckPublisher {
                     metadata: std::collections::HashMap::new(),
                     request_id: format!("ack-{}", uuid::Uuid::new_v4()),
                 });
-                
+
                 // 调用 Push Server 的 PushAck 接口上报 ACK
                 match client.push_ack(request).await {
                     Ok(response) => {
@@ -182,9 +189,12 @@ impl AckPublisher for GrpcAckPublisher {
                             );
                             Err(ErrorBuilder::new(
                                 ErrorCode::ServiceUnavailable,
-                                format!("Push Proxy rejected ACK for {} users: {:?}", 
-                                    ack_response.fail_count, ack_response.failed_user_ids),
-                            ).build_error())
+                                format!(
+                                    "Push Proxy rejected ACK for {} users: {:?}",
+                                    ack_response.fail_count, ack_response.failed_user_ids
+                                ),
+                            )
+                            .build_error())
                         }
                     }
                     Err(e) => {
@@ -198,7 +208,8 @@ impl AckPublisher for GrpcAckPublisher {
                         Err(ErrorBuilder::new(
                             ErrorCode::ServiceUnavailable,
                             format!("Failed to call Push Proxy service: {}", e),
-                        ).build_error())
+                        )
+                        .build_error())
                     }
                 }
             }
@@ -232,4 +243,3 @@ impl AckPublisher for NoopAckPublisher {
         Ok(())
     }
 }
-

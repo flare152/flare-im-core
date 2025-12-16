@@ -6,4 +6,3 @@ pub struct ResolveRouteQuery {
     /// 服务 ID
     pub svid: String,
 }
-

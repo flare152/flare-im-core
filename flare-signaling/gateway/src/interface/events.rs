@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use flare_core::common::error::Result;
 use flare_core::common::protocol::{Frame, MessageCommand, NotificationCommand};
 use flare_core::server::events::handler::ServerEventHandler;
-use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
 use crate::interface::connection::LongConnectionHandler;
@@ -22,7 +22,6 @@ impl GatewayEventHandler {
         Self { connection_handler }
     }
 }
-
 
 #[async_trait]
 impl ServerEventHandler for GatewayEventHandler {
@@ -122,7 +121,8 @@ impl ServerEventHandler for GatewayEventHandler {
     async fn on_error(&self, connection_id: &str, error: &str) -> Result<()> {
         tracing::error!(
             "[EventHandler] ❌ 连接错误: connection_id={}, error={}",
-            connection_id, error
+            connection_id,
+            error
         );
         Ok(())
     }

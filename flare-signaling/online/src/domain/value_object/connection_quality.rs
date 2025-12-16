@@ -1,7 +1,7 @@
 //! ConnectionQuality 值对象
-//! 
+//!
 //! 链接质量指标，用于智能路由和最优设备选择
-//! 
+//!
 //! 设计参考：微信智能路由、Telegram多DC选择
 //! - RTT（往返时延）：网络延迟
 //! - 丢包率：网络稳定性
@@ -15,11 +15,11 @@ use std::fmt;
 /// 链接质量值对象
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionQuality {
-    rtt_ms: i64,                     // 往返时延（毫秒）
-    packet_loss_rate: f64,           // 丢包率（0.0-1.0）
+    rtt_ms: i64,                    // 往返时延（毫秒）
+    packet_loss_rate: f64,          // 丢包率（0.0-1.0）
     last_measure_ts: DateTime<Utc>, // 最后测量时间
-    network_type: NetworkType,       // 网络类型
-    signal_strength: Option<i32>,    // 信号强度（dBm，仅移动网络）
+    network_type: NetworkType,      // 网络类型
+    signal_strength: Option<i32>,   // 信号强度（dBm，仅移动网络）
 }
 
 /// 网络类型枚举
@@ -36,10 +36,10 @@ pub enum NetworkType {
 /// 质量等级（用于快速判断）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QualityLevel {
-    Poor = 1,       // RTT >= 200ms or Loss >= 3%
-    Fair = 2,       // RTT < 200ms, Loss < 3%
-    Good = 3,       // RTT < 100ms, Loss < 1%
-    Excellent = 4,  // RTT < 50ms, Loss < 0.1%
+    Poor = 1,      // RTT >= 200ms or Loss >= 3%
+    Fair = 2,      // RTT < 200ms, Loss < 3%
+    Good = 3,      // RTT < 100ms, Loss < 1%
+    Excellent = 4, // RTT < 50ms, Loss < 0.1%
 }
 
 impl ConnectionQuality {
@@ -53,11 +53,11 @@ impl ConnectionQuality {
         if rtt_ms < 0 {
             return Err("RTT cannot be negative".to_string());
         }
-        
+
         if !(0.0..=1.0).contains(&packet_loss_rate) {
             return Err("Packet loss rate must be between 0.0 and 1.0".to_string());
         }
-        
+
         Ok(Self {
             rtt_ms,
             packet_loss_rate,
@@ -75,7 +75,7 @@ impl ConnectionQuality {
         } else {
             Some(proto.signal_strength)
         };
-        
+
         Self::new(
             proto.rtt_ms,
             proto.packet_loss_rate,
@@ -108,7 +108,7 @@ impl ConnectionQuality {
         self.signal_strength
     }
 
-    /// 
+    ///
     /// 分级规则（参考微信、Telegram）：
     /// - Excellent: RTT < 50ms, Loss < 0.1%
     /// - Good: RTT < 100ms, Loss < 1%
@@ -127,7 +127,7 @@ impl ConnectionQuality {
     }
 
     /// 计算质量评分（0-100）
-    /// 
+    ///
     /// 评分算法：
     /// - RTT 占70%权重
     /// - 丢包率占30%权重
@@ -135,18 +135,18 @@ impl ConnectionQuality {
     pub fn quality_score(&self) -> f64 {
         // RTT 评分 (0-70分)
         let rtt_score = if self.rtt_ms < 50 {
-            70.0 - (self.rtt_ms as f64 / 5.0)  // 60-70分
+            70.0 - (self.rtt_ms as f64 / 5.0) // 60-70分
         } else if self.rtt_ms < 100 {
-            60.0 - ((self.rtt_ms - 50) as f64 / 2.5)  // 40-60分
+            60.0 - ((self.rtt_ms - 50) as f64 / 2.5) // 40-60分
         } else if self.rtt_ms < 200 {
-            40.0 - ((self.rtt_ms - 100) as f64 / 3.33)  // 10-40分
+            40.0 - ((self.rtt_ms - 100) as f64 / 3.33) // 10-40分
         } else {
-            10.0 - ((self.rtt_ms - 200).min(200) as f64 / 20.0)  // 0-10分
+            10.0 - ((self.rtt_ms - 200).min(200) as f64 / 20.0) // 0-10分
         };
-        
+
         // 丢包率评分 (0-30分)
         let loss_score = 30.0 - (self.packet_loss_rate * 3000.0).min(30.0);
-        
+
         // 网络类型加成 (0-10分)
         let network_bonus = match self.network_type {
             NetworkType::Ethernet => 10.0,
@@ -156,13 +156,16 @@ impl ConnectionQuality {
             NetworkType::ThreeG => 2.0,
             NetworkType::Unknown => 0.0,
         };
-        
+
         (rtt_score + loss_score + network_bonus).max(0.0).min(100.0)
     }
 
     /// 判断是否健康（Good 或更好）
     pub fn is_healthy(&self) -> bool {
-        matches!(self.quality_level(), QualityLevel::Good | QualityLevel::Excellent)
+        matches!(
+            self.quality_level(),
+            QualityLevel::Good | QualityLevel::Excellent
+        )
     }
 
     /// 判断质量是否过期（超过30秒）
@@ -216,13 +219,8 @@ mod tests {
 
     #[test]
     fn test_quality_creation() {
-        let quality = ConnectionQuality::new(
-            50,
-            0.01,
-            NetworkType::Wifi,
-            None,
-        ).unwrap();
-        
+        let quality = ConnectionQuality::new(50, 0.01, NetworkType::Wifi, None).unwrap();
+
         assert_eq!(quality.rtt_ms(), 50);
         assert_eq!(quality.packet_loss_rate(), 0.01);
     }
@@ -231,7 +229,7 @@ mod tests {
     fn test_quality_level() {
         let excellent = ConnectionQuality::new(30, 0.0005, NetworkType::Wifi, None).unwrap();
         assert_eq!(excellent.quality_level(), QualityLevel::Excellent);
-        
+
         let poor = ConnectionQuality::new(300, 0.05, NetworkType::ThreeG, None).unwrap();
         assert_eq!(poor.quality_level(), QualityLevel::Poor);
     }
@@ -240,7 +238,7 @@ mod tests {
     fn test_quality_score() {
         let quality = ConnectionQuality::new(50, 0.01, NetworkType::Wifi, None).unwrap();
         let score = quality.quality_score();
-        
+
         assert!(score > 60.0 && score < 100.0);
     }
 

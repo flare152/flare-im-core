@@ -20,13 +20,13 @@ impl PushQueryHandler {
 
     /// 查询推送任务状态
     #[instrument(skip(self), fields(message_id = %query.message_id, user_id = %query.user_id))]
-    pub async fn query_push_task_status(
-        &self,
-        query: QueryPushTaskStatusQuery,
-    ) -> Result<String> {
+    pub async fn query_push_task_status(&self, query: QueryPushTaskStatusQuery) -> Result<String> {
         // 实现查询逻辑
         // 调用领域服务查询推送任务状态
-        let status = self.domain_service.get_push_task_status(&query.message_id, &query.user_id).await?;
+        let status = self
+            .domain_service
+            .get_push_task_status(&query.message_id, &query.user_id)
+            .await?;
         Ok(status.unwrap_or_default()) // 处理Option<String>到String的转换
     }
 

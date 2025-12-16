@@ -55,8 +55,11 @@ impl RouteHandler {
             PushStrategy::BestDevice => {
                 // 选择单个最优设备（优先级最高 + 质量最好）
                 targets.sort_by(|a, b| {
-                    b.priority.cmp(&a.priority)
-                        .then_with(|| b.quality_score.partial_cmp(&a.quality_score).unwrap_or(std::cmp::Ordering::Equal))
+                    b.priority.cmp(&a.priority).then_with(|| {
+                        b.quality_score
+                            .partial_cmp(&a.quality_score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                 });
                 targets.into_iter().take(1).collect()
             }
@@ -87,9 +90,9 @@ fn calculate_quality_score(quality: &Option<flare_proto::ConnectionQuality>) -> 
             } else {
                 100.0
             };
-            
+
             let loss_score = (1.0 - q.packet_loss_rate) * 100.0;
-            
+
             // RTT 权重 60%，丢包率权重 40%
             rtt_score * 0.6 + loss_score * 0.4
         }
@@ -106,9 +109,9 @@ impl RouterService for RouteHandler {
         let req = request.into_inner();
         let user_id = &req.user_id;
         let strategy = PushStrategy::try_from(req.strategy).unwrap_or(PushStrategy::AllDevices);
-        
+
         info!(user_id = %user_id, strategy = ?strategy, "Selecting push targets");
-        
+
         // 从 Online 服务查询用户的所有在线设备
         let devices_resp = match self.online_client.list_user_devices(user_id).await {
             Ok(resp) => resp,
@@ -123,17 +126,17 @@ impl RouterService for RouteHandler {
                 }));
             }
         };
-        
+
         // 根据策略选择目标设备
         let targets = self.select_targets_by_strategy(devices_resp.devices, strategy, user_id);
-        
+
         info!(
             user_id = %user_id,
             strategy = ?strategy,
             selected_count = targets.len(),
             "Push targets selected"
         );
-        
+
         Ok(Response::new(SelectPushTargetsResponse {
             targets,
             status: util::rpc_status_ok(),
@@ -147,9 +150,9 @@ impl RouterService for RouteHandler {
         let req = request.into_inner();
         let user_id = &req.user_id;
         let device_id = &req.device_id;
-        
+
         info!(user_id = %user_id, device_id = %device_id, "Getting device route");
-        
+
         // 从 Online 服务查询设备信息
         let devices_resp = match self.online_client.list_user_devices(user_id).await {
             Ok(resp) => resp,
@@ -164,11 +167,13 @@ impl RouterService for RouteHandler {
                 }));
             }
         };
-        
+
         // 查找指定设备
-        let device = devices_resp.devices.into_iter()
+        let device = devices_resp
+            .devices
+            .into_iter()
             .find(|d| d.device_id == *device_id);
-        
+
         match device {
             Some(d) => {
                 let route = RouteTarget {
@@ -180,7 +185,7 @@ impl RouterService for RouteHandler {
                     priority: d.priority,
                     quality_score: calculate_quality_score(&d.connection_quality),
                 };
-                
+
                 Ok(Response::new(GetDeviceRouteResponse {
                     route: Some(route),
                     status: util::rpc_status_ok(),
@@ -205,17 +210,20 @@ impl RouterService for RouteHandler {
     ) -> std::result::Result<Response<BatchGetDeviceRoutesResponse>, Status> {
         let req = request.into_inner();
         let device_count = req.devices.len();
-        
+
         info!(device_count = device_count, "Batch getting device routes");
-        
+
         let mut routes = HashMap::new();
-        
+
         // 按用户分组查询（减少 RPC 调用次数）
         let mut user_devices: HashMap<String, Vec<String>> = HashMap::new();
         for dev in req.devices {
-            user_devices.entry(dev.user_id).or_insert_with(Vec::new).push(dev.device_id);
+            user_devices
+                .entry(dev.user_id)
+                .or_insert_with(Vec::new)
+                .push(dev.device_id);
         }
-        
+
         // 为每个用户查询设备
         for (user_id, device_ids) in user_devices {
             match self.online_client.list_user_devices(&user_id).await {
@@ -242,9 +250,9 @@ impl RouterService for RouteHandler {
                 }
             }
         }
-        
+
         info!(found_routes = routes.len(), "Batch device routes retrieved");
-        
+
         Ok(Response::new(BatchGetDeviceRoutesResponse {
             routes,
             status: util::rpc_status_ok(),

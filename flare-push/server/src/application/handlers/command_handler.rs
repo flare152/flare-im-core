@@ -5,7 +5,9 @@ use std::sync::Arc;
 use flare_server_core::error::Result;
 use tracing::instrument;
 
-use crate::application::commands::{BatchPushTasksCommand, PushMessageCommand, PushNotificationCommand};
+use crate::application::commands::{
+    BatchPushTasksCommand, PushMessageCommand, PushNotificationCommand,
+};
 use crate::domain::service::PushDomainService;
 
 /// 推送命令处理器（编排层）
@@ -42,4 +44,3 @@ impl PushCommandHandler {
             .await
     }
 }
-

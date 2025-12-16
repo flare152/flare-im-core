@@ -6,11 +6,10 @@ use flare_proto::push::push_service_client::PushServiceClient;
 use flare_proto::push::{
     PushMessageRequest, PushMessageResponse, PushNotificationRequest, PushNotificationResponse,
 };
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use flare_server_core::discovery::ServiceClient;
+use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
-
 
 #[async_trait]
 pub trait PushClient: Send + Sync {
@@ -60,27 +59,32 @@ impl GrpcPushClient {
                 .await
                 .map_err(|e| {
                     ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
-                        .details(format!("Failed to create service discover for {}: {}", self.service_name, e))
+                        .details(format!(
+                            "Failed to create service discover for {}: {}",
+                            self.service_name, e
+                        ))
                         .build_error()
                 })?;
-            
+
             if let Some(discover) = discover {
                 *service_client_guard = Some(ServiceClient::new(discover));
             } else {
-                return Err(ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
-                    .details("Service discovery not configured")
-                    .build_error());
+                return Err(ErrorBuilder::new(
+                    ErrorCode::ServiceUnavailable,
+                    "push service unavailable",
+                )
+                .details("Service discovery not configured")
+                .build_error());
             }
         }
-        
+
         let service_client = service_client_guard.as_mut().unwrap();
-        let channel = service_client.get_channel().await
-            .map_err(|e| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
-                    .details(format!("Failed to get channel: {}", e))
-                    .build_error()
-            })?;
-        
+        let channel = service_client.get_channel().await.map_err(|e| {
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "push service unavailable")
+                .details(format!("Failed to get channel: {}", e))
+                .build_error()
+        })?;
+
         tracing::debug!("Got channel for push service from service discovery");
 
         let client = PushServiceClient::new(channel);
@@ -88,7 +92,6 @@ impl GrpcPushClient {
         Ok(client)
     }
 }
-
 
 #[async_trait]
 impl PushClient for GrpcPushClient {

@@ -83,4 +83,3 @@ pub type ObjectRepositoryRef = Arc<dyn MediaObjectRepository>;
 pub type LocalStoreRef = Arc<dyn MediaLocalStore>;
 pub type ReferenceStoreRef = Arc<dyn MediaReferenceStore>;
 pub type UploadSessionStoreRef = Arc<dyn UploadSessionStore>;
-

@@ -1,11 +1,7 @@
 //! 命令结构体定义（Command DTO）
 
-use flare_proto::signaling::online::{
-    HeartbeatRequest, LoginRequest, LogoutRequest,
-};
-use flare_proto::access_gateway::{
-    PublishSignalRequest, SubscribeRequest, UnsubscribeRequest,
-};
+use flare_proto::access_gateway::{PublishSignalRequest, SubscribeRequest, UnsubscribeRequest};
+use flare_proto::signaling::online::{HeartbeatRequest, LoginRequest, LogoutRequest};
 
 /// 登录命令
 #[derive(Debug, Clone)]
@@ -48,8 +44,3 @@ pub struct PublishSignalCommand {
     /// 原始请求
     pub request: PublishSignalRequest,
 }
-
-
-
-
-

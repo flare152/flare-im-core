@@ -15,7 +15,7 @@ use crate::application::queries::{
 use crate::infrastructure::message_state::{MessageStateTracker, MessageStatus};
 
 /// 推送查询处理器（查询侧）
-/// 
+///
 /// 直接调用基础设施层的实现，不经过领域服务
 pub struct PushQueryHandler {
     state_tracker: Arc<MessageStateTracker>,
@@ -37,11 +37,8 @@ impl PushQueryHandler {
             .await
             .map(|state| state.status)
             .ok_or_else(|| {
-                ErrorBuilder::new(
-                    ErrorCode::InvalidParameter,
-                    "Message status not found",
-                )
-                .build_error()
+                ErrorBuilder::new(ErrorCode::InvalidParameter, "Message status not found")
+                    .build_error()
             })
     }
 
@@ -53,10 +50,13 @@ impl PushQueryHandler {
     ) -> Result<HashMap<(String, String), MessageStatus>> {
         let mut result = HashMap::new();
         for (message_id, user_id) in query.message_user_pairs {
-            if let Ok(status) = self.query_message_status(QueryMessageStatusQuery {
-                message_id: message_id.clone(),
-                user_id: user_id.clone(),
-            }).await {
+            if let Ok(status) = self
+                .query_message_status(QueryMessageStatusQuery {
+                    message_id: message_id.clone(),
+                    user_id: user_id.clone(),
+                })
+                .await
+            {
                 result.insert((message_id, user_id), status);
             }
         }
@@ -72,7 +72,7 @@ impl PushQueryHandler {
         // 实现统计查询逻辑
         // 从MessageStateTracker获取统计数据
         let stats = self.state_tracker.get_statistics().await;
-        
+
         Ok(serde_json::json!({
             "total_pushes": stats.total_pushes,
             "success_rate": stats.success_rate,
@@ -83,4 +83,3 @@ impl PushQueryHandler {
         }))
     }
 }
-

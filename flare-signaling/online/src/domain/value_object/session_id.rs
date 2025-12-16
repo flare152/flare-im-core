@@ -1,5 +1,5 @@
 //! SessionId 值对象
-//! 
+//!
 //! 会话ID的强类型封装，确保ID格式有效
 
 use serde::{Deserialize, Serialize};
@@ -20,12 +20,12 @@ impl SessionId {
         if id.is_empty() {
             return Err("SessionId cannot be empty".to_string());
         }
-        
+
         // 验证是否为有效的UUID格式
         if uuid::Uuid::parse_str(&id).is_err() {
             return Err(format!("Invalid UUID format: {}", id));
         }
-        
+
         Ok(Self(id))
     }
 

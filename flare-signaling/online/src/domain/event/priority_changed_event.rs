@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::value_object::{DeviceId, DevicePriority, SessionId, UserId};
 use super::DomainEvent;
+use crate::domain::value_object::{DeviceId, DevicePriority, SessionId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriorityChangedEvent {
@@ -15,6 +15,10 @@ pub struct PriorityChangedEvent {
 }
 
 impl DomainEvent for PriorityChangedEvent {
-    fn event_type(&self) -> &'static str { "PriorityChanged" }
-    fn occurred_at(&self) -> DateTime<Utc> { self.occurred_at }
+    fn event_type(&self) -> &'static str {
+        "PriorityChanged"
+    }
+    fn occurred_at(&self) -> DateTime<Utc> {
+        self.occurred_at
+    }
 }

@@ -3,11 +3,11 @@
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use flare_im_core::utils::{current_millis, extract_timeline_from_extra, embed_seq_in_message};
+use flare_im_core::utils::{current_millis, embed_seq_in_message, extract_timeline_from_extra};
 use flare_proto::common::Message;
 use flare_proto::storage::StoreMessageRequest;
 use serde_json;
-use tracing::{warn, instrument};
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use crate::domain::events::{AckEvent, AckStatus};
@@ -22,7 +22,7 @@ use flare_server_core::ServiceClient; // 添加ServiceClient导入
 use tokio::sync::Mutex; // 添加Mutex导入
 
 /// 消息持久化领域服务 - 包含所有业务逻辑
-/// 
+///
 /// 注意：领域服务不依赖基础设施层的监控指标，指标记录由应用层（Handler）负责
 pub struct MessagePersistenceDomainService {
     idempotency_repo: Option<Arc<dyn MessageIdempotencyRepository + Send + Sync>>,
@@ -57,7 +57,7 @@ impl MessagePersistenceDomainService {
     ) -> Self {
         // 创建SessionDomainService实例
         let session_domain_service = Arc::new(SessionDomainService::new(session_client));
-        
+
         Self {
             idempotency_repo,
             hot_cache_repo,
@@ -75,7 +75,7 @@ impl MessagePersistenceDomainService {
     }
 
     /// 准备消息（从请求中提取并准备消息）
-    /// 
+    ///
     /// 注意：消息从 Kafka 队列中读取出来时，说明已经成功发送并被接收，
     /// 因此应该将状态从 `Created` 更新为 `Sent`
     pub fn prepare_message(&self, request: StoreMessageRequest) -> Result<PreparedMessage> {
@@ -189,7 +189,7 @@ impl MessagePersistenceDomainService {
         let message_id = prepared.message_id.clone();
         let sender_id = prepared.message.sender_id.clone();
         let timeline = prepared.timeline.clone(); // 克隆 timeline 在使用前
-        
+
         // 数据库写入
         if let Some(repo) = &self.hot_cache_repo {
             repo.store_hot(&prepared.message).await?;
@@ -217,12 +217,14 @@ impl MessagePersistenceDomainService {
 
         // 2. 更新会话的最后消息信息
         if let (Some(repo), Some(s)) = (&self.session_update_repo, seq) {
-            repo.update_last_message(&session_id, &message_id, s).await?;
+            repo.update_last_message(&session_id, &message_id, s)
+                .await?;
         }
 
         // 3. 批量更新参与者的未读数
         if let (Some(repo), Some(s)) = (&self.session_update_repo, seq) {
-            repo.batch_update_unread_count(&session_id, s, Some(&sender_id)).await?;
+            repo.batch_update_unread_count(&session_id, s, Some(&sender_id))
+                .await?;
         }
 
         // 5. 构建持久化结果
@@ -232,7 +234,7 @@ impl MessagePersistenceDomainService {
             timeline, // 使用克隆的 timeline
             deduplicated: false,
         };
-        
+
         Ok(())
     }
 
@@ -242,7 +244,7 @@ impl MessagePersistenceDomainService {
         if prepared.is_empty() {
             return Ok(());
         }
-        
+
         // 1. 批量生成 seq
         let mut seqs = Vec::with_capacity(prepared.len());
         if let Some(generator) = &self.seq_generator {
@@ -254,10 +256,10 @@ impl MessagePersistenceDomainService {
         } else {
             seqs = vec![0; prepared.len()];
         }
-        
+
         // 提取消息用于批量写入
         let messages: Vec<Message> = prepared.iter().map(|p| p.message.clone()).collect();
-        
+
         // 2. 批量写入数据库
         if let Some(repo) = &self.hot_cache_repo {
             repo.store_hot_batch(&messages).await?;
@@ -268,9 +270,9 @@ impl MessagePersistenceDomainService {
         if let Some(repo) = &self.archive_repo {
             repo.store_archive_batch(&messages).await?;
         }
-        
+
         // 3. 批量更新 Redis（按会话分组）
-        let mut session_groups: std::collections::HashMap<String, Vec<(&PreparedMessage, i64)>> = 
+        let mut session_groups: std::collections::HashMap<String, Vec<(&PreparedMessage, i64)>> =
             std::collections::HashMap::new();
         for (p, seq) in prepared.iter().zip(seqs.iter()) {
             session_groups
@@ -278,40 +280,43 @@ impl MessagePersistenceDomainService {
                 .or_insert_with(Vec::new)
                 .push((p, *seq));
         }
-        
+
         // 批量更新会话状态
         if let Some(repo) = &self.session_state_repo {
             for message in &messages {
                 repo.apply_message(message).await?;
             }
         }
-        
+
         // 批量更新游标（按用户分组）
         if let Some(cursor_repo) = &self.user_cursor_repo {
-            let mut user_cursors: std::collections::HashMap<(String, String), i64> = 
+            let mut user_cursors: std::collections::HashMap<(String, String), i64> =
                 std::collections::HashMap::new();
-            
+
             for p in &prepared {
                 let key = (p.session_id.clone(), p.message.sender_id.clone());
                 let ts = p.timeline.ingestion_ts;
                 user_cursors.entry(key).or_insert(ts);
             }
-            
+
             // 批量更新游标
             for ((session_id, user_id), ts) in user_cursors {
-                cursor_repo.advance_cursor(&session_id, &user_id, ts).await?;
+                cursor_repo
+                    .advance_cursor(&session_id, &user_id, ts)
+                    .await?;
             }
         }
-        
+
         // 4. 批量更新会话的最后消息信息（按会话分组）
         if let Some(repo) = &self.session_update_repo {
             for (session_id, updates) in &session_groups {
                 if let Some((last_p, last_seq)) = updates.last() {
-                    repo.update_last_message(&session_id, &last_p.message_id, *last_seq).await?;
+                    repo.update_last_message(&session_id, &last_p.message_id, *last_seq)
+                        .await?;
                 }
             }
         }
-        
+
         // 5. 批量更新未读数（按会话分组）
         if let Some(repo) = &self.session_update_repo {
             for (session_id, updates) in &session_groups {
@@ -320,11 +325,12 @@ impl MessagePersistenceDomainService {
                         &session_id,
                         *last_seq,
                         Some(&last_p.message.sender_id),
-                    ).await?;
+                    )
+                    .await?;
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -368,19 +374,26 @@ impl MessagePersistenceDomainService {
     }
 
     /// 获取会话参与者列表
-    /// 
+    ///
     /// 通过gRPC调用Session服务获取会话的所有参与者，用于更新未读数
     pub async fn get_session_participants(&self, session_id: &str) -> Result<Vec<String>> {
-        self.session_domain_service.get_session_participants(session_id).await
+        self.session_domain_service
+            .get_session_participants(session_id)
+            .await
     }
 
     /// 更新参与者的未读数
-    /// 
+    ///
     /// 根据会话参与者列表，批量更新他们的未读数
-    pub async fn update_participants_unread_count(&self, session_id: &str, seq: i64, sender_id: &str) -> Result<()> {
+    pub async fn update_participants_unread_count(
+        &self,
+        session_id: &str,
+        seq: i64,
+        sender_id: &str,
+    ) -> Result<()> {
         // 获取会话参与者列表
         let participant_ids = self.get_session_participants(session_id).await?;
-        
+
         // 如果有配置session_update_repo，则更新未读数
         if let Some(repo) = &self.session_update_repo {
             // 过滤掉发送者自己
@@ -388,24 +401,28 @@ impl MessagePersistenceDomainService {
                 .into_iter()
                 .filter(|id| id != sender_id)
                 .collect();
-                
+
             // 批量更新未读数
             if !filtered_participants.is_empty() {
-                repo.batch_update_unread_count(session_id, seq, Some(sender_id)).await?;
+                repo.batch_update_unread_count(session_id, seq, Some(sender_id))
+                    .await?;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// 存储一致性保障机制
-    /// 
+    ///
     /// 确保数据库和缓存之间的一致性，包括：
     /// 1. 数据库写入成功后再更新缓存
     /// 2. 缓存更新失败时的补偿机制
     /// 3. 消息去重检查
     /// 4. 批量操作的原子性保障
-    pub async fn ensure_consistency(&self, mut prepared: PreparedMessage) -> Result<PersistenceResult> {
+    pub async fn ensure_consistency(
+        &self,
+        mut prepared: PreparedMessage,
+    ) -> Result<PersistenceResult> {
         // 1. 幂等性检查（防止重复处理）
         let is_new = self.check_idempotency(&prepared).await?;
         if !is_new {
@@ -416,21 +433,21 @@ impl MessagePersistenceDomainService {
                 deduplicated: true,
             });
         }
-        
+
         // 2. 验证并补全媒资附件
         self.verify_and_enrich_media(&mut prepared.message).await?;
-        
+
         // 保存必要的信息用于后续步骤
         let message_id = prepared.message_id.clone();
         let session_id = prepared.session_id.clone();
         let timeline = prepared.timeline.clone();
-        
+
         // 3. 持久化消息到存储
         self.persist_message(prepared).await?;
-        
+
         // 4. 清理 WAL 条目
         self.cleanup_wal(&message_id).await?;
-        
+
         // 5. 构建持久化结果
         let result = PersistenceResult {
             message_id,
@@ -438,25 +455,28 @@ impl MessagePersistenceDomainService {
             timeline,
             deduplicated: false,
         };
-        
+
         // 6. 发布 ACK 事件
         self.publish_ack(&result).await?;
-        
+
         Ok(result)
     }
-    
+
     /// 批量存储一致性保障机制
-    /// 
+    ///
     /// 确保批量操作的原子性和一致性
-    pub async fn ensure_batch_consistency(&self, prepared: Vec<PreparedMessage>) -> Result<Vec<PersistenceResult>> {
+    pub async fn ensure_batch_consistency(
+        &self,
+        prepared: Vec<PreparedMessage>,
+    ) -> Result<Vec<PersistenceResult>> {
         if prepared.is_empty() {
             return Ok(vec![]);
         }
-        
+
         // 1. 批量幂等性检查
         let mut new_messages = Vec::new();
         let mut results = Vec::new();
-        
+
         for mut msg in prepared {
             let is_new = self.check_idempotency(&msg).await?;
             if is_new {
@@ -473,19 +493,19 @@ impl MessagePersistenceDomainService {
                 });
             }
         }
-        
+
         if new_messages.is_empty() {
             return Ok(results);
         }
-        
+
         // 2. 批量持久化消息
         self.persist_batch(new_messages.clone()).await?;
-        
+
         // 3. 批量清理 WAL 条目
         for msg in &new_messages {
             self.cleanup_wal(&msg.message_id).await?;
         }
-        
+
         // 4. 构建持久化结果
         for msg in new_messages {
             let result = PersistenceResult {
@@ -496,12 +516,12 @@ impl MessagePersistenceDomainService {
             };
             results.push(result);
         }
-        
+
         // 5. 批量发布 ACK 事件
         for result in &results {
             self.publish_ack(result).await?;
         }
-        
+
         Ok(results)
     }
 }

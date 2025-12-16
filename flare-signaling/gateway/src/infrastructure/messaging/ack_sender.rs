@@ -1,16 +1,16 @@
 //! ACK 发送器
 //!
 //! 负责向客户端发送 ACK 和错误通知
-//! 
+//!
 //! Gateway 基础设施层职责：封装 ACK 发送的底层实现
 
 use flare_core::common::error::{FlareError, Result};
-use flare_core::common::protocol::{
-    builder::FrameBuilder, frame_with_notification_command, notification, Frame, MessageCommand,
-    Reliability,
-};
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
 use flare_core::common::protocol::flare::core::commands::notification_command::Type as NotificationType;
+use flare_core::common::protocol::{
+    Frame, MessageCommand, Reliability, builder::FrameBuilder, frame_with_notification_command,
+    notification,
+};
 use flare_core::server::handle::ServerHandle;
 use prost::Message as ProstMessage;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 /// ACK 发送器
-/// 
+///
 /// 提供向客户端发送 ACK 和错误通知的功能
 pub struct AckSender {
     server_handle: Arc<Mutex<Option<Arc<dyn ServerHandle>>>>,
@@ -31,12 +31,12 @@ impl AckSender {
     }
 
     /// 发送消息 ACK 到客户端
-    /// 
+    ///
     /// # 参数
     /// * `connection_id` - 连接 ID
     /// * `message_id` - 消息 ID
     /// * `session_id` - 会话 ID
-    /// 
+    ///
     /// # ACK 类型
     /// 根据 MessageCommand 规范和 transport.proto 定义：
     /// - Type::Ack (1)：确认回执
@@ -59,10 +59,7 @@ impl AckSender {
         // 序列化为 protobuf bytes
         let mut payload = Vec::new();
         send_ack.encode(&mut payload).map_err(|e| {
-            FlareError::serialization_error(format!(
-                "Failed to encode SendEnvelopeAck: {}",
-                e
-            ))
+            FlareError::serialization_error(format!("Failed to encode SendEnvelopeAck: {}", e))
         })?;
 
         // 构建 ACK metadata（只保留路由必需的 session_id）
@@ -74,7 +71,7 @@ impl AckSender {
             r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack
                 as i32,
             message_id: message_id.to_string(),
-            payload,  // 使用 SendEnvelopeAck 作为 payload
+            payload, // 使用 SendEnvelopeAck 作为 payload
             metadata: md,
             seq: 0,
         };
@@ -103,14 +100,14 @@ impl AckSender {
     }
 
     /// 发送失败 ACK 到客户端
-    /// 
+    ///
     /// # 参数
     /// * `connection_id` - 连接 ID
     /// * `message_id` - 消息 ID
     /// * `session_id` - 会话 ID
     /// * `error_code` - 错误码
     /// * `error_message` - 错误信息
-    /// 
+    ///
     /// # 使用场景
     /// 当消息路由失败、验证失败等情况时，向客户端发送失败 ACK
     pub async fn send_message_ack_failed(
@@ -132,10 +129,7 @@ impl AckSender {
         // 序列化为 protobuf bytes
         let mut payload = Vec::new();
         send_ack.encode(&mut payload).map_err(|e| {
-            FlareError::serialization_error(format!(
-                "Failed to encode SendEnvelopeAck: {}",
-                e
-            ))
+            FlareError::serialization_error(format!("Failed to encode SendEnvelopeAck: {}", e))
         })?;
 
         // 构建 ACK metadata
@@ -177,12 +171,12 @@ impl AckSender {
     }
 
     /// 发送错误通知到客户端
-    /// 
+    ///
     /// # 参数
     /// * `connection_id` - 连接 ID
     /// * `original_message_id` - 原始消息 ID（可选）
     /// * `error_msg` - 错误信息
-    /// 
+    ///
     /// # 通知类型
     /// 使用 NotificationType::Alert 发送错误通知
     pub async fn send_error_notification(
@@ -199,7 +193,10 @@ impl AckSender {
                 original_message_id.as_bytes().to_vec(),
             );
         }
-        metadata.insert("error_code".to_string(), "ROUTING_FAILED".as_bytes().to_vec());
+        metadata.insert(
+            "error_code".to_string(),
+            "ROUTING_FAILED".as_bytes().to_vec(),
+        );
 
         // 创建错误通知
         let error_notification = notification(
@@ -209,7 +206,8 @@ impl AckSender {
             Some(metadata),
         );
 
-        let error_frame = frame_with_notification_command(error_notification, Reliability::AtLeastOnce);
+        let error_frame =
+            frame_with_notification_command(error_notification, Reliability::AtLeastOnce);
 
         // 发送错误通知
         if let Err(send_err) = self.send_frame(connection_id, &error_frame).await {

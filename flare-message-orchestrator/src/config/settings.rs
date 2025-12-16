@@ -8,11 +8,11 @@ use crate::domain::model::MessageDefaults;
 #[derive(Clone, Debug)]
 pub struct MessageOrchestratorConfig {
     pub kafka_bootstrap: String,
-    pub kafka_storage_topic: String,  // 存储队列: flare.im.message.created
+    pub kafka_storage_topic: String, // 存储队列: flare.im.message.created
     pub kafka_push_topic: String,    // 推送队列: flare.im.push.tasks
     pub kafka_timeout_ms: u64,
     // 批量发送配置
-    pub kafka_batch_size: usize,     // 批量发送大小
+    pub kafka_batch_size: usize,      // 批量发送大小
     pub kafka_flush_interval_ms: u64, // 刷新间隔（毫秒）
     pub redis_url: Option<String>,
     pub wal_hash_key: Option<String>,
@@ -91,12 +91,10 @@ impl MessageOrchestratorConfig {
         .unwrap_or(5000);
 
         // 批量发送配置
-        let kafka_batch_size = env_or_fallback(
-            "MESSAGE_ORCHESTRATOR_KAFKA_BATCH_SIZE",
-            "KAFKA_BATCH_SIZE",
-        )
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(100); // 默认批量大小：100
+        let kafka_batch_size =
+            env_or_fallback("MESSAGE_ORCHESTRATOR_KAFKA_BATCH_SIZE", "KAFKA_BATCH_SIZE")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(100); // 默认批量大小：100
 
         let kafka_flush_interval_ms = env_or_fallback(
             "MESSAGE_ORCHESTRATOR_KAFKA_FLUSH_INTERVAL_MS",
@@ -234,18 +232,17 @@ impl KafkaProducerConfig for MessageOrchestratorConfig {
     fn kafka_bootstrap(&self) -> &str {
         &self.kafka_bootstrap
     }
-    
+
     fn message_timeout_ms(&self) -> u64 {
         self.kafka_timeout_ms
     }
-    
+
     // 使用默认值，或根据需要覆盖
     fn enable_idempotence(&self) -> bool {
         true // 消息编排器需要保证消息不丢失
     }
-    
+
     fn compression_type(&self) -> &str {
         "snappy" // 使用 snappy 压缩，平衡性能和压缩比
     }
 }
-

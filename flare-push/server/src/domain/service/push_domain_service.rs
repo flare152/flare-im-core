@@ -7,8 +7,8 @@ use std::time::Instant;
 use flare_im_core::gateway::GatewayRouterTrait;
 use flare_im_core::hooks::HookDispatcher;
 use flare_im_core::metrics::PushServerMetrics;
-use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_proto::common::Message;
+use flare_proto::push::{PushMessageRequest, PushNotificationRequest};
 use flare_server_core::error::Result;
 use futures::future;
 use prost::Message as ProstMessage;
@@ -98,7 +98,7 @@ impl PushDomainService {
                             message.id, message.session_id, message.sender_id)
                     ).build_error());
                 }
-                
+
                 // 如果 user_ids 为空，说明消息编排服务没有正确设置，这是错误
                 if request.user_ids.is_empty() {
                     error!(
@@ -118,11 +118,12 @@ impl PushDomainService {
                 if message.channel_id.is_empty() {
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,
-                        "Group/channel message must provide channel_id"
-                    ).build_error());
+                        "Group/channel message must provide channel_id",
+                    )
+                    .build_error());
                 }
             }
-            
+
             // 注意：已移除消息去重逻辑
             // ACK 机制已经保证消息可靠性：
             // 1. 客户端收到消息后发送 ACK
@@ -131,7 +132,7 @@ impl PushDomainService {
             // 4. 如果 ACK 超时，Push Server 会重试推送（最多重试 N 次）
             // 因此不需要额外的去重逻辑，ACK 机制已经保证了消息的可靠性和幂等性
         }
-        
+
         // 验证 user_ids 不为空
         if request.user_ids.is_empty() {
             return Err(flare_server_core::error::ErrorBuilder::new(
@@ -139,12 +140,12 @@ impl PushDomainService {
                 "user_ids cannot be empty after deduplication. All recipients were filtered out as duplicates"
             ).build_error());
         }
-        
+
         // 将 PushMessageRequest 转换为 PushDispatchTask 并批量处理
         let tasks = self.convert_message_request_to_tasks(&request)?;
         self.process_tasks(tasks).await
     }
-    
+
     /// 处理客户端 ACK（从 Gateway 接收）
     #[instrument(skip(self), fields(message_id = %ack.message_id))]
     pub async fn handle_client_ack(
@@ -159,7 +160,7 @@ impl PushDomainService {
             timestamp_ms = start_time.elapsed().as_millis(),
             "Received client ACK from Gateway"
         );
-        
+
         // 确认 ACK，停止重试
         if let Ok(confirmed) = self.ack_tracker.confirm_ack(&ack.message_id, user_id).await {
             let duration_ms = start_time.elapsed().as_millis();
@@ -187,7 +188,7 @@ impl PushDomainService {
                 "Failed to confirm ACK"
             );
         }
-        
+
         Ok(())
     }
 
@@ -244,10 +245,14 @@ impl PushDomainService {
             .online_repo
             .batch_get_online_status(&user_ids)
             .await
-            .map_err(|e| flare_server_core::error::ErrorBuilder::new(
-                flare_server_core::error::ErrorCode::ServiceUnavailable,
-                "Failed to batch query online status"
-            ).details(e.to_string()).build_error())?;
+            .map_err(|e| {
+                flare_server_core::error::ErrorBuilder::new(
+                    flare_server_core::error::ErrorCode::ServiceUnavailable,
+                    "Failed to batch query online status",
+                )
+                .details(e.to_string())
+                .build_error()
+            })?;
 
         let query_start = Instant::now();
         let online_count = online_status_map.values().filter(|s| s.online).count();
@@ -455,13 +460,14 @@ impl PushDomainService {
         }
 
         // 通过 Gateway Router 路由推送（带智能重试）
-        let push_result = crate::infrastructure::retry::execute_with_retry(
-            &retry_policy,
-            || async {
-                router.route_push_message(gateway_id, push_request.clone()).await
+        let push_result =
+            crate::infrastructure::retry::execute_with_retry(&retry_policy, || async {
+                router
+                    .route_push_message(gateway_id, push_request.clone())
+                    .await
                     .map_err(|e| anyhow::anyhow!("Gateway push failed: {}", e))
-            },
-        ).await;
+            })
+            .await;
 
         match push_result {
             Ok(response) => {
@@ -473,23 +479,26 @@ impl PushDomainService {
                     let user_id = &result.user_id;
                     let status_value = result.status as i32;
                     match status_value {
-                        1 | 2 => { // PushStatusSuccess = 1, PushStatusPartial = 2
+                        1 | 2 => {
+                            // PushStatusSuccess = 1, PushStatusPartial = 2
                             // 推送成功
                             success_count += 1;
-                            
+
                             // 从 metadata 中提取所有 message_id（必需字段，不再降级）
-                            let message_ids_str: Vec<String> = push_request.metadata
+                            let message_ids_str: Vec<String> = push_request
+                                .metadata
                                 .get("message_ids")
                                 .ok_or_else(|| {
                                     flare_server_core::error::ErrorBuilder::new(
                                         flare_server_core::error::ErrorCode::InvalidParameter,
-                                        "message_ids must be in metadata"
-                                    ).build_error()
+                                        "message_ids must be in metadata",
+                                    )
+                                    .build_error()
                                 })?
                                 .split(',')
                                 .map(|s| s.to_string())
                                 .collect();
-                            
+
                             // 更新所有消息状态
                             for message_id in &message_ids_str {
                                 state_tracker
@@ -497,7 +506,9 @@ impl PushDomainService {
                                     .await;
 
                                 // 注册待确认的ACK
-                                if let Err(e) = ack_tracker.register_pending_ack(message_id, user_id).await {
+                                if let Err(e) =
+                                    ack_tracker.register_pending_ack(message_id, user_id).await
+                                {
                                     tracing::warn!(
                                         error = %e,
                                         message_id = %message_id,
@@ -508,20 +519,24 @@ impl PushDomainService {
                             }
 
                             // 更新指标
-                            metrics.online_push_success_total
+                            metrics
+                                .online_push_success_total
                                 .with_label_values(&[user_id])
                                 .inc();
                         }
-                        v if v == 3 => { // PushStatusUserOffline = 3
+                        v if v == 3 => {
+                            // PushStatusUserOffline = 3
                             // 用户离线，创建离线推送任务
                             fail_count += 1;
-                            
+
                             // 从 user_message_map 获取该用户的所有消息
                             if let Some(messages) = user_message_map.get(user_id) {
                                 for (message_id, _) in messages {
                                     // 从 user_groups 查找对应的 task 以获取 message_type
                                     if let Some(tasks) = user_groups.get(user_id) {
-                                        if let Some(task) = tasks.iter().find(|t| &t.message_id == message_id) {
+                                        if let Some(task) =
+                                            tasks.iter().find(|t| &t.message_id == message_id)
+                                        {
                                             if task.message_type == "Normal" {
                                                 // 普通消息：创建离线推送任务
                                                 if let Err(e) = task_publisher.publish(task).await {
@@ -551,7 +566,7 @@ impl PushDomainService {
                         _ => {
                             // 推送失败
                             fail_count += 1;
-                            
+
                             // 更新该用户所有消息状态为失败
                             if let Some(messages) = user_message_map.get(user_id) {
                                 for (message_id, _) in messages {
@@ -566,7 +581,9 @@ impl PushDomainService {
 
                                     // 检查消息类型，决定是否创建离线任务
                                     if let Some(tasks) = user_groups.get(user_id) {
-                                        if let Some(task) = tasks.iter().find(|t| &t.message_id == message_id) {
+                                        if let Some(task) =
+                                            tasks.iter().find(|t| &t.message_id == message_id)
+                                        {
                                             if task.message_type == "Normal" {
                                                 // 普通消息：创建离线推送任务
                                                 if let Err(e) = task_publisher.publish(task).await {
@@ -584,7 +601,10 @@ impl PushDomainService {
                                                         message_id,
                                                         user_id,
                                                         MessageStatus::Expired,
-                                                        Some(format!("Notification discarded: {}", result.error_message)),
+                                                        Some(format!(
+                                                            "Notification discarded: {}",
+                                                            result.error_message
+                                                        )),
                                                     )
                                                     .await;
                                             }
@@ -642,7 +662,10 @@ impl PushDomainService {
                                             message_id,
                                             user_id,
                                             MessageStatus::Expired,
-                                            Some("Notification discarded due to push failure".to_string()),
+                                            Some(
+                                                "Notification discarded due to push failure"
+                                                    .to_string(),
+                                            ),
                                         )
                                         .await;
                                 }
@@ -676,10 +699,14 @@ impl PushDomainService {
             self.task_publisher
                 .publish_offline_batch(&normal_tasks)
                 .await
-                .map_err(|e| flare_server_core::error::ErrorBuilder::new(
-                    flare_server_core::error::ErrorCode::ServiceUnavailable,
-                    "Failed to publish offline tasks"
-                ).details(e.to_string()).build_error())?;
+                .map_err(|e| {
+                    flare_server_core::error::ErrorBuilder::new(
+                        flare_server_core::error::ErrorCode::ServiceUnavailable,
+                        "Failed to publish offline tasks",
+                    )
+                    .details(e.to_string())
+                    .build_error()
+                })?;
 
             // 更新状态
             for task in &normal_tasks {
@@ -728,34 +755,41 @@ impl PushDomainService {
         self.task_publisher
             .publish_offline_batch(&[task])
             .await
-            .map_err(|e| flare_server_core::error::ErrorBuilder::new(
-                flare_server_core::error::ErrorCode::ServiceUnavailable,
-                "Failed to create offline task"
-            ).details(e.to_string()).build_error())
+            .map_err(|e| {
+                flare_server_core::error::ErrorBuilder::new(
+                    flare_server_core::error::ErrorCode::ServiceUnavailable,
+                    "Failed to create offline task",
+                )
+                .details(e.to_string())
+                .build_error()
+            })
     }
 
     /// 将 PushMessageRequest 转换为 PushDispatchTask 列表
-    /// 
+    ///
     /// 优化：消息类型提前判断（P2优化）
     /// - 从 Message 的 message_type 字段直接判断，避免反序列化整个消息
-    fn convert_message_request_to_tasks(&self, request: &PushMessageRequest) -> Result<Vec<PushDispatchTask>> {
+    fn convert_message_request_to_tasks(
+        &self,
+        request: &PushMessageRequest,
+    ) -> Result<Vec<PushDispatchTask>> {
         // P2优化：消息类型提前判断
         // 从 request.message 中快速提取 message_type，避免完整反序列化
         let (message_type, is_notification) = if let Some(ref message) = request.message {
             // 快速判断：从 message.message_type 枚举值判断
             use flare_proto::common::MessageType;
-            let msg_type = MessageType::try_from(message.message_type)
-                .unwrap_or(MessageType::Unspecified);
-            
-            let is_notification = matches!(
-                msg_type,
-                MessageType::Notification | MessageType::Typing
-            );
-            
-            let persist_if_offline = request.options.as_ref()
+            let msg_type =
+                MessageType::try_from(message.message_type).unwrap_or(MessageType::Unspecified);
+
+            let is_notification =
+                matches!(msg_type, MessageType::Notification | MessageType::Typing);
+
+            let persist_if_offline = request
+                .options
+                .as_ref()
                 .map(|o| o.persist_if_offline)
                 .unwrap_or(!is_notification);
-            
+
             let msg_type_str = if is_notification {
                 "Notification"
             } else if persist_if_offline {
@@ -763,15 +797,21 @@ impl PushDomainService {
             } else {
                 "Notification"
             };
-            
+
             (msg_type_str, is_notification)
         } else {
             // 如果没有 message，根据 options 判断
-            let persist_if_offline = request.options.as_ref()
+            let persist_if_offline = request
+                .options
+                .as_ref()
                 .map(|o| o.persist_if_offline)
                 .unwrap_or(true);
             (
-                if persist_if_offline { "Normal" } else { "Notification" },
+                if persist_if_offline {
+                    "Normal"
+                } else {
+                    "Notification"
+                },
                 !persist_if_offline,
             )
         };
@@ -783,11 +823,14 @@ impl PushDomainService {
             // 如果 message 已存在，序列化为 bytes（用于后续传递）
             // 注意：这里可以优化为零拷贝，但 prost 需要序列化
             let mut buf = Vec::with_capacity(msg.encoded_len());
-            msg.encode(&mut buf)
-                .map_err(|e| flare_server_core::error::ErrorBuilder::new(
+            msg.encode(&mut buf).map_err(|e| {
+                flare_server_core::error::ErrorBuilder::new(
                     flare_server_core::error::ErrorCode::InternalError,
-                    "Failed to encode message"
-                ).details(e.to_string()).build_error())?;
+                    "Failed to encode message",
+                )
+                .details(e.to_string())
+                .build_error()
+            })?;
             buf
         } else {
             Vec::new()
@@ -805,7 +848,11 @@ impl PushDomainService {
                 metadata: HashMap::new(),
                 online: false, // 将在查询在线状态后更新
                 tenant_id: request.tenant.as_ref().map(|t| t.tenant_id.clone()),
-                require_online: request.options.as_ref().map(|o| o.require_online).unwrap_or(false),
+                require_online: request
+                    .options
+                    .as_ref()
+                    .map(|o| o.require_online)
+                    .unwrap_or(false),
                 persist_if_offline: !is_notification,
                 priority: request.options.as_ref().map(|o| o.priority).unwrap_or(5),
                 context: None,
@@ -816,15 +863,22 @@ impl PushDomainService {
     }
 
     /// 将 PushNotificationRequest 转换为 PushDispatchTask 列表
-    fn convert_notification_request_to_tasks(&self, request: &PushNotificationRequest) -> Result<Vec<PushDispatchTask>> {
+    fn convert_notification_request_to_tasks(
+        &self,
+        request: &PushNotificationRequest,
+    ) -> Result<Vec<PushDispatchTask>> {
         let mut tasks = Vec::new();
         for user_id in &request.user_ids {
-            let notification = request.notification.as_ref().map(|n| crate::domain::model::DispatchNotification {
-                title: n.title.clone(),
-                body: n.body.clone(),
-                data: n.data.clone(),
-                metadata: n.metadata.clone(),
-            });
+            let notification =
+                request
+                    .notification
+                    .as_ref()
+                    .map(|n| crate::domain::model::DispatchNotification {
+                        title: n.title.clone(),
+                        body: n.body.clone(),
+                        data: n.data.clone(),
+                        metadata: n.metadata.clone(),
+                    });
 
             tasks.push(PushDispatchTask {
                 user_id: user_id.clone(),
@@ -836,7 +890,11 @@ impl PushDomainService {
                 metadata: HashMap::new(),
                 online: false,
                 tenant_id: request.tenant.as_ref().map(|t| t.tenant_id.clone()),
-                require_online: request.options.as_ref().map(|o| o.require_online).unwrap_or(false),
+                require_online: request
+                    .options
+                    .as_ref()
+                    .map(|o| o.require_online)
+                    .unwrap_or(false),
                 persist_if_offline: false, // 通知消息不持久化
                 priority: request.options.as_ref().map(|o| o.priority).unwrap_or(5),
                 context: None,

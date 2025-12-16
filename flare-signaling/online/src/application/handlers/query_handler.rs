@@ -16,7 +16,7 @@ use crate::domain::model::OnlineStatusRecord;
 use crate::domain::repository::SessionRepository;
 
 /// 在线状态查询处理器（查询侧）
-/// 
+///
 /// 直接调用基础设施层的仓储实现，不经过领域服务
 pub struct OnlineQueryHandler {
     repository: Arc<dyn SessionRepository + Send + Sync>,
@@ -33,7 +33,10 @@ impl OnlineQueryHandler {
         &self,
         query: GetOnlineStatusQuery,
     ) -> Result<GetOnlineStatusResponse> {
-        let statuses = self.repository.fetch_statuses(&query.request.user_ids).await?;
+        let statuses = self
+            .repository
+            .fetch_statuses(&query.request.user_ids)
+            .await?;
 
         let mut result = HashMap::new();
         for user_id in &query.request.user_ids {
@@ -49,7 +52,7 @@ impl OnlineQueryHandler {
                     device_id: None,
                     device_platform: None,
                 });
-            
+
             result.insert(
                 user_id.clone(),
                 OnlineStatus {
@@ -74,4 +77,3 @@ impl OnlineQueryHandler {
         })
     }
 }
-

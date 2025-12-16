@@ -12,7 +12,6 @@ use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
-
 #[async_trait]
 pub trait StorageClient: Send + Sync {
     async fn store_message(&self, request: StoreMessageRequest) -> Result<StoreMessageResponse>;
@@ -31,12 +30,9 @@ pub struct GrpcStorageClient {
 
 impl GrpcStorageClient {
     pub fn new(service_name: String) -> Arc<Self> {
-        Arc::new(Self {
-            service_name,
-        })
+        Arc::new(Self { service_name })
     }
 }
-
 
 #[async_trait]
 impl StorageClient for GrpcStorageClient {
@@ -61,7 +57,10 @@ impl StorageClient for GrpcStorageClient {
         .build_error())
     }
 
-    async fn query_messages(&self, _request: QueryMessagesRequest) -> Result<QueryMessagesResponse> {
+    async fn query_messages(
+        &self,
+        _request: QueryMessagesRequest,
+    ) -> Result<QueryMessagesResponse> {
         // Note: Query operations should go through Storage Reader Service
         Err(ErrorBuilder::new(
             ErrorCode::ServiceUnavailable,

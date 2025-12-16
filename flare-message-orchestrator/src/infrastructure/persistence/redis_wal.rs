@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -9,9 +9,9 @@ use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
 use serde::Serialize;
 
+use crate::config::MessageOrchestratorConfig;
 use crate::domain::model::MessageSubmission;
 use crate::domain::repository::WalRepository;
-use crate::config::MessageOrchestratorConfig;
 
 #[derive(Serialize)]
 struct WalEntrySnapshot {
@@ -42,7 +42,10 @@ impl RedisWalRepository {
 }
 
 impl WalRepository for RedisWalRepository {
-    fn append<'a>(&'a self, submission: &'a MessageSubmission) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn append<'a>(
+        &'a self,
+        submission: &'a MessageSubmission,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let _self = self; // 保持对 self 的引用
         let _submission = submission; // 保持对 submission 的引用
         Box::pin(async move {
@@ -61,12 +64,8 @@ impl WalRepository for RedisWalRepository {
             };
 
             let payload = serde_json::to_string(&entry)?;
-            conn.hset::<_, _, _, ()>(
-                wal_key,
-                &_submission.message_id,
-                payload,
-            )
-            .await?;
+            conn.hset::<_, _, _, ()>(wal_key, &_submission.message_id, payload)
+                .await?;
 
             if _self.config.wal_ttl_seconds > 0 {
                 let _: () = conn
