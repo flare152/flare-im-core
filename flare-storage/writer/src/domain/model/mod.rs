@@ -15,7 +15,7 @@ pub struct MediaAttachmentMetadata {
 
 #[derive(Debug, Clone)]
 pub struct PreparedMessage {
-    pub session_id: String,
+    pub conversation_id: String,
     pub message_id: String,
     pub message: flare_proto::common::Message,
     pub timeline: TimelineMetadata,
@@ -24,7 +24,7 @@ pub struct PreparedMessage {
 
 #[derive(Debug)]
 pub struct PersistenceResult {
-    pub session_id: String,
+    pub conversation_id: String,
     pub message_id: String,
     pub timeline: TimelineMetadata,
     pub deduplicated: bool,
@@ -33,7 +33,7 @@ pub struct PersistenceResult {
 impl PersistenceResult {
     pub fn new(prepared: &PreparedMessage, deduplicated: bool) -> Self {
         Self {
-            session_id: prepared.session_id.clone(),
+            conversation_id: prepared.conversation_id.clone(),
             message_id: prepared.message_id.clone(),
             timeline: prepared.timeline.clone(),
             deduplicated,

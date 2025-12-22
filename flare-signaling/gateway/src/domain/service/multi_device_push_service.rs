@@ -6,7 +6,7 @@
 //! - 支持多设备推送策略（全部推送/最优推送/高优先级推送）
 
 use flare_proto::signaling::online::GetDeviceRequest;
-use flare_proto::signaling::user_service_client::UserServiceClient;
+use flare_proto::signaling::online::online_service_client::OnlineServiceClient;
 use std::sync::Arc;
 use tonic::transport::Channel;
 use tracing::{debug, info, instrument, warn};
@@ -46,13 +46,13 @@ pub struct PushTarget {
 pub struct MultiDevicePushService {
     quality_service: Arc<ConnectionQualityService>,
     /// Online服务客户端（用于获取设备信息）
-    online_service_client: Option<UserServiceClient<Channel>>,
+    online_service_client: Option<flare_proto::signaling::online::online_service_client::OnlineServiceClient<Channel>>,
 }
 
 impl MultiDevicePushService {
     pub fn new(
         quality_service: Arc<ConnectionQualityService>,
-        online_service_client: Option<UserServiceClient<Channel>>,
+        online_service_client: Option<flare_proto::signaling::online::online_service_client::OnlineServiceClient<Channel>>,
     ) -> Self {
         Self {
             quality_service,
@@ -245,7 +245,7 @@ impl MultiDevicePushService {
     /// 从Online服务获取设备优先级
     async fn fetch_device_priority_from_online(
         &self,
-        client: &UserServiceClient<Channel>,
+        client: &OnlineServiceClient<Channel>,
         user_id: &str,
         device_id: &str,
     ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {

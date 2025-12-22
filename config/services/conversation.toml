@@ -1,0 +1,42 @@
+# Conversation 服务配置
+#
+# 配置说明：
+# - Redis 配置通过 redis 字段引用 base.toml 中的 redis.conversation_store
+# - PostgreSQL 配置通过 postgres 字段引用 base.toml 中的 postgres.media（如果存在）
+# - Kafka 配置通过 kafka 字段引用 base.toml 中的 kafka.message（如果存在）
+# - 所有基础设施配置都在 base.toml 中定义，services 只引用名称
+
+[services.conversation]
+
+# Redis 配置：引用 base.toml 中的 redis.conversation_store
+redis = "conversation_store"
+
+# PostgreSQL 配置（可选，用于会话元数据存储）：引用 base.toml 中的 postgres.media
+# 如果未配置，将只使用 Redis（仅支持状态和光标操作）
+postgres = "media"
+
+# Redis Key 前缀配置
+conversation_state_prefix = "storage:conversation:state"
+conversation_unread_prefix = "storage:conversation:unread"
+user_cursor_prefix = "storage:user:cursor"
+presence_prefix = "presence:user"
+
+# 消息存储服务配置（可选）
+# 如果配置了，将启用消息同步功能
+# 通过服务发现自动获取服务地址
+
+# 会话引导配置
+recent_message_limit = 20  # 最近消息数量限制
+
+# 默认会话策略
+[services.conversation.default_policy]
+# 冲突解决策略: exclusive, platform_exclusive, coexist, force_logout
+conflict_resolution = "coexist"
+max_devices = 5  # 最大设备数，0 表示无限制
+allow_anonymous = false  # 是否允许匿名用户
+allow_history_sync = true  # 是否允许历史同步
+
+[services.conversation.server]
+address = "0.0.0.0"
+port = 50090
+

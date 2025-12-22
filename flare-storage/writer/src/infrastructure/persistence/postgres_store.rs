@@ -52,7 +52,7 @@ impl PostgresMessageStore {
 }
 
 impl PostgresMessageStore {
-    /// 获取数据库连接池（用于创建 SeqGenerator 和 SessionRepository）
+    /// 获取数据库连接池（用于创建 SeqGenerator 和 ConversationRepository）
     pub fn pool(&self) -> &Pool<Postgres> {
         &self.pool
     }
@@ -68,7 +68,7 @@ impl PostgresMessageStore {
             r#"
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
                 sender_id TEXT NOT NULL,
                 receiver_ids JSONB,
                 content BYTEA,
@@ -100,8 +100,8 @@ impl PostgresMessageStore {
         // 创建索引（与 deploy/init.sql 保持一致）
         sqlx::query(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_session_id 
-            ON messages(session_id)
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation_id 
+            ON messages(conversation_id)
             "#,
         )
         .execute(&self.pool)
@@ -119,7 +119,7 @@ impl PostgresMessageStore {
         sqlx::query(
             r#"
             CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp 
-            ON messages(session_id, timestamp DESC)
+            ON messages(conversation_id, timestamp DESC)
             "#,
         )
         .execute(&self.pool)
@@ -174,7 +174,7 @@ impl PostgresMessageStore {
         sqlx::query(
             r#"
             CREATE INDEX IF NOT EXISTS idx_messages_session_seq 
-            ON messages(session_id, seq)
+            ON messages(conversation_id, seq)
             "#,
         )
         .execute(&self.pool)
@@ -210,7 +210,7 @@ impl PostgresMessageStore {
                 r#"
                 ALTER TABLE messages SET (
                     timescaledb.enable_columnstore = true,
-                    timescaledb.segmentby = 'session_id',
+                    timescaledb.segmentby = 'conversation_id',
                     timescaledb.orderby = 'timestamp DESC, id'
                 )
                 "#,
@@ -355,18 +355,18 @@ impl ArchiveStoreRepository for PostgresMessageStore {
                 serde_json::Value::String(source_str.to_string()),
             );
         }
-        // receiver_id 已废弃，通过 session_id 确定接收者
-        // session_type 是 i32 类型，需要转换
-        if message.session_type != 0 {
-            let session_type_str = match message.session_type {
+        // receiver_id 已废弃，通过 conversation_id 确定接收者
+        // conversation_type 是 i32 类型，需要转换
+        if message.conversation_type != 0 {
+            let conversation_type_str = match message.conversation_type {
                 1 => "single",
                 2 => "group",
                 3 => "channel",
                 _ => "unknown",
             };
             extra_value.insert(
-                "session_type".to_string(),
-                serde_json::Value::String(session_type_str.to_string()),
+                "conversation_type".to_string(),
+                serde_json::Value::String(conversation_type_str.to_string()),
             );
         }
         if !message.tags.is_empty() {
@@ -423,14 +423,14 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         sqlx::query(
             r#"
             INSERT INTO messages (
-                id, session_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $8)
             ON CONFLICT (timestamp, id) DO UPDATE
-            SET session_id = EXCLUDED.session_id,
+            SET conversation_id = EXCLUDED.conversation_id,
                 sender_id = EXCLUDED.sender_id,
                 -- receiver_ids 已废弃
                 content = EXCLUDED.content,
@@ -444,7 +444,7 @@ impl ArchiveStoreRepository for PostgresMessageStore {
             "#,
         )
         .bind(&message.id)
-        .bind(&message.session_id)
+        .bind(&message.conversation_id)
         .bind(&message.sender_id)
         .bind(serde_json::Value::Array(Vec::new())) // receiver_ids 已废弃，使用空数组
         .bind(content_bytes)
@@ -647,18 +647,18 @@ impl PostgresMessageStore {
                         serde_json::Value::String(source_str.to_string()),
                     );
                 }
-                // receiver_id 已废弃，通过 session_id 确定接收者
-                // session_type 是 i32 类型，需要转换
-                if message.session_type != 0 {
-                    let session_type_str = match message.session_type {
+                // receiver_id 已废弃，通过 conversation_id 确定接收者
+                // conversation_type 是 i32 类型，需要转换
+                if message.conversation_type != 0 {
+                    let conversation_type_str = match message.conversation_type {
                         1 => "single",
                         2 => "group",
                         3 => "channel",
                         _ => "unknown",
                     };
                     extra_value.insert(
-                        "session_type".to_string(),
-                        serde_json::Value::String(session_type_str.to_string()),
+                        "conversation_type".to_string(),
+                        serde_json::Value::String(conversation_type_str.to_string()),
                     );
                 }
                 if !message.tags.is_empty() {
@@ -796,7 +796,7 @@ impl PostgresMessageStore {
 
                 (
                     message.id.clone(),
-                    message.session_id.clone(),
+                    message.conversation_id.clone(),
                     message.sender_id.clone(),
                     to_value(&Vec::<String>::new()).unwrap_or_default(), // receiver_ids 已废弃
                     content_bytes,
@@ -847,7 +847,7 @@ impl PostgresMessageStore {
             let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
                 r#"
                 INSERT INTO messages (
-                    id, session_id, sender_id, receiver_ids, content, timestamp,
+                    id, conversation_id, sender_id, receiver_ids, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
                     status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
@@ -857,7 +857,7 @@ impl PostgresMessageStore {
 
             query_builder.push_values(&prepared_data, |mut b, row| {
                 b.push_bind(&row.0); // id
-                b.push_bind(&row.1); // session_id
+                b.push_bind(&row.1); // conversation_id
                 b.push_bind(&row.2); // sender_id
                 b.push_bind(&row.3); // receiver_ids
                 b.push_bind(&row.4); // content_bytes
@@ -879,7 +879,7 @@ impl PostgresMessageStore {
             query_builder.push(
                 r#"
                 ON CONFLICT (timestamp, id) DO UPDATE
-                SET session_id = EXCLUDED.session_id,
+                SET conversation_id = EXCLUDED.conversation_id,
                     sender_id = EXCLUDED.sender_id,
                     receiver_ids = EXCLUDED.receiver_ids,
                     content = EXCLUDED.content,
@@ -987,18 +987,18 @@ impl PostgresMessageStore {
                     serde_json::Value::String(source_str.to_string()),
                 );
             }
-            // receiver_id 已废弃，通过 session_id 确定接收者
-            // session_type 是 i32 类型，需要转换
-            if message.session_type != 0 {
-                let session_type_str = match message.session_type {
+            // receiver_id 已废弃，通过 conversation_id 确定接收者
+            // conversation_type 是 i32 类型，需要转换
+            if message.conversation_type != 0 {
+                let conversation_type_str = match message.conversation_type {
                     1 => "single",
                     2 => "group",
                     3 => "channel",
                     _ => "unknown",
                 };
                 extra_value.insert(
-                    "session_type".to_string(),
-                    serde_json::Value::String(session_type_str.to_string()),
+                    "conversation_type".to_string(),
+                    serde_json::Value::String(conversation_type_str.to_string()),
                 );
             }
             if !message.tags.is_empty() {
@@ -1134,14 +1134,14 @@ impl PostgresMessageStore {
             sqlx::query(
                 r#"
                 INSERT INTO messages (
-                    id, session_id, sender_id, receiver_ids, content, timestamp,
+                    id, conversation_id, sender_id, receiver_ids, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
                     status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (timestamp, id) DO UPDATE
-                SET session_id = EXCLUDED.session_id,
+                SET conversation_id = EXCLUDED.conversation_id,
                     sender_id = EXCLUDED.sender_id,
                     receiver_ids = EXCLUDED.receiver_ids,
                     content = EXCLUDED.content,
@@ -1155,7 +1155,7 @@ impl PostgresMessageStore {
                 "#,
             )
             .bind(&message.id)
-            .bind(&message.session_id)
+            .bind(&message.conversation_id)
             .bind(&message.sender_id)
             .bind(serde_json::Value::Array(Vec::new())) // receiver_ids 已废弃
             .bind(&content_bytes)

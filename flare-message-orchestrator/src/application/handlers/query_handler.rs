@@ -43,7 +43,7 @@ impl MessageQueryHandler {
     /// 性能考虑：
     /// - 通过 message_id 主键查询，性能最优
     /// - 支持会话权限验证，防止越权访问
-    #[instrument(skip(self), fields(message_id = %query.message_id, session_id = %query.session_id))]
+    #[instrument(skip(self), fields(message_id = %query.message_id, conversation_id = %query.conversation_id))]
     pub async fn query_message(
         &self,
         query: QueryMessageQuery,
@@ -129,7 +129,7 @@ impl MessageQueryHandler {
     /// - 使用 cursor-based 分页，避免深度分页问题
     /// - 支持时间范围过滤，提高查询效率
     /// - 默认限制查询条数，防止大数据量查询
-    #[instrument(skip(self), fields(session_id = %query.session_id))]
+    #[instrument(skip(self), fields(conversation_id = %query.conversation_id))]
     pub async fn query_messages(
         &self,
         query: QueryMessagesQuery,
@@ -140,7 +140,7 @@ impl MessageQueryHandler {
 
         // 构建查询请求
         let request = flare_proto::storage::QueryMessagesRequest {
-            session_id: query.session_id.clone(),
+            conversation_id: query.conversation_id.clone(),
             start_time: query.start_time.unwrap_or(0),
             end_time: query.end_time.unwrap_or(chrono::Utc::now().timestamp()),
             limit: query.limit.unwrap_or(50).min(1000), // 限制最大查询数量
@@ -221,7 +221,7 @@ impl MessageQueryHandler {
     /// - 使用 cursor-based 分页，避免深度分页问题
     /// - 支持时间范围过滤，提高查询效率
     /// - 默认限制查询条数，防止大数据量查询
-    #[instrument(skip(self), fields(session_id = %query.session_id))]
+    #[instrument(skip(self), fields(conversation_id = %query.conversation_id))]
     pub async fn query_messages_with_pagination(
         &self,
         query: QueryMessagesQuery,
@@ -232,7 +232,7 @@ impl MessageQueryHandler {
 
         // 构建查询请求
         let request = flare_proto::storage::QueryMessagesRequest {
-            session_id: query.session_id.clone(),
+            conversation_id: query.conversation_id.clone(),
             start_time: query.start_time.unwrap_or(0),
             end_time: query.end_time.unwrap_or(chrono::Utc::now().timestamp()),
             limit: query.limit.unwrap_or(50).min(1000), // 限制最大查询数量
@@ -334,13 +334,13 @@ impl MessageQueryHandler {
             values: vec![query.keyword.clone()],
         }];
 
-        // 如果有 session_id，添加会话过滤
+        // 如果有 conversation_id，添加会话过滤
         let mut all_filters = filters;
-        if let Some(session_id) = &query.session_id {
+        if let Some(conversation_id) = &query.conversation_id {
             all_filters.push(flare_proto::common::FilterExpression {
-                field: "session_id".to_string(),
+                field: "conversation_id".to_string(),
                 op: flare_proto::common::FilterOperator::Eq as i32,
-                values: vec![session_id.clone()],
+                values: vec![conversation_id.clone()],
             });
         }
 

@@ -52,11 +52,11 @@ impl HookExtensionServer {
                 .unwrap_or_default(),
         );
 
-        if !proto.session_id.is_empty() {
-            ctx = ctx.with_session(proto.session_id.clone());
+        if !proto.conversation_id.is_empty() {
+            ctx = ctx.with_session(proto.conversation_id.clone());
         }
-        if !proto.session_type.is_empty() {
-            ctx = ctx.with_session_type(proto.session_type.clone());
+        if !proto.conversation_type.is_empty() {
+            ctx = ctx.with_conversation_type(proto.conversation_type.clone());
         }
 
         ctx = ctx
@@ -88,10 +88,10 @@ impl HookExtensionServer {
         Ok(MessageRecord {
             message_id: message.id.clone(),
             client_message_id: None,
-            conversation_id: message.session_id.clone(),
+            conversation_id: message.conversation_id.clone(),
             sender_id: message.sender_id.clone(),
-            session_type: match message.session_type {
-                v if v == flare_proto::common::SessionType::Unspecified as i32 => None,
+            conversation_type: match message.conversation_type {
+                v if v == flare_proto::common::ConversationType::Unspecified as i32 => None,
                 1 => Some("single".to_string()),
                 2 => Some("group".to_string()),
                 3 => Some("channel".to_string()),
@@ -433,10 +433,10 @@ impl HookExtension for HookExtensionServer {
         Ok(Response::new(response))
     }
 
-    async fn notify_session_lifecycle(
+    async fn notify_conversation_lifecycle(
         &self,
-        request: Request<SessionLifecycleHookRequest>,
-    ) -> Result<Response<SessionLifecycleHookResponse>, Status> {
+        request: Request<ConversationLifecycleHookRequest>,
+    ) -> Result<Response<ConversationLifecycleHookResponse>, Status> {
         let req = request.into_inner();
         let context = req
             .context
@@ -448,10 +448,10 @@ impl HookExtension for HookExtensionServer {
         // 转换为内部类型
         let ctx = Self::proto_to_hook_context(&context);
 
-        // 获取SessionLifecycle Hook列表
+        // 获取ConversationLifecycle Hook列表
         let hooks = self
             .registry
-            .get_session_lifecycle_hooks()
+            .get_conversation_lifecycle_hooks()
             .await
             .map_err(|e| Status::internal(format!("Failed to get hooks: {}", e)))?;
 
@@ -460,7 +460,7 @@ impl HookExtension for HookExtensionServer {
         for hook_config in hooks {
             if hook_config.enabled {
                 match self
-                    .create_execution_plan(hook_config, "session_lifecycle")
+                    .create_execution_plan(hook_config, "conversation_lifecycle")
                     .await
                 {
                     Ok(plan) => execution_plans.push(plan),
@@ -476,13 +476,13 @@ impl HookExtension for HookExtensionServer {
         for plan in execution_plans {
             tracing::debug!(
                 hook = %plan.name(),
-                session_id = ?ctx.session_id,
+                conversation_id = ?ctx.conversation_id,
                 event_type = event.event,
-                "Executing SessionLifecycle hook"
+                "Executing ConversationLifecycle hook"
             );
         }
 
-        Ok(Response::new(SessionLifecycleHookResponse {
+        Ok(Response::new(ConversationLifecycleHookResponse {
             success: true,
             status: Some(Self::build_rpc_status(ProtoErrorCode::Ok as i32, "OK")),
         }))
@@ -505,7 +505,7 @@ impl HookExtension for HookExtensionServer {
 
         // Presence Hook 目前没有专门的配置，记录日志
         tracing::debug!(
-            user_id = ?ctx.session_id,
+            user_id = ?ctx.conversation_id,
             "Presence hook notification received"
         );
 

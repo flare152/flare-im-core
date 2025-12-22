@@ -14,7 +14,7 @@ mod tests {
         
         // 创建查询请求
         let query = QueryMessagesQuery {
-            session_id: "test_session".to_string(),
+            conversation_id: "test_session".to_string(),
             start_time: 0,
             end_time: 0,
             limit: 10,

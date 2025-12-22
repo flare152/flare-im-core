@@ -8,7 +8,7 @@
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE TABLE threads (
     id TEXT NOT NULL PRIMARY KEY,
-    session_id TEXT NOT NULL,                    -- 会话ID（群组ID）
+    conversation_id TEXT NOT NULL,                    -- 会话ID（群组ID）
     root_message_id TEXT NOT NULL,              -- 根消息ID（话题起始消息）
     title TEXT,                                  -- 话题标题（可选，从根消息提取或用户指定）
     creator_id TEXT NOT NULL,                   -- 创建者ID
@@ -27,7 +27,7 @@ CREATE TABLE threads (
 
 COMMENT ON TABLE threads IS '话题表（Thread），用于群组中的话题讨论';
 COMMENT ON COLUMN threads.id IS '话题ID（通常等于 root_message_id）';
-COMMENT ON COLUMN threads.session_id IS '会话ID（群组ID）';
+COMMENT ON COLUMN threads.conversation_id IS '会话ID（群组ID）';
 COMMENT ON COLUMN threads.root_message_id IS '根消息ID（话题起始消息）';
 COMMENT ON COLUMN threads.title IS '话题标题（可选，从根消息提取或用户指定）';
 COMMENT ON COLUMN threads.creator_id IS '创建者ID';
@@ -41,7 +41,7 @@ COMMENT ON COLUMN threads.is_locked IS '是否锁定（禁止回复）';
 COMMENT ON COLUMN threads.is_archived IS '是否归档';
 
 -- 索引
-CREATE INDEX IF NOT EXISTS idx_threads_session_id ON threads(session_id);
+CREATE INDEX IF NOT EXISTS idx_threads_conversation_id ON threads(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_threads_root_message_id ON threads(root_message_id);
 CREATE INDEX IF NOT EXISTS idx_threads_creator_id ON threads(creator_id);
 CREATE INDEX IF NOT EXISTS idx_threads_last_reply_at ON threads(last_reply_at DESC);

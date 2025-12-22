@@ -13,13 +13,13 @@ use flare_server_core::error::Result;
 use tracing::{info, warn};
 
 use crate::domain::repository::{OnlineStatus, OnlineStatusRepository};
-use crate::infrastructure::session_client::SessionServiceClient;
+use crate::infrastructure::session_client::ConversationServiceClient;
 use crate::infrastructure::signaling::SignalingOnlineClient;
 
 /// 在线状态仓储 - 直接使用 Signaling Online 服务
 pub struct OnlineStatusRepositoryImpl {
     signaling_client: Arc<SignalingOnlineClient>,
-    session_client: Option<Arc<SessionServiceClient>>,
+    conversation_client: Option<Arc<ConversationServiceClient>>,
     default_tenant_id: String,
 }
 
@@ -27,19 +27,19 @@ impl OnlineStatusRepositoryImpl {
     pub fn new(signaling_client: Arc<SignalingOnlineClient>, default_tenant_id: String) -> Self {
         Self {
             signaling_client,
-            session_client: None,
+            conversation_client: None,
             default_tenant_id,
         }
     }
 
-    pub fn with_session_client(
+    pub fn with_conversation_client(
         signaling_client: Arc<SignalingOnlineClient>,
-        session_client: Arc<SessionServiceClient>,
+        conversation_client: Arc<ConversationServiceClient>,
         default_tenant_id: String,
     ) -> Self {
         Self {
             signaling_client,
-            session_client: Some(session_client),
+            conversation_client: Some(conversation_client),
             default_tenant_id,
         }
     }
@@ -63,7 +63,7 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
             .await
     }
 
-    async fn get_all_online_users_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+    async fn get_all_online_users_for_session(&self, conversation_id: &str) -> Result<Vec<String>> {
         // 添加超时保护，避免阻塞
         let timeout_duration = std::time::Duration::from_secs(5); // 5秒超时
 
@@ -72,35 +72,35 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         // 后续可以在PushDomainService中调用Hook
 
         // 2. 通过 Session 服务获取会话的所有参与者（带超时，降级方案）
-        let participant_user_ids = if let Some(ref session_client) = self.session_client {
+        let participant_user_ids = if let Some(ref conversation_client) = self.conversation_client {
             match tokio::time::timeout(
                 timeout_duration,
-                session_client.get_session_participants(session_id, Some(&self.default_tenant_id)),
+                conversation_client.get_conversation_participants(conversation_id, Some(&self.default_tenant_id)),
             )
             .await
             {
                 Ok(Ok(participants)) => {
                     if participants.is_empty() {
-                        warn!(session_id = %session_id, "Session has no participants");
+                        warn!(conversation_id = %conversation_id, "Session has no participants");
                         return Ok(vec![]);
                     }
-                    info!(session_id = %session_id, participant_count = participants.len(), "Fetched session participants");
+                    info!(conversation_id = %conversation_id, participant_count = participants.len(), "Fetched session participants");
                     participants
                 }
                 Ok(Err(e)) => {
-                    warn!(error = %e, session_id = %session_id, "Failed to get session participants from Session service");
+                    warn!(error = %e, conversation_id = %conversation_id, "Failed to get session participants from Session service");
                     return Err(e);
                 }
                 Err(_) => {
                     warn!(
                         timeout_secs = timeout_duration.as_secs(),
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         "Timeout waiting for session participants from Session service"
                     );
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::ServiceUnavailable,
                         format!("Timeout waiting for session participants from Session service (timeout: {}s)", timeout_duration.as_secs())
-                    ).details(format!("session_id: {}", session_id)).build_error());
+                    ).details(format!("conversation_id: {}", conversation_id)).build_error());
                 }
             }
         } else {
@@ -108,7 +108,7 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
                 flare_server_core::error::ErrorCode::ServiceUnavailable,
                 "Session service client not configured. Cannot query session participants",
             )
-            .details(format!("session_id: {}", session_id))
+            .details(format!("conversation_id: {}", conversation_id))
             .build_error());
         };
 
@@ -122,13 +122,13 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         {
             Ok(Ok(statuses)) => statuses,
             Ok(Err(e)) => {
-                warn!(error = %e, session_id = %session_id, "Failed to get online status from Signaling service");
+                warn!(error = %e, conversation_id = %conversation_id, "Failed to get online status from Signaling service");
                 return Err(e);
             }
             Err(_) => {
                 warn!(
                     timeout_secs = timeout_duration.as_secs(),
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Timeout waiting for online status from Signaling service"
                 );
                 return Err(flare_server_core::error::ErrorBuilder::new(
@@ -138,7 +138,7 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
                         timeout_duration.as_secs()
                     ),
                 )
-                .details(format!("session_id: {}", session_id))
+                .details(format!("conversation_id: {}", conversation_id))
                 .build_error());
             }
         };
@@ -151,7 +151,7 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
             .collect();
 
         info!(
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             total_participants = participant_user_ids.len(),
             online_count = online_user_ids.len(),
             "Filtered online users for session"

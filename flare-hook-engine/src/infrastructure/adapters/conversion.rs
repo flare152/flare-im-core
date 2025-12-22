@@ -34,8 +34,8 @@ pub fn hook_context_to_proto(ctx: &HookContext) -> HookInvocationContext {
             labels: std::collections::HashMap::new(),
             attributes: std::collections::HashMap::new(),
         }),
-        session_id: ctx.session_id.clone().unwrap_or_default(),
-        session_type: ctx.session_type.clone().unwrap_or_default(),
+        conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
+        conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
         corridor: ctx
             .attributes
             .get("corridor")
@@ -81,7 +81,7 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
     let ts = system_time_to_timestamp(record.persisted_at);
     let proto_message = flare_proto::common::Message {
         id: record.message_id.clone(),
-        session_id: record.conversation_id.clone(),
+        conversation_id: record.conversation_id.clone(),
         client_msg_id: record.client_message_id.clone().unwrap_or_default(),
         sender_id: record.sender_id.clone(),
         receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
@@ -89,8 +89,8 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
         source: 1,
         seq: 0,
         timestamp: Some(ts.clone()),
-        session_type: record
-            .session_type
+        conversation_type: record
+            .conversation_type
             .as_deref()
             .map(|t| match t.to_ascii_lowercase().as_str() {
                 "single" | "1" => 1,

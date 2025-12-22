@@ -10,7 +10,7 @@ use tracing::instrument;
 
 use crate::domain::model::ConnectionInfo;
 use crate::domain::repository::ConnectionQuery;
-use crate::interface::connection::LongConnectionHandler;
+use crate::interface::handler::LongConnectionHandler;
 
 /// 推送结果（领域层）
 #[derive(Debug, Clone)]

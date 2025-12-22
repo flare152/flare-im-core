@@ -182,24 +182,24 @@ impl MessageGrpcHandler {
         req: &SendMessageRequest,
     ) -> Result<Response<SendMessageResponse>, Status> {
         // 验证单聊消息必须包含 receiver_id
-        if message.session_type == flare_proto::common::SessionType::Single as i32 {
+        if message.conversation_type == flare_proto::common::ConversationType::Single as i32 {
             if message.receiver_id.is_empty() {
                 error!(
                     message_id = %message.id,
-                    session_id = %message.session_id,
+                    conversation_id = %message.conversation_id,
                     sender_id = %message.sender_id,
                     "Single chat message missing receiver_id in gRPC handler"
                 );
                 return Err(Status::invalid_argument(format!(
-                    "Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}",
-                    message.id, message.session_id, message.sender_id
+                    "Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}",
+                    message.id, message.conversation_id, message.sender_id
                 )));
             }
         }
 
         // 将 SendMessageRequest 转换为 StoreMessageRequest
         let store_request = StoreMessageRequest {
-            session_id: req.session_id.clone(),
+            conversation_id: req.conversation_id.clone(),
             message: Some(message.clone()),
             sync: req.sync,
             context: req.context.clone(),
@@ -483,7 +483,7 @@ impl MessageGrpcHandler {
                 };
 
                 let delete_req = DeleteMessageRequest {
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     message_ids: vec![operation.target_message_id.clone()],
                     context: request.context.clone(),
                     tenant: request.tenant.clone(),
@@ -595,7 +595,7 @@ impl MessageGrpcHandler {
 
                 let forward_req = MessageForwardMessageRequest {
                     message_ids: forward_data.message_ids,
-                    target_session_id: forward_data.target_session_id,
+                    target_conversation_id: forward_data.target_conversation_id,
                     reason: forward_data.reason,
                     merge_forward: forward_data.merge_forward,
                     context: request.context.clone(),
@@ -637,7 +637,7 @@ impl MessageGrpcHandler {
                 })?;
                 let reply_message = flare_proto::Message {
                     id: uuid::Uuid::new_v4().to_string(),
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 回复消息：receiver_id 由原消息决定
                     channel_id: String::new(),  // 回复消息：channel_id 由原消息决定
@@ -647,7 +647,7 @@ impl MessageGrpcHandler {
                 };
 
                 let reply_req = MessageReplyMessageRequest {
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     reply_to_message_id: reply_data.reply_to_message_id,
                     message: Some(reply_message),
                     sync: false,
@@ -679,7 +679,7 @@ impl MessageGrpcHandler {
 
                 // 使用传入的 message 作为引用消息（已经包含引用内容）
                 let quote_req = MessageQuoteMessageRequest {
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     quoted_message_id: quote_data.quoted_message_id,
                     preview_text: quote_data.preview_text,
                     quote_range: None, // quote_data.quote_range 字段在新版 QuoteOperationData 中已移除
@@ -717,7 +717,7 @@ impl MessageGrpcHandler {
                 })?;
                 let thread_message = flare_proto::Message {
                     id: uuid::Uuid::new_v4().to_string(),
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 话题回复：receiver_id 由话题决定
                     channel_id: String::new(),  // 话题回复：channel_id 由话题决定
@@ -727,7 +727,7 @@ impl MessageGrpcHandler {
                 };
 
                 let thread_req = MessageAddThreadReplyRequest {
-                    session_id: request.session_id.clone(),
+                    conversation_id: request.conversation_id.clone(),
                     thread_id: thread_data.thread_id,
                     message: Some(thread_message),
                     sync: false,
@@ -770,7 +770,7 @@ impl MessageGrpcHandler {
 
         for send_req in req.messages {
             let store_request = StoreMessageRequest {
-                session_id: send_req.session_id.clone(),
+                conversation_id: send_req.conversation_id.clone(),
                 message: send_req.message,
                 sync: send_req.sync,
                 context: send_req.context,
@@ -819,8 +819,8 @@ impl MessageGrpcHandler {
         let req = request.into_inner();
 
         // 验证必需字段
-        if req.session_id.is_empty() {
-            return Err(Status::invalid_argument("session_id is required"));
+        if req.conversation_id.is_empty() {
+            return Err(Status::invalid_argument("conversation_id is required"));
         }
 
         let mut message = req
@@ -848,7 +848,7 @@ impl MessageGrpcHandler {
             .insert("sender_type".to_string(), "system".to_string());
 
         let store_request = StoreMessageRequest {
-            session_id: req.session_id.clone(),
+            conversation_id: req.conversation_id.clone(),
             message: Some(message),
             sync: false, // 系统消息默认异步
             context: req.context,
@@ -867,7 +867,7 @@ impl MessageGrpcHandler {
             Ok(message_id) => {
                 info!(
                     message_id = %message_id,
-                    session_id = %req.session_id,
+                    conversation_id = %req.conversation_id,
                     system_message_type = %req.system_message_type,
                     "System message sent successfully"
                 );
@@ -880,7 +880,7 @@ impl MessageGrpcHandler {
             Err(err) => {
                 error!(
                     error = %err,
-                    session_id = %req.session_id,
+                    conversation_id = %req.conversation_id,
                     system_message_type = %req.system_message_type,
                     "Failed to send system message"
                 );
@@ -899,7 +899,7 @@ impl MessageGrpcHandler {
 
         // 构建查询对象
         let query = crate::application::queries::QueryMessagesQuery {
-            session_id: req.session_id.clone(),
+            conversation_id: req.conversation_id.clone(),
             limit: Some(req.limit),
             cursor: if req.cursor.is_empty() {
                 None
@@ -961,7 +961,7 @@ impl MessageGrpcHandler {
 
         // 构建搜索查询对象
         let query = crate::application::queries::SearchMessagesQuery {
-            session_id: None,       // SearchMessagesRequest中没有session_id字段
+            conversation_id: None,       // SearchMessagesRequest中没有conversation_id字段
             keyword: String::new(), // SearchMessagesRequest中没有keyword字段，应在filters中处理
             limit: req.pagination.as_ref().map(|p| p.limit),
             cursor: req.pagination.as_ref().and_then(|p| {
@@ -1007,7 +1007,7 @@ impl MessageGrpcHandler {
         // 构建查询对象
         let query = crate::application::queries::QueryMessageQuery {
             message_id: req.message_id.clone(),
-            session_id: String::new(), // GetMessageRequest中没有session_id字段
+            conversation_id: String::new(), // GetMessageRequest中没有conversation_id字段
         };
 
         // 调用查询处理器
@@ -1079,14 +1079,14 @@ impl MessageGrpcHandler {
                     let mut user_ids = Vec::new();
 
                     // 单聊：使用 receiver_id
-                    if original_message.session_type
-                        == flare_proto::common::SessionType::Single as i32
+                    if original_message.conversation_type
+                        == flare_proto::common::ConversationType::Single as i32
                     {
                         if !original_message.receiver_id.is_empty() {
                             user_ids.push(original_message.receiver_id.clone());
                         }
                     }
-                    // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 session_id 查询成员
+                    // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 conversation_id 查询成员
 
                     // 构建撤回后的消息（用于推送通知）
                     let mut recalled_message = original_message.clone();
@@ -1133,7 +1133,7 @@ impl MessageGrpcHandler {
                     } else {
                         warn!(
                             message_id = %req.message_id,
-                            session_id = %original_message.session_id,
+                            conversation_id = %original_message.conversation_id,
                             "No receivers found for recall notification, skipping push"
                         );
                     }
@@ -1163,7 +1163,7 @@ impl MessageGrpcHandler {
             .ok_or_else(|| Status::failed_precondition("Storage Reader not configured"))?;
 
         let storage_req = DeleteMessageRequest {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             message_ids: req.message_ids,
             context: req.context,
             tenant: req.tenant,
@@ -1327,12 +1327,12 @@ impl MessageGrpcHandler {
         let mut user_ids = Vec::new();
 
         // 单聊：使用 receiver_id
-        if original_message.session_type == flare_proto::common::SessionType::Single as i32 {
+        if original_message.conversation_type == flare_proto::common::ConversationType::Single as i32 {
             if !original_message.receiver_id.is_empty() {
                 user_ids.push(original_message.receiver_id.clone());
             }
         }
-        // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 session_id 查询成员
+        // 群聊/频道：user_ids 留空，推送服务会使用 channel_id 或 conversation_id 查询成员
 
         // 构建推送请求并发布到 Kafka
         if !user_ids.is_empty() {
@@ -1370,7 +1370,7 @@ impl MessageGrpcHandler {
         } else {
             warn!(
                 message_id = %req.message_id,
-                session_id = %original_message.session_id,
+                conversation_id = %original_message.conversation_id,
                 "No receivers found for edit notification, skipping push"
             );
         }
@@ -1547,7 +1547,7 @@ impl MessageGrpcHandler {
             .insert("reply_to".to_string(), req.reply_to_message_id.clone());
 
         let send_req = SendMessageRequest {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             message: Some(message),
             sync: req.sync,
             context: req.context.clone(),
@@ -1634,7 +1634,7 @@ impl MessageGrpcHandler {
             .insert("thread_id".to_string(), req.thread_id.clone());
 
         let send_req = SendMessageRequest {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             message: Some(message),
             sync: req.sync,
             context: req.context.clone(),
@@ -1766,7 +1766,7 @@ impl MessageGrpcHandler {
             };
 
             let forward_message = flare_proto::common::Message {
-                session_id: req.target_session_id.clone(),
+                conversation_id: req.target_conversation_id.clone(),
                 receiver_id: String::new(), // 转发消息：receiver_id 由目标会话决定
                 channel_id: String::new(),  // 转发消息：channel_id 由目标会话决定
                 message_type: flare_proto::common::MessageType::Forward as i32,
@@ -1788,7 +1788,7 @@ impl MessageGrpcHandler {
             // });
 
             let send_req = SendMessageRequest {
-                session_id: req.target_session_id,
+                conversation_id: req.target_conversation_id,
                 message: Some(forward_message),
                 sync: false,
                 context: req.context.clone(),
@@ -1808,7 +1808,7 @@ impl MessageGrpcHandler {
             // 分别转发：每条消息单独转发
             for msg in messages_to_forward {
                 let mut forward_message = msg.clone();
-                forward_message.session_id = req.target_session_id.clone();
+                forward_message.conversation_id = req.target_conversation_id.clone();
                 forward_message.message_type = flare_proto::common::MessageType::Forward as i32;
 
                 // 设置转发信息（注意：forward_info 字段在新版 Message 中已移除）
@@ -1819,7 +1819,7 @@ impl MessageGrpcHandler {
                 // });
 
                 let send_req = SendMessageRequest {
-                    session_id: req.target_session_id.clone(),
+                    conversation_id: req.target_conversation_id.clone(),
                     message: Some(forward_message),
                     sync: false,
                     context: req.context.clone(),
@@ -1913,7 +1913,7 @@ impl MessageGrpcHandler {
             .insert("quote_to".to_string(), req.quoted_message_id.clone());
 
         let send_req = SendMessageRequest {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             message: Some(message),
             sync: req.sync,
             context: req.context.clone(),

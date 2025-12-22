@@ -117,7 +117,7 @@ let config = HookEngineConfig {
       "require_success": true,
       "selector": {
         "tenants": ["tenant-a"],
-        "session_types": ["single"]
+        "conversation_types": ["single"]
       },
       "transport": {
         "type": "grpc",
@@ -150,7 +150,7 @@ require_success = true
 
 [pre_send.selector]
 tenants = ["tenant-a"]
-session_types = ["single"]
+conversation_types = ["single"]
 message_types = ["text", "image"]
 
 [pre_send.transport]
@@ -267,7 +267,7 @@ let hook_config = HookConfigItem {
     require_success: true,
     selector: HookSelectorConfig {
         tenants: vec!["tenant-a".to_string()],
-        session_types: vec!["single".to_string()],
+        conversation_types: vec!["single".to_string()],
         ..Default::default()
     },
     transport: HookTransportConfig::Grpc {
@@ -335,7 +335,7 @@ flare-hook-engine/
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `tenants` | Vec<String> | 租户列表（空表示匹配所有租户） |
-| `session_types` | Vec<String> | 会话类型列表（空表示匹配所有类型） |
+| `conversation_types` | Vec<String> | 会话类型列表（空表示匹配所有类型） |
 | `message_types` | Vec<String> | 消息类型列表（空表示匹配所有类型） |
 | `user_ids` | Vec<String> | 用户ID列表（空表示匹配所有用户） |
 | `tags` | HashMap<String, String> | 标签匹配 |

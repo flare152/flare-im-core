@@ -46,10 +46,6 @@ impl StartupInfo {
             address,
             grpc_services: vec![
                 GrpcServiceInfo {
-                    name: "SignalingService".to_string(),
-                    description: "认证、会话管理".to_string(),
-                },
-                GrpcServiceInfo {
                     name: "AccessGateway".to_string(),
                     description: "业务系统推送消息".to_string(),
                 },
@@ -171,7 +167,7 @@ pub async fn start_services(
         .map_err(|err| anyhow::anyhow!("Invalid gRPC address: {}", err))?;
 
     // 获取 gRPC 处理器
-    let signaling_handler = context.grpc_services.signaling_handler.clone();
+    // 注意：SignalingService 由 flare-signaling/online 服务实现，Gateway 不再提供
     let access_gateway_handler = context.grpc_services.access_gateway_handler.clone();
 
     // 长连接服务器已在 wire.rs 中启动，这里只需要确保它正常运行
@@ -196,11 +192,6 @@ pub async fn start_services(
             info!("正在启动 gRPC 服务器: {}", grpc_addr);
 
             let server_result = Server::builder()
-                .add_service(
-                    flare_proto::signaling::signaling_service_server::SignalingServiceServer::new(
-                        (*signaling_handler).clone(),
-                    ),
-                )
                 .add_service(
                     flare_proto::access_gateway::access_gateway_server::AccessGatewayServer::new(
                         (*access_gateway_handler).clone(),

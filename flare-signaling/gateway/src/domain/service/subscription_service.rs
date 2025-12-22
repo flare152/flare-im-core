@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
+use flare_server_core::error::Result;
 
 /// 订阅信息
 #[derive(Debug, Clone)]

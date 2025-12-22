@@ -2,7 +2,7 @@ pub mod connection_domain_service;
 pub mod connection_quality_service;
 pub mod multi_device_push_service;
 pub mod push_domain_service;
-pub mod session_domain_service;
+pub mod conversation_domain_service;
 pub mod subscription_service;
 
 // 添加Online服务客户端的导入
@@ -15,7 +15,7 @@ pub use connection_quality_service::{
 };
 pub use multi_device_push_service::MultiDevicePushService;
 pub use push_domain_service::{DomainPushResult, PushDomainService};
-pub use session_domain_service::SessionDomainService;
+pub use conversation_domain_service::ConversationDomainService;
 pub use subscription_service::SubscriptionService;
 
 #[cfg(test)]
@@ -24,7 +24,7 @@ mod push_domain_service_test;
 use std::sync::Arc;
 
 use crate::domain::repository::{ConnectionQuery, SignalingGateway};
-use crate::interface::connection::LongConnectionHandler;
+use crate::interface::handler::LongConnectionHandler;
 
 /// 网关领域服务配置
 #[derive(Debug, Clone)]
@@ -47,7 +47,7 @@ impl Default for GatewayServiceConfig {
 /// 网关领域服务
 pub struct GatewayService {
     pub connection_service: Arc<ConnectionDomainService>,
-    pub session_service: Arc<SessionDomainService>,
+    pub conversation_service: Arc<ConversationDomainService>,
     pub push_service: Arc<PushDomainService>,
     pub quality_service: Arc<ConnectionQualityService>,
     pub multi_device_push_service: Arc<MultiDevicePushService>,
@@ -71,7 +71,7 @@ impl GatewayService {
             },
         ));
 
-        let session_service = Arc::new(SessionDomainService::new(
+        let conversation_service = Arc::new(ConversationDomainService::new(
             signaling_gateway.clone(),
             Arc::new(ConnectionQualityService::new()),
             config.gateway_id.clone(), // 从配置中获取
@@ -105,14 +105,14 @@ impl GatewayService {
             quality_service.clone(),
             online_service_client
                 .as_ref()
-                .map(|client| client.get_user_service_client()),
+                .map(|client| client.get_online_service_client()),
         ));
 
         let subscription_service = Arc::new(SubscriptionService::new());
 
         Self {
             connection_service,
-            session_service,
+            conversation_service,
             push_service,
             quality_service,
             multi_device_push_service,

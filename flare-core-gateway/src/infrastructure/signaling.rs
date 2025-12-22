@@ -1,9 +1,7 @@
 use std::sync::Arc;
-
-use anyhow::Context;
 use async_trait::async_trait;
-use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
-use flare_proto::signaling::{
+use flare_proto::signaling::online::online_service_client::OnlineServiceClient;
+use flare_proto::signaling::online::{
     GetOnlineStatusRequest, GetOnlineStatusResponse, LoginRequest, LoginResponse, LogoutRequest,
     LogoutResponse,
 };
@@ -25,7 +23,7 @@ pub trait SignalingClient: Send + Sync {
 pub struct GrpcSignalingClient {
     service_name: String,
     service_client: Mutex<Option<ServiceClient>>,
-    client: Mutex<Option<SignalingServiceClient<Channel>>>,
+    client: Mutex<Option<OnlineServiceClient<Channel>>>,
 }
 
 impl GrpcSignalingClient {
@@ -47,7 +45,7 @@ impl GrpcSignalingClient {
         })
     }
 
-    async fn ensure_client(&self) -> Result<SignalingServiceClient<Channel>> {
+    async fn ensure_client(&self) -> Result<OnlineServiceClient<Channel>> {
         let mut guard = self.client.lock().await;
         if let Some(client) = guard.as_ref() {
             return Ok(client.clone());
@@ -92,7 +90,7 @@ impl GrpcSignalingClient {
 
         tracing::debug!("Got channel for signaling service from service discovery");
 
-        let client = SignalingServiceClient::new(channel);
+        let client = OnlineServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }

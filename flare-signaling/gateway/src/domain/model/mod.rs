@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 /// 会话模型
 #[derive(Clone, Debug)]
 pub struct Session {
-    pub session_id: String,
+    pub conversation_id: String,
     pub user_id: String,
     pub device_id: String,
     pub route_server: Option<String>,
@@ -16,14 +16,14 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        session_id: String,
+        conversation_id: String,
         user_id: String,
         device_id: String,
         route_server: Option<String>,
         gateway_id: String,
     ) -> Self {
         Self {
-            session_id,
+            conversation_id,
             user_id,
             device_id,
             route_server,

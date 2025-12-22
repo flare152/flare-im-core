@@ -37,8 +37,8 @@ impl HotCacheRepository for RedisHotCacheRepository {
     async fn store_hot(&self, message: &flare_proto::common::Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", message.session_id, message.id);
-        let index_key = format!("cache:session:{}:index", message.session_id);
+        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
+        let index_key = format!("cache:session:{}:index", message.conversation_id);
 
         // 将 Message 编码为 protobuf bytes，然后 base64 编码存储
         let mut buf = Vec::new();
@@ -96,7 +96,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
 
         // 准备所有命令
         for message in messages {
-            let message_key = format!("cache:msg:{}:{}", message.session_id, message.id);
+            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
 
             // 编码消息
             let mut buf = Vec::new();
@@ -119,7 +119,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
             .ingestion_ts;
             let score = ingestion_ts as f64;
             session_indices
-                .entry(message.session_id.clone())
+                .entry(message.conversation_id.clone())
                 .or_insert_with(Vec::new)
                 .push((message.id.clone(), score));
         }
@@ -128,8 +128,8 @@ impl HotCacheRepository for RedisHotCacheRepository {
         let _: Vec<redis::Value> = pipe.query_async(&mut conn).await?;
 
         // 批量更新索引（按会话分组，使用 Pipeline）
-        for (session_id, items) in session_indices {
-            let index_key = format!("cache:session:{}:index", session_id);
+        for (conversation_id, items) in session_indices {
+            let index_key = format!("cache:session:{}:index", conversation_id);
 
             // 构建 ZADD Pipeline（支持多成员）
             let mut zadd_pipe = redis::pipe();

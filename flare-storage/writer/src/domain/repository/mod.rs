@@ -112,13 +112,13 @@ pub trait WalCleanupRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait SessionStateRepository: Send + Sync {
+pub trait ConversationStateRepository: Send + Sync {
     async fn apply_message(&self, message: &Message) -> Result<()>;
 }
 
 #[async_trait]
 pub trait UserSyncCursorRepository: Send + Sync {
-    async fn advance_cursor(&self, session_id: &str, user_id: &str, message_ts: i64) -> Result<()>;
+    async fn advance_cursor(&self, conversation_id: &str, user_id: &str, message_ts: i64) -> Result<()>;
 }
 
 #[async_trait]
@@ -133,12 +133,12 @@ pub trait MediaAttachmentVerifier: Send + Sync {
 
 /// Session 仓储接口 - 用于检查并创建 session
 #[async_trait]
-pub trait SessionRepository: Send + Sync {
-    /// 确保 session 存在，如果不存在则创建
-    async fn ensure_session(
+pub trait ConversationRepository: Send + Sync {
+    /// 确保 conversation 存在，如果不存在则创建
+    async fn ensure_conversation(
         &self,
-        session_id: &str,
-        session_type: &str,
+        conversation_id: &str,
+        conversation_type: &str,
         business_type: &str,
         participants: Vec<String>,
         tenant_id: Option<&str>,
@@ -147,15 +147,15 @@ pub trait SessionRepository: Send + Sync {
 
 /// Session 更新仓储接口 - 用于更新会话和参与者信息（seq、未读数等）
 #[async_trait]
-pub trait SessionUpdateRepository: Send + Sync {
+pub trait ConversationUpdateRepository: Send + Sync {
     /// 更新会话的最后消息信息
-    async fn update_last_message(&self, session_id: &str, message_id: &str, seq: i64)
+    async fn update_last_message(&self, conversation_id: &str, message_id: &str, seq: i64)
     -> Result<()>;
 
     /// 批量更新参与者的未读数
     async fn batch_update_unread_count(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         last_message_seq: i64,
         exclude_user_id: Option<&str>,
     ) -> Result<()>;
@@ -165,7 +165,7 @@ pub trait SessionUpdateRepository: Send + Sync {
 #[async_trait]
 pub trait SeqGenerator: Send + Sync {
     /// 为指定会话生成下一个 seq
-    async fn generate_seq(&self, session_id: &str) -> Result<i64>;
+    async fn generate_seq(&self, conversation_id: &str) -> Result<i64>;
 }
 
 /// 消息状态仓储接口 - 用于存储和查询用户对消息的私有行为

@@ -98,8 +98,8 @@ impl WebhookHookFactory {
 #[derive(Serialize)]
 struct WebhookContextPayload<'a> {
     tenant_id: &'a str,
-    session_id: Option<&'a str>,
-    session_type: Option<&'a str>,
+    conversation_id: Option<&'a str>,
+    conversation_type: Option<&'a str>,
     message_type: Option<&'a str>,
     sender_id: Option<&'a str>,
     trace_id: Option<&'a str>,
@@ -195,8 +195,8 @@ fn build_headers(
 fn webhook_context<'a>(ctx: &'a HookContext) -> WebhookContextPayload<'a> {
     WebhookContextPayload {
         tenant_id: &ctx.tenant_id,
-        session_id: ctx.session_id.as_deref(),
-        session_type: ctx.session_type.as_deref(),
+        conversation_id: ctx.conversation_id.as_deref(),
+        conversation_type: ctx.conversation_type.as_deref(),
         message_type: ctx.message_type.as_deref(),
         sender_id: ctx.sender_id.as_deref(),
         trace_id: ctx.trace_id.as_deref(),

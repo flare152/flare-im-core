@@ -26,7 +26,7 @@ pub struct MediaService {
     metadata_store: Option<MetadataStoreRef>,
     metadata_cache: Option<MetadataCacheRef>,
     reference_store: Option<ReferenceStoreRef>,
-    upload_session_store: Option<UploadSessionStoreRef>,
+    upload_conversation_store: Option<UploadSessionStoreRef>,
     local_store: Option<LocalStoreRef>,
     config: MediaDomainConfig,
 }
@@ -37,7 +37,7 @@ impl MediaService {
         metadata_store: Option<MetadataStoreRef>,
         reference_store: Option<ReferenceStoreRef>,
         metadata_cache: Option<MetadataCacheRef>,
-        upload_session_store: Option<UploadSessionStoreRef>,
+        upload_conversation_store: Option<UploadSessionStoreRef>,
         local_store: Option<LocalStoreRef>,
         config: MediaDomainConfig,
     ) -> Self {
@@ -54,7 +54,7 @@ impl MediaService {
             metadata_store,
             metadata_cache,
             reference_store,
-            upload_session_store,
+            upload_conversation_store,
             local_store,
             config,
         }
@@ -65,7 +65,7 @@ impl MediaService {
         &self,
         init: MultipartUploadInit,
     ) -> Result<MultipartUploadSession> {
-        let Some(store) = &self.upload_session_store else {
+        let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
 
@@ -115,7 +115,7 @@ impl MediaService {
         &self,
         chunk: MultipartChunkPayload,
     ) -> Result<MultipartUploadSession> {
-        let Some(store) = &self.upload_session_store else {
+        let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
 
@@ -181,7 +181,7 @@ impl MediaService {
 
     #[instrument(skip(self))]
     pub async fn complete_multipart_upload(&self, upload_id: &str) -> Result<MediaFileMetadata> {
-        let Some(store) = &self.upload_session_store else {
+        let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
 
@@ -240,7 +240,7 @@ impl MediaService {
 
     #[instrument(skip(self))]
     pub async fn abort_multipart_upload(&self, upload_id: &str) -> Result<()> {
-        let Some(store) = &self.upload_session_store else {
+        let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
 

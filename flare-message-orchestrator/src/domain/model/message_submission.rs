@@ -12,7 +12,7 @@ use crate::domain::model::message_kind::MessageProfile;
 #[derive(Clone, Debug)]
 pub struct MessageDefaults {
     pub default_business_type: String,
-    pub default_session_type: String,
+    pub default_conversation_type: String,
     pub default_sender_type: String,
     pub default_tenant_id: Option<String>,
 }
@@ -27,8 +27,8 @@ pub struct MessageSubmission {
 
 impl MessageSubmission {
     pub fn prepare(mut request: StoreMessageRequest, defaults: &MessageDefaults) -> Result<Self> {
-        if request.session_id.is_empty() {
-            return Err(anyhow!("session_id is required"));
+        if request.conversation_id.is_empty() {
+            return Err(anyhow!("conversation_id is required"));
         }
 
         let mut message = request
@@ -36,8 +36,8 @@ impl MessageSubmission {
             .take()
             .ok_or_else(|| anyhow!("message payload is required"))?;
 
-        if message.session_id.is_empty() {
-            message.session_id = request.session_id.clone();
+        if message.conversation_id.is_empty() {
+            message.conversation_id = request.conversation_id.clone();
         }
 
         if message.id.is_empty() {
@@ -65,13 +65,13 @@ impl MessageSubmission {
             message.business_type = defaults.default_business_type.clone();
         }
 
-        // session_type 是 i32 枚举，0 表示未设置（Unspecified）
-        if message.session_type == 0 {
-            // 将字符串类型的默认 session_type 转换为 i32 枚举
-            message.session_type = match defaults.default_session_type.as_str() {
-                "single" => 1,  // SessionType::Single
-                "group" => 2,   // SessionType::Group
-                "channel" => 3, // SessionType::Channel
+        // conversation_type 是 i32 枚举，0 表示未设置（Unspecified）
+        if message.conversation_type == 0 {
+            // 将字符串类型的默认 conversation_type 转换为 i32 枚举
+            message.conversation_type = match defaults.default_conversation_type.as_str() {
+                "single" => 1,  // ConversationType::Single
+                "group" => 2,   // ConversationType::Group
+                "channel" => 3, // ConversationType::Channel
                 _ => 1,         // 默认为 Single
             };
         }
@@ -104,7 +104,7 @@ impl MessageSubmission {
             .extra
             .get("shard_key")
             .cloned()
-            .unwrap_or_else(|| request.session_id.clone());
+            .unwrap_or_else(|| request.conversation_id.clone());
         message
             .extra
             .entry("shard_key".to_string())
@@ -170,7 +170,7 @@ impl MessageSubmission {
         let message_id = message.id.clone();
 
         let kafka_payload = StoreMessageRequest {
-            session_id: request.session_id,
+            conversation_id: request.conversation_id,
             message: Some(message.clone()),
             sync: request.sync,
             context: request.context,

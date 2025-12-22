@@ -5,13 +5,13 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
-use flare_proto::session::session_service_client::SessionServiceClient;
-use flare_proto::session::*;
+use flare_proto::conversation::conversation_service_client::ConversationServiceClient;
+use flare_proto::conversation::*;
 
 use flare_server_core::discovery::ServiceClient;
 
 /// gRPC会话服务客户端
-pub struct GrpcSessionClient {
+pub struct GrpcConversationClient {
     /// 服务客户端（用于服务发现）
     service_client: Option<Arc<Mutex<ServiceClient>>>,
     /// 服务名称
@@ -20,7 +20,7 @@ pub struct GrpcSessionClient {
     direct_address: Option<String>,
 }
 
-impl GrpcSessionClient {
+impl GrpcConversationClient {
     /// 创建新的gRPC会话服务客户端
     pub fn new(service_name: String) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl GrpcSessionClient {
     }
 
     /// 获取gRPC客户端
-    async fn get_client(&self) -> Result<SessionServiceClient<Channel>, Status> {
+    async fn get_client(&self) -> Result<ConversationServiceClient<Channel>, Status> {
         if let Some(service_client) = &self.service_client {
             let mut client = service_client.lock().await;
             let channel = client.get_channel().await.map_err(|e| {
@@ -58,7 +58,7 @@ impl GrpcSessionClient {
                     e
                 ))
             })?;
-            Ok(SessionServiceClient::new(channel))
+            Ok(ConversationServiceClient::new(channel))
         } else if let Some(ref address) = self.direct_address {
             let channel = Channel::from_shared(address.clone())
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
@@ -67,7 +67,7 @@ impl GrpcSessionClient {
                 .map_err(|e| {
                     Status::unavailable(format!("Failed to connect to {}: {}", address, e))
                 })?;
-            Ok(SessionServiceClient::new(channel))
+            Ok(ConversationServiceClient::new(channel))
         } else {
             // 使用服务名称进行直连（假设服务名称可以直接解析）
             let channel = Channel::from_shared(self.service_name.clone())
@@ -80,26 +80,26 @@ impl GrpcSessionClient {
                         self.service_name, e
                     ))
                 })?;
-            Ok(SessionServiceClient::new(channel))
+            Ok(ConversationServiceClient::new(channel))
         }
     }
 
     /// 会话引导
-    pub async fn session_bootstrap(
+    pub async fn conversation_bootstrap(
         &self,
-        request: Request<SessionBootstrapRequest>,
-    ) -> Result<Response<SessionBootstrapResponse>, Status> {
+        request: Request<ConversationBootstrapRequest>,
+    ) -> Result<Response<ConversationBootstrapResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.session_bootstrap(request).await
+        client.conversation_bootstrap(request).await
     }
 
     /// 列出会话
-    pub async fn list_sessions(
+    pub async fn list_conversations(
         &self,
-        request: Request<ListSessionsRequest>,
-    ) -> Result<Response<ListSessionsResponse>, Status> {
+        request: Request<ListConversationsRequest>,
+    ) -> Result<Response<ListConversationsResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.list_sessions(request).await
+        client.list_conversations(request).await
     }
 
     /// 同步消息
@@ -112,21 +112,21 @@ impl GrpcSessionClient {
     }
 
     /// 会话增量同步
-    pub async fn sync_sessions(
+    pub async fn sync_conversations(
         &self,
-        request: Request<flare_proto::common::SyncSessionsRequest>,
-    ) -> Result<Response<flare_proto::common::SyncSessionsResponse>, Status> {
+        request: Request<flare_proto::common::SyncConversationsRequest>,
+    ) -> Result<Response<flare_proto::common::SyncConversationsResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.sync_sessions(request).await
+        client.sync_conversations(request).await
     }
 
     /// 会话全量恢复
-    pub async fn get_all_sessions(
+    pub async fn get_all_conversations(
         &self,
-        request: Request<flare_proto::common::SessionSyncAllRequest>,
-    ) -> Result<Response<flare_proto::common::SessionSyncAllResponse>, Status> {
+        request: Request<flare_proto::common::ConversationSyncAllRequest>,
+    ) -> Result<Response<flare_proto::common::ConversationSyncAllResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.get_all_sessions(request).await
+        client.get_all_conversations(request).await
     }
 
     /// 更新游标
@@ -148,39 +148,39 @@ impl GrpcSessionClient {
     }
 
     /// 强制会话同步
-    pub async fn force_session_sync(
+    pub async fn force_conversation_sync(
         &self,
-        request: Request<ForceSessionSyncRequest>,
-    ) -> Result<Response<ForceSessionSyncResponse>, Status> {
+        request: Request<ForceConversationSyncRequest>,
+    ) -> Result<Response<ForceConversationSyncResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.force_session_sync(request).await
+        client.force_conversation_sync(request).await
     }
 
     /// 创建会话
-    pub async fn create_session(
+    pub async fn create_conversation(
         &self,
-        request: Request<CreateSessionRequest>,
-    ) -> Result<Response<CreateSessionResponse>, Status> {
+        request: Request<CreateConversationRequest>,
+    ) -> Result<Response<CreateConversationResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.create_session(request).await
+        client.create_conversation(request).await
     }
 
     /// 更新会话
-    pub async fn update_session(
+    pub async fn update_conversation(
         &self,
-        request: Request<UpdateSessionRequest>,
-    ) -> Result<Response<UpdateSessionResponse>, Status> {
+        request: Request<UpdateConversationRequest>,
+    ) -> Result<Response<UpdateConversationResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.update_session(request).await
+        client.update_conversation(request).await
     }
 
     /// 删除会话
-    pub async fn delete_session(
+    pub async fn delete_conversation(
         &self,
-        request: Request<DeleteSessionRequest>,
-    ) -> Result<Response<DeleteSessionResponse>, Status> {
+        request: Request<DeleteConversationRequest>,
+    ) -> Result<Response<DeleteConversationResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.delete_session(request).await
+        client.delete_conversation(request).await
     }
 
     /// 管理参与者
@@ -202,12 +202,12 @@ impl GrpcSessionClient {
     }
 
     /// 搜索会话
-    pub async fn search_sessions(
+    pub async fn search_conversations(
         &self,
-        request: Request<SearchSessionsRequest>,
-    ) -> Result<Response<SearchSessionsResponse>, Status> {
+        request: Request<SearchConversationsRequest>,
+    ) -> Result<Response<SearchConversationsResponse>, Status> {
         let mut client = self.get_client().await?;
-        client.search_sessions(request).await
+        client.search_conversations(request).await
     }
 
     /// 创建话题

@@ -223,7 +223,7 @@ impl StorageWriterConsumer {
                                 }
                             }
                             let store = flare_proto::storage::StoreMessageRequest {
-                                session_id: msg.session_id.clone(),
+                                conversation_id: msg.conversation_id.clone(),
                                 message: Some(msg.clone()),
                                 sync: false,
                                 context: Default::default(),

@@ -62,7 +62,7 @@ impl ConnectionDomainService {
     ) -> Result<String> {
         use uuid::Uuid;
 
-        let session_id = Uuid::new_v4().to_string();
+        let conversation_id = Uuid::new_v4().to_string();
         let server_id = self.config.gateway_id.clone();
 
         // 构建 metadata，包含 gateway_id
@@ -83,7 +83,7 @@ impl ConnectionDomainService {
             device_priority: 2, // Normal 优先级
             token_version: 0,
             initial_quality: None,
-            resume_session_id: String::new(),
+            resume_conversation_id: String::new(),
         };
 
         // 调用 Signaling Online 服务，添加超时保护
@@ -98,10 +98,10 @@ impl ConnectionDomainService {
                 if response.success {
                     info!(
                         user_id = %user_id,
-                        session_id = %response.session_id,
+                        conversation_id = %response.conversation_id,
                         "Connection registered successfully"
                     );
-                    Ok(response.session_id)
+                    Ok(response.conversation_id)
                 } else {
                     warn!(
                         user_id = %user_id,
@@ -147,11 +147,11 @@ impl ConnectionDomainService {
     pub async fn unregister_connection(
         &self,
         user_id: &str,
-        session_id: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> Result<()> {
         let logout_request = LogoutRequest {
             user_id: user_id.to_string(),
-            session_id: session_id.unwrap_or("").to_string(),
+            conversation_id: conversation_id.unwrap_or("").to_string(),
             context: None,
             tenant: None,
         };
@@ -180,11 +180,11 @@ impl ConnectionDomainService {
     ///
     /// 向 Signaling Online 服务发送心跳，保持连接活跃
     #[instrument(skip(self), fields(user_id))]
-    pub async fn refresh_heartbeat(&self, user_id: &str, session_id: &str) -> Result<()> {
+    pub async fn refresh_heartbeat(&self, user_id: &str, conversation_id: &str) -> Result<()> {
         // 从链接质量服务获取当前连接质量
         let current_quality = self
             .quality_service
-            .get_quality(session_id)
+            .get_quality(conversation_id)
             .await
             .map(|metrics| flare_proto::common::ConnectionQuality {
                 rtt_ms: metrics.rtt_ms,
@@ -196,7 +196,7 @@ impl ConnectionDomainService {
 
         let heartbeat_request = HeartbeatRequest {
             user_id: user_id.to_string(),
-            session_id: session_id.to_string(),
+            conversation_id: conversation_id.to_string(),
             context: None,
             tenant: None,
             current_quality,
@@ -212,7 +212,7 @@ impl ConnectionDomainService {
             Ok(Ok(_)) => {
                 tracing::debug!(
                     user_id = %user_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Heartbeat sent successfully"
                 );
                 Ok(())
@@ -221,7 +221,7 @@ impl ConnectionDomainService {
                 warn!(
                     error = %e,
                     user_id = %user_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Failed to send heartbeat"
                 );
                 Err(
@@ -232,7 +232,7 @@ impl ConnectionDomainService {
             Err(_) => {
                 warn!(
                     user_id = %user_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Timeout sending heartbeat (3s)"
                 );
                 Err(

@@ -9,14 +9,14 @@
 //! use flare_im_core::service_names::*;
 //!
 //! // 服务注册
-//! register_service_only(SESSION, addr, None).await?;
+//! register_service_only(CONVERSATION, addr, None).await?;
 //!
 //! // 服务发现
-//! let discover = create_discover(SESSION).await?;
+//! let discover = create_discover(CONVERSATION).await?;
 //!
 //! // 配置加载时使用常量作为默认值
-//! let session_service = env::var("SESSION_SERVICE")
-//!     .unwrap_or_else(|_| SESSION.to_string());
+//! let conversation_service = env::var("CONVERSATION_SERVICE")
+//!     .unwrap_or_else(|_| CONVERSATION.to_string());
 //! ```
 //!
 //! ## 命名规范
@@ -31,18 +31,18 @@
 //!
 //! 虽然建议使用常量，但为了支持不同环境部署，可以通过环境变量覆盖：
 //! - 格式: `{SERVICE_NAME}_SERVICE` 或 `{SERVICE_NAME}_SERVICE_NAME`
-//! - 例如: `SESSION_SERVICE=flare-session-dev` （开发环境）
-//! - 例如: `SESSION_SERVICE=flare-session-prod` （生产环境）
+//! - 例如: `CONVERSATION_SERVICE=flare-conversation-dev` （开发环境）
+//! - 例如: `CONVERSATION_SERVICE=flare-conversation-prod` （生产环境）
 //!
 //! **注意**：即使使用环境变量覆盖，服务名也必须遵循命名规范，且注册和发现必须使用相同的服务名。
 
 /// Flare IM 微服务服务名定义
 pub mod service_names {
-    /// Session 服务名
+    /// Conversation 服务名
     ///
     /// 用于会话管理、参与者查询等功能
-    /// 注册路径: `flare/flare-session`
-    pub const SESSION: &str = "flare-session";
+    /// 注册路径: `flare/flare-conversation`
+    pub const CONVERSATION: &str = "flare-conversation";
 
     /// Signaling Online 服务名
     ///
@@ -123,7 +123,7 @@ pub mod service_names {
 pub fn validate_service_name(name: &str) -> bool {
     matches!(
         name,
-        service_names::SESSION
+        service_names::CONVERSATION
             | service_names::SIGNALING_ONLINE
             | service_names::SIGNALING_ROUTE
             | service_names::PUSH_SERVER
@@ -143,7 +143,7 @@ pub fn validate_service_name(name: &str) -> bool {
 ///
 /// 用于从环境变量读取服务名（支持覆盖）
 pub fn service_name_env_var(service_name: &str) -> String {
-    // 将 "flare-session" 转换为 "SESSION_SERVICE"
+    // 将 "flare-conversation" 转换为 "CONVERSATION_SERVICE"
     let upper = service_name.to_uppercase().replace("FLARE-", "");
     format!("{}_SERVICE", upper.replace("-", "_"))
 }

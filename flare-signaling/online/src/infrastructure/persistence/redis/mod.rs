@@ -4,6 +4,6 @@ pub mod signal_publisher;
 pub mod subscription;
 
 pub use presence_watcher::RedisPresenceWatcher;
-pub use repository::RedisSessionRepository;
+pub use repository::RedisConversationRepository;
 pub use signal_publisher::RedisSignalPublisher;
 pub use subscription::RedisSubscriptionRepository;

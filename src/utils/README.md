@@ -5,7 +5,7 @@
 ## 模块结构
 
 - `helpers.rs` - 服务启动辅助函数
-- 会话ID生成和验证功能已移至 `flare-core`，请使用 `flare_core::common::session_id`
+- 会话ID生成和验证功能已移至 `flare-core`，请使用 `flare_core::common::conversation_id`
 - `mod.rs` - 核心工具函数（时间戳、时间线、seq、未读数）
 
 ## 核心功能
@@ -96,27 +96,27 @@ embed_timeline_in_extra(&mut message, &timeline);
 **注意**：会话ID生成功能已移至 `flare-core`，客户端和服务端SDK都可以使用。
 
 ```rust
-use flare_core::common::session_id::*;
+use flare_core::common::conversation_id::*;
 
 // 生成单聊会话ID
-let session_id = generate_single_chat_session_id("user1", "user2");
+let conversation_id = generate_single_chat_conversation_id("user1", "user2");
 // 格式：1-<hash>
 
 // 生成群聊会话ID
-let session_id = generate_group_session_id("group123");
+let conversation_id = generate_group_conversation_id("group123");
 // 格式：2-group123
 
 // 生成AI助手会话ID
-let session_id = generate_ai_session_id("user1", "ai_service");
+let conversation_id = generate_ai_conversation_id("user1", "ai_service");
 // 格式：3-user1-ai_service
 
 // 验证会话ID
-let session_type = validate_session_id(&session_id)?;
-// 返回 SessionType
+let conversation_type = validate_conversation_id(&conversation_id)?;
+// 返回 ConversationType
 
 // 提取会话类型
-let session_type = extract_session_type(&session_id);
-// 返回 Option<SessionType>
+let conversation_type = extract_conversation_type(&conversation_id);
+// 返回 Option<ConversationType>
 ```
 
 ## 使用建议
@@ -124,7 +124,7 @@ let session_type = extract_session_type(&session_id);
 1. **Seq 操作**：统一使用 `extract_seq_from_message` 和 `embed_seq_in_message`，避免手动解析字符串
 2. **未读数计算**：使用 `calculate_unread_count` 确保计算逻辑一致，避免返回负数
 3. **时间戳转换**：使用工具函数确保转换逻辑正确，避免时区问题
-4. **会话ID生成**：使用 `flare_core::common::session_id` 模块的函数，确保格式一致（客户端和服务端SDK通用）
+4. **会话ID生成**：使用 `flare_core::common::conversation_id` 模块的函数，确保格式一致（客户端和服务端SDK通用）
 
 ## 测试
 

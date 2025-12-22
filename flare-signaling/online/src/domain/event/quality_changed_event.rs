@@ -2,11 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::DomainEvent;
-use crate::domain::value_object::{ConnectionQuality, DeviceId, SessionId, UserId};
+use crate::domain::value_object::{ConnectionQuality, DeviceId, ConnectionId, UserId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityChangedEvent {
-    pub session_id: SessionId,
+    pub conversation_id: ConnectionId,
     pub user_id: UserId,
     pub device_id: DeviceId,
     pub old_quality: Option<ConnectionQuality>,

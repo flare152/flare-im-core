@@ -347,7 +347,7 @@ impl PushDomainService {
             target_user_ids: vec![task.user_id.clone()],
             message: Some(flare_proto::common::Message {
                 id: task.message_id.clone(),
-                session_id: String::new(),
+                conversation_id: String::new(),
                 client_msg_id: String::new(),
                 sender_id: String::new(),
                 receiver_id: String::new(), // 离线推送：receiver_id 由任务决定
@@ -358,7 +358,7 @@ impl PushDomainService {
                     seconds: chrono::Utc::now().timestamp(),
                     nanos: 0,
                 }),
-                session_type: 1, // SessionType::Single = 1
+                conversation_type: 1, // ConversationType::Single = 1
                 message_type: 0, // MessageType::Unspecified = 0
                 business_type: String::new(),
                 content: message_content,

@@ -39,7 +39,7 @@ impl RedisSeqGenerator {
     }
 
     /// 从数据库获取会话的最大 seq
-    async fn get_max_seq_from_db(&self, session_id: &str) -> Result<i64> {
+    async fn get_max_seq_from_db(&self, conversation_id: &str) -> Result<i64> {
         let pool = self
             .db_pool
             .as_ref()
@@ -49,10 +49,10 @@ impl RedisSeqGenerator {
             r#"
             SELECT COALESCE(MAX(seq), 0)
             FROM messages
-            WHERE session_id = $1 AND seq IS NOT NULL
+            WHERE conversation_id = $1 AND seq IS NOT NULL
             "#,
         )
-        .bind(session_id)
+        .bind(conversation_id)
         .fetch_optional(pool.as_ref())
         .await
         .context("Failed to query max seq from database")?;
@@ -61,8 +61,8 @@ impl RedisSeqGenerator {
     }
 
     /// 初始化 Redis 计数器
-    async fn init_redis_counter(&self, session_id: &str, initial_value: i64) -> Result<()> {
-        let key = format!("seq:{}", session_id);
+    async fn init_redis_counter(&self, conversation_id: &str, initial_value: i64) -> Result<()> {
+        let key = format!("seq:{}", conversation_id);
         let mut conn = ConnectionManager::new(self.redis_client.as_ref().clone()).await?;
 
         // 使用 SET NX 只在 key 不存在时设置
@@ -74,15 +74,15 @@ impl RedisSeqGenerator {
 
 #[async_trait]
 impl SeqGeneratorTrait for RedisSeqGenerator {
-    async fn generate_seq(&self, session_id: &str) -> Result<i64> {
-        let key = format!("seq:{}", session_id);
+    async fn generate_seq(&self, conversation_id: &str) -> Result<i64> {
+        let key = format!("seq:{}", conversation_id);
         let mut conn = ConnectionManager::new(self.redis_client.as_ref().clone()).await?;
 
         // 1. 尝试从 Redis 获取（原子递增）
         match conn.incr::<&str, i64, i64>(&key, 1i64).await {
             Ok(seq) => {
                 debug!(
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     seq,
                     "Generated seq from Redis"
                 );
@@ -91,18 +91,18 @@ impl SeqGeneratorTrait for RedisSeqGenerator {
             Err(e) => {
                 warn!(
                     error = %e,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Redis INCR failed, falling back to database"
                 );
 
                 // 2. Redis 不可用时，从数据库获取最大 seq
-                let max_seq = self.get_max_seq_from_db(session_id).await?;
+                let max_seq = self.get_max_seq_from_db(conversation_id).await?;
 
                 // 3. 初始化 Redis 计数器（如果可能）
-                if let Err(init_err) = self.init_redis_counter(session_id, max_seq).await {
+                if let Err(init_err) = self.init_redis_counter(conversation_id, max_seq).await {
                     warn!(
                         error = %init_err,
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         "Failed to initialize Redis counter, will retry on next request"
                     );
                 }
@@ -110,7 +110,7 @@ impl SeqGeneratorTrait for RedisSeqGenerator {
                 // 4. 返回下一个 seq
                 let next_seq = max_seq + 1;
                 debug!(
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     max_seq,
                     next_seq,
                     "Generated seq from database fallback"
@@ -141,7 +141,7 @@ impl DatabaseSeqGenerator {
 
 #[async_trait]
 impl SeqGeneratorTrait for DatabaseSeqGenerator {
-    async fn generate_seq(&self, session_id: &str) -> Result<i64> {
+    async fn generate_seq(&self, conversation_id: &str) -> Result<i64> {
         // 使用数据库事务 + SELECT FOR UPDATE 保证原子性
         let mut tx = self.db_pool.begin().await?;
 
@@ -150,11 +150,11 @@ impl SeqGeneratorTrait for DatabaseSeqGenerator {
             r#"
             SELECT COALESCE(MAX(seq), 0)
             FROM messages
-            WHERE session_id = $1 AND seq IS NOT NULL
+            WHERE conversation_id = $1 AND seq IS NOT NULL
             FOR UPDATE
             "#,
         )
-        .bind(session_id)
+        .bind(conversation_id)
         .fetch_optional(&mut *tx)
         .await
         .context("Failed to query max seq from database")?;
@@ -169,7 +169,7 @@ impl SeqGeneratorTrait for DatabaseSeqGenerator {
         tx.commit().await?;
 
         debug!(
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             current_max,
             next_seq,
             "Generated seq from database"
@@ -199,19 +199,19 @@ mod tests {
         // 创建序列生成器
         let seq_generator = RedisSeqGenerator::new(redis_client, None);
 
-        let session_id = "test-session-redis-1";
+        let conversation_id = "test-session-redis-1";
 
         // 测试生成序列号
         let seq1 = seq_generator
-            .generate_seq(session_id)
+            .generate_seq(conversation_id)
             .await
             .expect("Failed to generate seq1");
         let seq2 = seq_generator
-            .generate_seq(session_id)
+            .generate_seq(conversation_id)
             .await
             .expect("Failed to generate seq2");
         let seq3 = seq_generator
-            .generate_seq(session_id)
+            .generate_seq(conversation_id)
             .await
             .expect("Failed to generate seq3");
 
@@ -241,12 +241,12 @@ mod tests {
         // 创建序列生成器
         let seq_generator = DatabaseSeqGenerator::new(db_pool);
 
-        let session_id = "test-session-db-1";
+        let conversation_id = "test-session-db-1";
 
         // 测试生成序列号
-        let seq1 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq1");
-        let seq2 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq2");
-        let seq3 = seq_generator.generate_seq(session_id).await.expect("Failed to generate seq3");
+        let seq1 = seq_generator.generate_seq(conversation_id).await.expect("Failed to generate seq1");
+        let seq2 = seq_generator.generate_seq(conversation_id).await.expect("Failed to generate seq2");
+        let seq3 = seq_generator.generate_seq(conversation_id).await.expect("Failed to generate seq3");
 
         // 验证递增性
         assert!(seq2 > seq1);

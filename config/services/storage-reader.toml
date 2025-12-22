@@ -2,7 +2,7 @@
 #
 # 配置说明：
 # - MongoDB 配置通过 mongo 字段引用 base.toml 中的 mongodb.primary
-# - Redis 配置通过 redis 字段引用 base.toml 中的 redis.session_store（可选）
+# - Redis 配置通过 redis 字段引用 base.toml 中的 redis.conversation_store（可选）
 # - 所有基础设施配置都在 base.toml 中定义
 
 [services.storage_reader]
@@ -11,7 +11,7 @@
 mongo = "primary"
 
 # Redis 配置（可选，用于缓存）
-# redis = "session_store"
+# redis = "conversation_store"
 
 # 查询配置
 default_page_size = 20

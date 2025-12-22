@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use crate::config::GatewayConfig;
 // use crate::interface::grpc::handler::{SimpleGatewayHandler, LightweightGatewayHandler};
 use crate::infrastructure::{
-    GrpcHookClient, GrpcMediaClient, GrpcMessageClient, GrpcOnlineClient, GrpcSessionClient,
+    GrpcHookClient, GrpcMediaClient, GrpcMessageClient, GrpcOnlineClient, GrpcConversationClient,
 };
 use crate::interface::grpc::handler::{LightweightGatewayHandler, SimpleGatewayHandler};
 
@@ -37,7 +37,7 @@ pub async fn initialize(
 
     // 2. 创建服务发现（使用常量，支持环境变量覆盖）
     use flare_im_core::service_names::{
-        HOOK_ENGINE, MEDIA, MESSAGE_ORCHESTRATOR, SESSION, SIGNALING_ONLINE, get_service_name,
+        HOOK_ENGINE, MEDIA, MESSAGE_ORCHESTRATOR, CONVERSATION, SIGNALING_ONLINE, get_service_name,
     };
 
     // 2.1 Media 服务发现
@@ -113,18 +113,18 @@ pub async fn initialize(
     };
 
     // 2.5 Session 服务发现
-    let session_service = get_service_name("SESSION");
-    let session_discover = flare_im_core::discovery::create_discover(&session_service)
+    let conversation_service = get_service_name("SESSION");
+    let session_discover = flare_im_core::discovery::create_discover(&conversation_service)
         .await
         .map_err(|e| {
             anyhow::anyhow!(
                 "Failed to create session service discover for {}: {}",
-                session_service,
+                conversation_service,
                 e
             )
         })?;
 
-    let session_service_client = if let Some(discover) = session_discover {
+    let conversation_service_client = if let Some(discover) = session_discover {
         Some(flare_server_core::discovery::ServiceClient::new(discover))
     } else {
         None
@@ -167,13 +167,13 @@ pub async fn initialize(
         Arc::new(GrpcOnlineClient::new(online_service.clone()))
     };
 
-    let session_client = if let Some(service_client) = session_service_client {
-        Arc::new(GrpcSessionClient::with_service_client(
+    let conversation_client = if let Some(service_client) = conversation_service_client {
+        Arc::new(GrpcConversationClient::with_service_client(
             service_client,
-            session_service.clone(),
+            conversation_service.clone(),
         ))
     } else {
-        Arc::new(GrpcSessionClient::new(session_service.clone()))
+        Arc::new(GrpcConversationClient::new(conversation_service.clone()))
     };
 
     // 4. 构建简单网关处理器
@@ -182,7 +182,7 @@ pub async fn initialize(
         hook_client.clone(),
         message_client.clone(),
         online_client.clone(),
-        session_client.clone(),
+        conversation_client.clone(),
     );
 
     // 5. 构建轻量级网关处理器
@@ -191,7 +191,7 @@ pub async fn initialize(
         hook_client,
         message_client,
         online_client,
-        session_client,
+        conversation_client,
     );
 
     Ok(ApplicationContext {

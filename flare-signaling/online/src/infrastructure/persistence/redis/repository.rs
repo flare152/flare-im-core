@@ -7,28 +7,28 @@ use redis::{AsyncCommands, aio::ConnectionManager};
 use serde_json::json;
 
 use crate::config::OnlineConfig;
-use crate::domain::aggregate::Session;
+use crate::domain::aggregate::Connection;
 use crate::domain::model::OnlineStatusRecord;
-use crate::domain::repository::SessionRepository;
+use crate::domain::repository::ConversationRepository;
 use crate::domain::value_object::{
-    ConnectionQuality, DeviceId, DevicePriority, SessionId, TokenVersion, UserId,
+    ConnectionQuality, DeviceId, DevicePriority, ConnectionId, TokenVersion, UserId,
 };
 use async_trait::async_trait;
 
-const SESSION_KEY_PREFIX: &str = "session";
+const CONNECTION_KEY_PREFIX: &str = "session";
 
-pub struct RedisSessionRepository {
+pub struct RedisConversationRepository {
     client: Arc<redis::Client>,
     config: Arc<OnlineConfig>,
 }
 
-impl RedisSessionRepository {
+impl RedisConversationRepository {
     pub fn new(client: Arc<redis::Client>, config: Arc<OnlineConfig>) -> Self {
         Self { client, config }
     }
 
-    fn session_key(&self, user_id: &str) -> String {
-        format!("{}:{}", SESSION_KEY_PREFIX, user_id)
+    fn connection_key(&self, user_id: &str) -> String {
+        format!("{}:{}", CONNECTION_KEY_PREFIX, user_id)
     }
 
     async fn connection(&self) -> Result<ConnectionManager> {
@@ -43,12 +43,12 @@ impl RedisSessionRepository {
 }
 
 #[async_trait]
-impl SessionRepository for RedisSessionRepository {
-    async fn save_session(&self, session: &Session) -> Result<()> {
+impl ConversationRepository for RedisConversationRepository {
+    async fn save_connection(&self, session: &Connection) -> Result<()> {
         let mut conn = self.connection().await?;
-        let key = self.session_key(session.user_id().as_str());
+        let key = self.connection_key(session.user_id().as_str());
         let value = json!({
-            "session_id": session.id().as_str(),
+            "conversation_id": session.id().as_str(),
             "gateway_id": session.gateway_id(),
             "server_id": session.server_id(),
             "device_id": session.device_id().as_str(),
@@ -68,17 +68,17 @@ impl SessionRepository for RedisSessionRepository {
         Ok(())
     }
 
-    async fn remove_session(&self, session_id: &SessionId, user_id: &UserId) -> Result<()> {
+    async fn remove_connection(&self, conversation_id: &ConnectionId, user_id: &UserId) -> Result<()> {
         let mut conn = self.connection().await?;
-        let key = self.session_key(user_id.as_str());
+        let key = self.connection_key(user_id.as_str());
         let _: usize = conn.del(&key).await.context("failed to delete session")?;
-        tracing::info!(session_id = %session_id.as_ref(), user_id = %user_id.as_ref(), "session removed from redis");
+        tracing::info!(conversation_id = %conversation_id.as_ref(), user_id = %user_id.as_ref(), "session removed from redis");
         Ok(())
     }
 
-    async fn touch_session(&self, user_id: &UserId) -> Result<()> {
+    async fn touch_connection(&self, user_id: &UserId) -> Result<()> {
         let mut conn = self.connection().await?;
-        let key = self.session_key(user_id.as_str());
+        let key = self.connection_key(user_id.as_str());
         let _: bool = conn
             .expire(&key, self.config.redis_ttl_seconds as i64)
             .await
@@ -93,7 +93,7 @@ impl SessionRepository for RedisSessionRepository {
         let mut conn = self.connection().await?;
         let mut result = HashMap::new();
         for user_id in user_ids {
-            let key = self.session_key(user_id.as_str());
+            let key = self.connection_key(user_id.as_str());
             let value: Option<String> = conn.get(&key).await.context("failed to read session")?;
             if let Some(payload) = value {
                 let json: serde_json::Value =
@@ -133,22 +133,22 @@ impl SessionRepository for RedisSessionRepository {
         Ok(result)
     }
 
-    async fn get_user_sessions(&self, user_id: &UserId) -> Result<Vec<Session>> {
+    async fn get_user_connections(&self, user_id: &UserId) -> Result<Vec<Connection>> {
         let mut conn = self.connection().await?;
-        let key = self.session_key(user_id.as_str());
+        let key = self.connection_key(user_id.as_str());
         let value: Option<String> = conn.get(&key).await.context("failed to read session")?;
 
         if let Some(payload) = value {
             let json: serde_json::Value =
                 serde_json::from_str(&payload).context("failed to decode session json")?;
 
-            let session_id_str = json
-                .get("session_id")
+            let conversation_id_str = json
+                .get("conversation_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let session_id =
-                SessionId::from_string(session_id_str).map_err(|e| anyhow::anyhow!(e))?;
+            let conversation_id =
+                ConnectionId::from_string(conversation_id_str).map_err(|e| anyhow::anyhow!(e))?;
 
             let device_id_str = json
                 .get("device_id")
@@ -197,8 +197,8 @@ impl SessionRepository for RedisSessionRepository {
 
             let connection_quality: Option<ConnectionQuality> = None;
 
-            let session = Session::reconstitute(
-                session_id,
+            let session = Connection::reconstitute(
+                conversation_id,
                 user_id.clone(),
                 device_id,
                 device_platform,
@@ -217,13 +217,13 @@ impl SessionRepository for RedisSessionRepository {
         }
     }
 
-    async fn remove_user_sessions(
+    async fn remove_user_connections(
         &self,
         user_id: &UserId,
         device_ids: Option<&[DeviceId]>,
     ) -> Result<()> {
         let mut conn = self.connection().await?;
-        let key = self.session_key(user_id.as_str());
+        let key = self.connection_key(user_id.as_str());
 
         // 如果指定了设备ID列表，需要检查设备是否匹配
         // 当前实现中，一个用户只有一个会话，所以直接删除
@@ -254,12 +254,12 @@ impl SessionRepository for RedisSessionRepository {
         Ok(())
     }
 
-    async fn get_session_by_device(
+    async fn get_connection_by_device(
         &self,
         user_id: &UserId,
         device_id: &DeviceId,
-    ) -> Result<Option<Session>> {
-        let sessions = self.get_user_sessions(user_id).await?;
+    ) -> Result<Option<Connection>> {
+        let sessions = self.get_user_connections(user_id).await?;
         Ok(sessions
             .into_iter()
             .find(|s| s.device_id().as_str() == device_id.as_str()))
@@ -270,7 +270,7 @@ impl SessionRepository for RedisSessionRepository {
         user_id: &str,
     ) -> Result<Vec<crate::domain::model::DeviceInfo>> {
         let sessions = self
-            .get_user_sessions(&UserId::new(user_id.to_string()).unwrap())
+            .get_user_connections(&UserId::new(user_id.to_string()).unwrap())
             .await?;
         let devices: Vec<crate::domain::model::DeviceInfo> = sessions
             .into_iter()
@@ -291,7 +291,7 @@ impl SessionRepository for RedisSessionRepository {
         device_id: &str,
     ) -> Result<Option<crate::domain::model::DeviceInfo>> {
         let session = self
-            .get_session_by_device(
+            .get_connection_by_device(
                 &UserId::new(user_id.to_string()).unwrap(),
                 &DeviceId::new(device_id.to_string()).unwrap(),
             )

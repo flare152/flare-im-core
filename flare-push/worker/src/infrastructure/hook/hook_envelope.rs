@@ -48,8 +48,8 @@ pub fn build_delivery_context(default_tenant_id: &str, task: &PushDispatchTask) 
 
     HookContext {
         tenant_id,
-        session_id: Some(format!("{SESSION_TYPE_PUSH}:{}", task.user_id)),
-        session_type: Some(SESSION_TYPE_PUSH.to_string()),
+        conversation_id: Some(format!("{SESSION_TYPE_PUSH}:{}", task.user_id)),
+        conversation_type: Some(SESSION_TYPE_PUSH.to_string()),
         message_type: Some(message_type),
         sender_id: None,
         trace_id: task.context.as_ref().and_then(|ctx| ctx.trace_id.clone()),

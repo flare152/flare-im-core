@@ -13,18 +13,18 @@ BEGIN;
 -- 阶段1：添加新字段（向后兼容）
 -- ============================================================================
 
--- 1.1 优化 sessions 表（Conversation）
-ALTER TABLE sessions 
+-- 1.1 优化 conversations 表（Conversation）
+ALTER TABLE conversations 
     ADD COLUMN IF NOT EXISTS last_message_id TEXT,
     ADD COLUMN IF NOT EXISTS last_message_seq BIGINT,
     ADD COLUMN IF NOT EXISTS is_destroyed BOOLEAN DEFAULT FALSE;
 
-COMMENT ON COLUMN sessions.last_message_id IS '最后一条消息ID';
-COMMENT ON COLUMN sessions.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
-COMMENT ON COLUMN sessions.is_destroyed IS '会话是否被解散（群聊）';
+COMMENT ON COLUMN conversations.last_message_id IS '最后一条消息ID';
+COMMENT ON COLUMN conversations.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
+COMMENT ON COLUMN conversations.is_destroyed IS '会话是否被解散（群聊）';
 
--- 1.2 优化 session_participants 表（ConversationUser）
-ALTER TABLE session_participants
+-- 1.2 优化 conversation_participants 表（ConversationUser）
+ALTER TABLE conversation_participants
     ADD COLUMN IF NOT EXISTS last_read_msg_seq BIGINT DEFAULT 0,
     ADD COLUMN IF NOT EXISTS last_sync_msg_seq BIGINT DEFAULT 0,
     ADD COLUMN IF NOT EXISTS unread_count INTEGER DEFAULT 0,
@@ -32,23 +32,23 @@ ALTER TABLE session_participants
     ADD COLUMN IF NOT EXISTS mute_until TIMESTAMP WITH TIME ZONE,
     ADD COLUMN IF NOT EXISTS quit_at TIMESTAMP WITH TIME ZONE;
 
-COMMENT ON COLUMN session_participants.last_read_msg_seq IS '已读消息的seq（用于未读数计算）';
-COMMENT ON COLUMN session_participants.last_sync_msg_seq IS '多端同步游标（最后同步的seq）';
-COMMENT ON COLUMN session_participants.unread_count IS '未读数（冗余字段，用于快速查询）';
-COMMENT ON COLUMN session_participants.is_deleted IS '用户侧"删除会话"（软删除）';
-COMMENT ON COLUMN session_participants.mute_until IS '静音截止时间（NULL表示未静音）';
-COMMENT ON COLUMN session_participants.quit_at IS '退出时间（NULL表示仍在会话中）';
+COMMENT ON COLUMN conversation_participants.last_read_msg_seq IS '已读消息的seq（用于未读数计算）';
+COMMENT ON COLUMN conversation_participants.last_sync_msg_seq IS '多端同步游标（最后同步的seq）';
+COMMENT ON COLUMN conversation_participants.unread_count IS '未读数（冗余字段，用于快速查询）';
+COMMENT ON COLUMN conversation_participants.is_deleted IS '用户侧"删除会话"（软删除）';
+COMMENT ON COLUMN conversation_participants.mute_until IS '静音截止时间（NULL表示未静音）';
+COMMENT ON COLUMN conversation_participants.quit_at IS '退出时间（NULL表示仍在会话中）';
 
 -- 1.3 迁移 muted 字段到 mute_until（如果存在）
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'session_participants' AND column_name = 'muted'
+        WHERE table_name = 'conversation_participants' AND column_name = 'muted'
     ) THEN
         -- 如果 muted = true，设置 mute_until = '2099-12-31'（永久静音）
         -- 如果 muted = false，设置 mute_until = NULL
-        UPDATE session_participants
+        UPDATE conversation_participants
         SET mute_until = CASE 
             WHEN muted = true THEN '2099-12-31'::TIMESTAMP WITH TIME ZONE
             ELSE NULL
@@ -57,7 +57,7 @@ BEGIN
         
         -- 注意：不删除 muted 字段，保持向后兼容
         -- 如果需要删除，请先确保没有代码依赖
-        -- ALTER TABLE session_participants DROP COLUMN muted;
+        -- ALTER TABLE conversation_participants DROP COLUMN muted;
     END IF;
 END $$;
 
@@ -120,13 +120,13 @@ COMMENT ON COLUMN message_state.updated_at IS '更新时间';
 -- ============================================================================
 
 -- 3.1 为现有消息填充 seq
--- 策略：按 session_id 分组，按 timestamp 排序，分配 seq
+-- 策略：按 conversation_id 分组，按 timestamp 排序，分配 seq
 WITH ranked_messages AS (
     SELECT 
         id,
-        session_id,
+        conversation_id,
         timestamp,
-        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp, id) AS seq
+        ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY timestamp, id) AS seq
     FROM messages
     WHERE seq IS NULL
 )
@@ -135,41 +135,41 @@ SET seq = rm.seq
 FROM ranked_messages rm
 WHERE m.id = rm.id;
 
--- 3.2 更新 sessions.last_message_seq
-UPDATE sessions s
+-- 3.2 更新 conversations.last_message_seq
+UPDATE conversations s
 SET last_message_seq = (
     SELECT MAX(seq) 
     FROM messages 
-    WHERE session_id = s.session_id
+    WHERE conversation_id = s.conversation_id
     AND seq IS NOT NULL
 )
 WHERE last_message_seq IS NULL;
 
--- 3.3 更新 sessions.last_message_id
-UPDATE sessions s
+-- 3.3 更新 conversations.last_message_id
+UPDATE conversations s
 SET last_message_id = (
     SELECT id
     FROM messages
-    WHERE session_id = s.session_id
+    WHERE conversation_id = s.conversation_id
     AND seq = s.last_message_seq
     LIMIT 1
 )
 WHERE last_message_id IS NULL
 AND last_message_seq IS NOT NULL;
 
--- 3.4 初始化 session_participants 的游标和未读数
-UPDATE session_participants sp
+-- 3.4 初始化 conversation_participants 的游标和未读数
+UPDATE conversation_participants sp
 SET 
     last_sync_msg_seq = COALESCE((
         SELECT MAX(seq) 
         FROM messages 
-        WHERE session_id = sp.session_id
+        WHERE conversation_id = sp.conversation_id
         AND seq IS NOT NULL
     ), 0),
     unread_count = COALESCE((
         SELECT COUNT(*) 
         FROM messages 
-        WHERE session_id = sp.session_id 
+        WHERE conversation_id = sp.conversation_id 
         AND seq > COALESCE(sp.last_read_msg_seq, 0)
         AND seq IS NOT NULL
     ), 0)
@@ -181,7 +181,7 @@ UPDATE user_sync_cursor usc
 SET last_synced_seq = COALESCE((
     SELECT MAX(seq)
     FROM messages
-    WHERE session_id = usc.session_id
+    WHERE conversation_id = usc.conversation_id
     AND seq IS NOT NULL
     AND timestamp <= to_timestamp(usc.last_synced_ts / 1000)
 ), 0)
@@ -193,18 +193,18 @@ WHERE last_synced_seq IS NULL OR last_synced_seq = 0;
 
 -- 4.1 创建索引（在数据迁移完成后）
 
--- sessions 表索引
-CREATE INDEX IF NOT EXISTS idx_sessions_last_message_id ON sessions(last_message_id) WHERE last_message_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sessions_last_message_seq ON sessions(last_message_seq) WHERE last_message_seq IS NOT NULL;
+-- conversations 表索引
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message_id ON conversations(last_message_id) WHERE last_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message_seq ON conversations(last_message_seq) WHERE last_message_seq IS NOT NULL;
 
--- session_participants 表索引
-CREATE INDEX IF NOT EXISTS idx_session_participants_last_read_seq ON session_participants(last_read_msg_seq);
-CREATE INDEX IF NOT EXISTS idx_session_participants_last_sync_seq ON session_participants(last_sync_msg_seq);
-CREATE INDEX IF NOT EXISTS idx_session_participants_unread_count ON session_participants(unread_count);
-CREATE INDEX IF NOT EXISTS idx_session_participants_is_deleted ON session_participants(is_deleted) WHERE is_deleted = true;
+-- conversation_participants 表索引
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_last_read_seq ON conversation_participants(last_read_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_last_sync_seq ON conversation_participants(last_sync_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_unread_count ON conversation_participants(unread_count);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_is_deleted ON conversation_participants(is_deleted) WHERE is_deleted = true;
 
 -- messages 表索引
-CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq) WHERE seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_seq ON messages(conversation_id, seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_expire_at ON messages(expire_at) WHERE expire_at IS NOT NULL;
 
@@ -217,14 +217,14 @@ CREATE INDEX IF NOT EXISTS idx_message_state_burned_at ON message_state(burned_a
 CREATE INDEX IF NOT EXISTS idx_message_state_user_message ON message_state(user_id, message_id);
 
 -- user_sync_cursor 表索引
-CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_device ON user_sync_cursor(user_id, device_id, session_id) WHERE device_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_device ON user_sync_cursor(user_id, device_id, conversation_id) WHERE device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_last_synced_seq ON user_sync_cursor(last_synced_seq) WHERE last_synced_seq > 0;
 
 -- 4.2 添加 NOT NULL 约束（可选，在数据迁移完成后）
 -- 注意：由于现有数据可能为NULL，这里先不添加NOT NULL约束
 -- 如果需要，可以在数据迁移完成后手动添加：
 -- ALTER TABLE messages ALTER COLUMN seq SET NOT NULL;
--- ALTER TABLE sessions ALTER COLUMN last_message_seq SET NOT NULL;
+-- ALTER TABLE conversations ALTER COLUMN last_message_seq SET NOT NULL;
 
 -- ============================================================================
 -- 阶段5：创建触发器（自动更新时间戳）
@@ -258,12 +258,12 @@ COMMIT;
 -- 验证新字段是否添加成功
 DO $$
 BEGIN
-    -- 检查 sessions 表新字段
+    -- 检查 conversations 表新字段
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'sessions' AND column_name = 'last_message_seq'
+        WHERE table_name = 'conversations' AND column_name = 'last_message_seq'
     ) THEN
-        RAISE EXCEPTION 'Migration failed: sessions.last_message_seq not found';
+        RAISE EXCEPTION 'Migration failed: conversations.last_message_seq not found';
     END IF;
     
     -- 检查 message_state 表是否存在

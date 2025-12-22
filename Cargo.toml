@@ -18,7 +18,7 @@ members = [
     # 通信核心层 - 存储系统
     "flare-storage/writer",
     "flare-storage/reader",
-    "flare-session",
+    "flare-conversation",
 
     # 消息编排服务
     "flare-message-orchestrator",

@@ -118,7 +118,7 @@ impl KafkaMessagePublisher {
                 tracing::error!(
                     payload_size = encoded.len(),
                     max_size = MAX_MESSAGE_SIZE,
-                    session_id = %payload.session_id,
+                    conversation_id = %payload.conversation_id,
                     message_id = payload.message.as_ref().map(|m| m.id.as_str()).unwrap_or("unknown"),
                     "Storage message size exceeds maximum allowed size"
                 );
@@ -140,7 +140,7 @@ impl KafkaMessagePublisher {
             .map(|(encoded_idx, &payload_idx)| {
                 FutureRecord::to(&self.config.kafka_storage_topic)
                     .payload(&encoded_payloads[encoded_idx])
-                    .key(&payloads[payload_idx].session_id)
+                    .key(&payloads[payload_idx].conversation_id)
             })
             .collect();
 

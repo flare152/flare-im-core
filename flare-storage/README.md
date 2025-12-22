@@ -57,7 +57,7 @@ Kafka (storage-messages)
 - ✅ `GetMessage` - 获取单条消息
 - ✅ `DeleteMessage` - 删除消息（软删除）
 - ✅ `RecallMessage` - 撤回消息（支持时间限制）
-- ✅ `ClearSession` - 清理会话消息
+- ✅ `ClearConversation` - 清理会话消息
 - ✅ `MarkMessageRead` - 标记消息已读（支持阅后即焚）
 
 **待实现的接口**：
@@ -93,7 +93,7 @@ flare-storage/writer/
 │   │   │   ├── redis_idempotency.rs # Redis 幂等性
 │   │   │   ├── mongo_store.rs     # MongoDB 实时存储
 │   │   │   ├── postgres_store.rs  # PostgreSQL 归档存储
-│   │   │   ├── session_state.rs   # 会话状态更新
+│   │   │   ├── conversation_state.rs   # 会话状态更新
 │   │   │   └── user_cursor.rs     # 用户游标更新
 │   │   └── messaging/
 │   │       └── ack_publisher.rs   # ACK 发布器
@@ -124,7 +124,7 @@ flare-storage/reader/
 │   │   └── commands/
 │   │       ├── delete_message.rs   # 删除消息服务
 │   │       ├── recall_message.rs   # 撤回消息服务
-│   │       ├── clear_session.rs    # 清理会话服务
+│   │       ├── clear_conversation.rs    # 清理会话服务
 │   │       └── mark_read.rs        # 标记已读服务
 │   ├── domain/
 │   │   └── mod.rs                 # 领域接口定义
@@ -183,7 +183,7 @@ flare-storage/reader/
 CREATE TABLE messages (
     message_id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL DEFAULT '',
-    session_id VARCHAR(64) NOT NULL,
+    conversation_id VARCHAR(64) NOT NULL,
     sender_id VARCHAR(64) NOT NULL,
     sender_type VARCHAR(32) NOT NULL DEFAULT 'user',
     receiver_id VARCHAR(64) DEFAULT '',
@@ -192,7 +192,7 @@ CREATE TABLE messages (
     content_type VARCHAR(32) NOT NULL DEFAULT 'text/plain',
     message_type INTEGER NOT NULL DEFAULT 0,
     business_type VARCHAR(64) NOT NULL DEFAULT '',
-    session_type VARCHAR(32) NOT NULL DEFAULT 'single',
+    conversation_type VARCHAR(32) NOT NULL DEFAULT 'single',
     status VARCHAR(32) NOT NULL DEFAULT 'sent',
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -208,14 +208,14 @@ CREATE TABLE messages (
 );
 
 -- 索引
-CREATE INDEX idx_messages_tenant_session_time 
-ON messages (tenant_id, session_id, timestamp DESC);
+CREATE INDEX idx_messages_tenant_conversation_time 
+ON messages (tenant_id, conversation_id, timestamp DESC);
 
 CREATE INDEX idx_messages_tenant_sender_time 
 ON messages (tenant_id, sender_id, timestamp DESC);
 
-CREATE INDEX idx_messages_session_id 
-ON messages (session_id, timestamp DESC);
+CREATE INDEX idx_messages_conversation_id 
+ON messages (conversation_id, timestamp DESC);
 
 -- TimescaleDB Hypertable（可选）
 SELECT create_hypertable('messages', 'timestamp', 

@@ -7,6 +7,8 @@ pub struct RouteConfig {
     pub default_services: Vec<(String, String)>,
     /// Online 服务的 gRPC 端点
     pub online_service_endpoint: Option<String>,
+    /// 默认租户ID
+    pub default_tenant_id: Option<String>,
     /// 分片数（默认 64）
     pub shard_count: usize,
     /// 会话级 QPS 限制（默认 50）
@@ -49,6 +51,7 @@ impl RouteConfig {
                 default
             },
             online_service_endpoint: env::var("ONLINE_SERVICE_ENDPOINT").ok(),
+            default_tenant_id: env::var("DEFAULT_TENANT_ID").ok(),
             shard_count: env::var("ROUTER_SHARD_COUNT")
                 .ok()
                 .and_then(|v| v.parse().ok())

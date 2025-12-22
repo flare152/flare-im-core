@@ -44,7 +44,7 @@ impl MessageStorageQueryHandler {
     }
 
     /// 查询消息列表
-    #[instrument(skip(self), fields(session_id = %query.session_id))]
+    #[instrument(skip(self), fields(conversation_id = %query.conversation_id))]
     pub async fn handle_query_messages(&self, query: QueryMessagesQuery) -> Result<Vec<Message>> {
         let start_time = if query.start_time == 0 {
             None
@@ -60,7 +60,7 @@ impl MessageStorageQueryHandler {
 
         self.storage
             .query_messages(
-                &query.session_id,
+                &query.conversation_id,
                 None, // user_id
                 start_time,
                 end_time,
@@ -70,7 +70,7 @@ impl MessageStorageQueryHandler {
     }
 
     /// 查询消息列表（带分页结果）
-    #[instrument(skip(self), fields(session_id = %query.session_id))]
+    #[instrument(skip(self), fields(conversation_id = %query.conversation_id))]
     pub async fn handle_query_messages_with_pagination(
         &self,
         query: QueryMessagesQuery,
@@ -92,7 +92,7 @@ impl MessageStorageQueryHandler {
             // 使用领域服务处理分页查询
             domain_service
                 .query_messages(
-                    &query.session_id,
+                    &query.conversation_id,
                     start_time,
                     end_time,
                     query.limit,
@@ -117,7 +117,7 @@ impl MessageStorageQueryHandler {
             let messages = self
                 .storage
                 .query_messages(
-                    &query.session_id,
+                    &query.conversation_id,
                     None, // user_id
                     start_time,
                     end_time,
@@ -191,7 +191,7 @@ impl MessageStorageQueryHandler {
     }
 
     /// 基于 seq 查询消息列表
-    #[instrument(skip(self), fields(session_id = %query.session_id, after_seq = query.after_seq, before_seq = ?query.before_seq))]
+    #[instrument(skip(self), fields(conversation_id = %query.conversation_id, after_seq = query.after_seq, before_seq = ?query.before_seq))]
     pub async fn handle_query_messages_by_seq(
         &self,
         query: QueryMessagesBySeqQuery,
@@ -200,7 +200,7 @@ impl MessageStorageQueryHandler {
             // 使用领域服务（包含业务逻辑）
             domain_service
                 .query_messages_by_seq(
-                    &query.session_id,
+                    &query.conversation_id,
                     query.user_id.as_deref(),
                     query.after_seq,
                     query.before_seq,
@@ -212,7 +212,7 @@ impl MessageStorageQueryHandler {
             let messages = self
                 .storage
                 .query_messages_by_seq(
-                    &query.session_id,
+                    &query.conversation_id,
                     query.user_id.as_deref(),
                     query.after_seq,
                     query.before_seq,

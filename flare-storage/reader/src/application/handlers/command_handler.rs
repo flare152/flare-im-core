@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tracing::instrument;
 
 use crate::application::commands::{
-    ClearSessionCommand, DeleteMessageCommand, DeleteMessageForUserCommand, ExportMessagesCommand,
+    ClearConversationCommand, DeleteMessageCommand, DeleteMessageForUserCommand, ExportMessagesCommand,
     MarkReadCommand, RecallMessageCommand, SetMessageAttributesCommand,
 };
 use crate::domain::service::MessageStorageDomainService;
@@ -116,16 +116,16 @@ impl MessageStorageCommandHandler {
     }
 
     /// 清理会话
-    #[instrument(skip(self), fields(session_id = %command.session_id))]
-    pub async fn handle_clear_session(&self, command: ClearSessionCommand) -> Result<usize> {
+    #[instrument(skip(self), fields(conversation_id = %command.conversation_id))]
+    pub async fn handle_clear_conversation(&self, command: ClearConversationCommand) -> Result<usize> {
         let user_id = command.user_id.as_deref().unwrap_or("");
         self.domain_service
-            .clear_session(&command.session_id, user_id, command.clear_before_time)
+            .clear_session(&command.conversation_id, user_id, command.clear_before_time)
             .await
     }
 
     /// 导出消息（异步任务，返回任务ID）
-    #[instrument(skip(self), fields(session_id = %command.session_id))]
+    #[instrument(skip(self), fields(conversation_id = %command.conversation_id))]
     pub async fn handle_export_messages(&self, command: ExportMessagesCommand) -> Result<String> {
         // 生成唯一的导出任务ID
         use uuid::Uuid;
@@ -167,14 +167,14 @@ impl MessageStorageCommandHandler {
     ) -> Result<()> {
         tracing::info!(
             task_id = %task_id,
-            session_id = %command.session_id,
+            conversation_id = %command.conversation_id,
             "Starting export task"
         );
 
         // 查询消息
         let messages = domain_service
             .query_messages(
-                &command.session_id,
+                &command.conversation_id,
                 command.start_time.unwrap_or(0),
                 command.end_time.unwrap_or(0),
                 command.limit.unwrap_or(100),
@@ -190,7 +190,7 @@ impl MessageStorageCommandHandler {
         // 简化实现：只是记录导出的消息数量
         tracing::info!(
             task_id = %task_id,
-            session_id = %command.session_id,
+            conversation_id = %command.conversation_id,
             message_count = messages.messages.len(),
             "Exported messages"
         );

@@ -50,7 +50,7 @@ graph TB
     subgraph "存储层"
         StorageWriter[flare-storage/writer<br/>持久化消费者]
         StorageReader[flare-storage/reader<br/>查询服务]
-        Session[flare-session<br/>会话与同步]
+        Conversation[flare-conversation<br/>会话与同步]
     end
 
     subgraph "推送层"
@@ -93,8 +93,8 @@ graph TB
     Kafka --> PushServer
     PushServer --> PushWorker
 
-    Session --> Redis
-    Session --> PostgreSQL
+    Conversation --> Redis
+    Conversation --> PostgreSQL
     Online --> Redis
 
     Media --> MinIO
@@ -102,7 +102,7 @@ graph TB
 
     Route -.-> Consul
     Online -.-> Consul
-    Session -.-> Consul
+    Conversation -.-> Consul
 ```
 
 ### 微服务矩阵
@@ -117,7 +117,7 @@ graph TB
 | **flare-hook-engine** | Hook引擎 | hooks.v1.HookExtensionService | Hook配置管理、执行调度、扩展支持 |
 | **flare-storage/writer** | 持久化消费者 | 无（Kafka消费者） | Kafka事件消费、数据库持久化、批量写入 |
 | **flare-storage/reader** | 存储查询服务 | storage.v1.StorageReaderService | 消息查询、撤回删除、历史回溯 |
-| **flare-session** | 会话同步服务 | session.v1.SessionService | 会话元数据、用户光标、多端同步 |
+| **flare-conversation** | 会话同步服务 | conversation.v1.ConversationService | 会话元数据、用户光标、多端同步 |
 | **flare-push/proxy** | 推送代理 | push.v1.PushService | 推送请求接收、任务入队、前置校验 |
 | **flare-push/server** | 推送调度器 | push.v1.PushSchedulerService | 在线判断、任务生成、Worker分配 |
 | **flare-push/worker** | 推送执行器 | push.v1.PushWorkerService | 即时/离线推送、ACK上报、失败重试 |
@@ -175,7 +175,7 @@ flare-im-core/
 ├── flare-storage/              # 存储子系统
 │   ├── writer/                # 持久化消费者
 │   └── reader/                # 查询服务
-├── flare-session/              # 会话同步服务
+├── flare-conversation/              # 会话同步服务
 ├── flare-push/                # 推送子系统
 │   ├── proxy/                 # 推送代理
 │   ├── server/                # 推送调度
@@ -250,7 +250,7 @@ cargo run --bin flare-message-orchestrator
 | **signaling-route** | 50052 | gRPC |
 | **message-orchestrator** | 50053 | gRPC |
 | **storage-reader** | 50054 | gRPC |
-| **session-service** | 50055 | gRPC |
+| **conversation-service** | 50055 | gRPC |
 | **push-proxy** | 50056 | gRPC |
 | **push-server** | 50057 | gRPC |
 | **media-service** | 50058 | gRPC |

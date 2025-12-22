@@ -1,0 +1,324 @@
+use chrono::{DateTime, TimeZone, Utc};
+use std::collections::HashMap;
+
+use flare_proto::common::Message;
+use flare_proto::common::{
+    ConflictResolution as ProtoConflictResolution, DeviceState as ProtoDeviceState,
+    ConversationLifecycleState as ProtoConversationLifecycleState,
+    ConversationVisibility as ProtoConversationVisibility,
+};
+
+#[derive(Clone, Debug)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub conversation_type: Option<String>,
+    pub business_type: Option<String>,
+    pub last_message_id: Option<String>,
+    pub last_message_time: Option<DateTime<Utc>>,
+    pub last_sender_id: Option<String>,
+    pub last_message_type: Option<i32>,
+    pub last_content_type: Option<String>,
+    pub unread_count: i32,
+    pub metadata: HashMap<String, String>,
+    pub server_cursor_ts: Option<i64>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DevicePresence {
+    pub device_id: String,
+    pub device_platform: Option<String>,
+    pub state: DeviceState,
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub enum DeviceState {
+    Unspecified,
+    Online,
+    Offline,
+    Conflict,
+}
+
+impl DeviceState {
+    pub fn from_str(state: &str) -> Self {
+        match state {
+            "online" => DeviceState::Online,
+            "offline" => DeviceState::Offline,
+            "conflict" => DeviceState::Conflict,
+            _ => DeviceState::Unspecified,
+        }
+    }
+
+    pub fn as_proto(&self) -> i32 {
+        match self {
+            DeviceState::Unspecified => ProtoDeviceState::Unspecified as i32,
+            DeviceState::Online => ProtoDeviceState::Online as i32,
+            DeviceState::Offline => ProtoDeviceState::Offline as i32,
+            DeviceState::Conflict => ProtoDeviceState::Conflict as i32,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConversationBootstrapResult {
+    pub summaries: Vec<ConversationSummary>,
+    pub recent_messages: Vec<Message>,
+    pub cursor_map: HashMap<String, i64>,
+    pub policy: ConversationPolicy,
+}
+
+#[derive(Clone, Debug)]
+pub struct MessageSyncResult {
+    pub messages: Vec<Message>,
+    pub next_cursor: Option<String>,
+    pub server_cursor_ts: Option<i64>,
+    /// 基于 seq 的游标（可选，用于优化性能）
+    pub server_cursor_seq: Option<i64>,
+}
+
+pub fn millis_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
+    Some(Utc.timestamp_millis_opt(ms).single()?)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictResolutionPolicy {
+    Unspecified,
+    Exclusive,
+    PlatformExclusive,
+    Coexist,
+    ForceLogout,
+}
+
+impl ConflictResolutionPolicy {
+    pub fn as_proto(&self) -> i32 {
+        match self {
+            ConflictResolutionPolicy::Unspecified => ProtoConflictResolution::Unspecified as i32,
+            ConflictResolutionPolicy::Exclusive => ProtoConflictResolution::Exclusive as i32,
+            ConflictResolutionPolicy::PlatformExclusive => {
+                ProtoConflictResolution::PlatformExclusive as i32
+            }
+            ConflictResolutionPolicy::Coexist => ProtoConflictResolution::Coexist as i32,
+            ConflictResolutionPolicy::ForceLogout => ProtoConflictResolution::ForceLogout as i32,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConflictResolutionPolicy::Unspecified => "unspecified",
+            ConflictResolutionPolicy::Exclusive => "exclusive",
+            ConflictResolutionPolicy::PlatformExclusive => "platform_exclusive",
+            ConflictResolutionPolicy::Coexist => "coexist",
+            ConflictResolutionPolicy::ForceLogout => "force_logout",
+        }
+    }
+
+    pub fn from_proto(value: i32) -> Self {
+        match ProtoConflictResolution::try_from(value).ok() {
+            Some(ProtoConflictResolution::Exclusive) => Self::Exclusive,
+            Some(ProtoConflictResolution::PlatformExclusive) => Self::PlatformExclusive,
+            Some(ProtoConflictResolution::Coexist) => Self::Coexist,
+            Some(ProtoConflictResolution::ForceLogout) => Self::ForceLogout,
+            _ => Self::Unspecified,
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "exclusive" => Some(Self::Exclusive),
+            "platform-exclusive" | "platform_exclusive" => Some(Self::PlatformExclusive),
+            "coexist" => Some(Self::Coexist),
+            "force-logout" | "force_logout" => Some(Self::ForceLogout),
+            "unspecified" => Some(Self::Unspecified),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConversationPolicy {
+    pub conflict_resolution: ConflictResolutionPolicy,
+    pub max_devices: i32,
+    pub allow_anonymous: bool,
+    pub allow_history_sync: bool,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Conversation {
+    pub conversation_id: String,
+    pub conversation_type: String,
+    pub business_type: String,
+    pub display_name: Option<String>,
+    pub attributes: HashMap<String, String>,
+    pub participants: Vec<ConversationParticipant>,
+    pub visibility: ConversationVisibility,
+    pub lifecycle_state: ConversationLifecycleState,
+    pub policy: Option<ConversationPolicy>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConversationParticipant {
+    pub user_id: String,
+    pub roles: Vec<String>,
+    pub muted: bool,
+    pub pinned: bool,
+    pub attributes: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationVisibility {
+    Unspecified,
+    Private,
+    Tenant,
+    Public,
+}
+
+impl ConversationVisibility {
+    pub fn from_proto(value: i32) -> Self {
+        match ProtoConversationVisibility::try_from(value).ok() {
+            Some(ProtoConversationVisibility::Private) => Self::Private,
+            Some(ProtoConversationVisibility::Tenant) => Self::Tenant,
+            Some(ProtoConversationVisibility::Public) => Self::Public,
+            _ => Self::Unspecified,
+        }
+    }
+
+    pub fn as_proto(&self) -> i32 {
+        match self {
+            ConversationVisibility::Unspecified => ProtoConversationVisibility::Unspecified as i32,
+            ConversationVisibility::Private => ProtoConversationVisibility::Private as i32,
+            ConversationVisibility::Tenant => ProtoConversationVisibility::Tenant as i32,
+            ConversationVisibility::Public => ProtoConversationVisibility::Public as i32,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConversationVisibility::Unspecified => "unspecified",
+            ConversationVisibility::Private => "private",
+            ConversationVisibility::Tenant => "tenant",
+            ConversationVisibility::Public => "public",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationLifecycleState {
+    Unspecified,
+    Active,
+    Suspended,
+    Archived,
+    Deleted,
+}
+
+impl ConversationLifecycleState {
+    pub fn from_proto(value: i32) -> Self {
+        match ProtoConversationLifecycleState::try_from(value).ok() {
+            Some(ProtoConversationLifecycleState::ConversationLifecycleActive) => Self::Active,
+            Some(ProtoConversationLifecycleState::ConversationLifecycleSuspended) => Self::Suspended,
+            Some(ProtoConversationLifecycleState::ConversationLifecycleArchived) => Self::Archived,
+            Some(ProtoConversationLifecycleState::ConversationLifecycleDeleted) => Self::Deleted,
+            _ => Self::Unspecified,
+        }
+    }
+
+    pub fn as_proto(&self) -> i32 {
+        match self {
+            ConversationLifecycleState::Unspecified => ProtoConversationLifecycleState::Unspecified as i32,
+            ConversationLifecycleState::Active => {
+                ProtoConversationLifecycleState::ConversationLifecycleActive as i32
+            }
+            ConversationLifecycleState::Suspended => {
+                ProtoConversationLifecycleState::ConversationLifecycleSuspended as i32
+            }
+            ConversationLifecycleState::Archived => {
+                ProtoConversationLifecycleState::ConversationLifecycleArchived as i32
+            }
+            ConversationLifecycleState::Deleted => {
+                ProtoConversationLifecycleState::ConversationLifecycleDeleted as i32
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConversationLifecycleState::Unspecified => "unspecified",
+            ConversationLifecycleState::Active => "active",
+            ConversationLifecycleState::Suspended => "suspended",
+            ConversationLifecycleState::Archived => "archived",
+            ConversationLifecycleState::Deleted => "deleted",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConversationFilter {
+    pub conversation_type: Option<String>,
+    pub business_type: Option<String>,
+    pub lifecycle_state: Option<ConversationLifecycleState>,
+    pub visibility: Option<ConversationVisibility>,
+    pub participant_user_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConversationSort {
+    pub field: String,
+    pub ascending: bool,
+}
+
+/// 话题（Thread）模型
+#[derive(Clone, Debug)]
+pub struct Thread {
+    pub id: String,
+    pub conversation_id: String,
+    pub root_message_id: String,
+    pub title: Option<String>,
+    pub creator_id: String,
+    pub reply_count: i32,
+    pub last_reply_at: Option<DateTime<Utc>>,
+    pub last_reply_id: Option<String>,
+    pub last_reply_user_id: Option<String>,
+    pub participant_count: i32,
+    pub is_pinned: bool,
+    pub is_locked: bool,
+    pub is_archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub extra: HashMap<String, String>,
+}
+
+/// 话题排序方式
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadSortOrder {
+    UpdatedDesc,    // 按更新时间降序（默认）
+    UpdatedAsc,     // 按更新时间升序
+    ReplyCountDesc, // 按回复数降序
+}
+
+/// 会话领域配置值对象（只包含领域相关的配置）
+#[derive(Clone, Debug)]
+pub struct ConversationDomainConfig {
+    /// 最近消息限制（默认值）
+    pub recent_message_limit: i32,
+    /// Bootstrap 最大会话数（默认 100，避免响应过大）
+    pub max_bootstrap_conversations: Option<usize>,
+}
+
+impl ConversationDomainConfig {
+    pub fn new(recent_message_limit: i32) -> Self {
+        Self {
+            recent_message_limit,
+            max_bootstrap_conversations: Some(100),
+        }
+    }
+
+    pub fn default() -> Self {
+        Self {
+            recent_message_limit: 20,
+            max_bootstrap_conversations: Some(100),
+        }
+    }
+}

@@ -78,15 +78,15 @@ impl PushDomainService {
 
                         let ctx = HookContext {
                             tenant_id,
-                            session_id: request.message.as_ref().map(|m| m.session_id.clone()),
-                            session_type: request.message.as_ref().map(|m| {
-                                let session_type_str = match m.session_type {
+                            conversation_id: request.message.as_ref().map(|m| m.conversation_id.clone()),
+                            conversation_type: request.message.as_ref().map(|m| {
+                                let conversation_type_str = match m.conversation_type {
                                     1 => "single".to_string(),
                                     2 => "group".to_string(),
                                     3 => "broadcast".to_string(),
                                     _ => "unknown".to_string(),
                                 };
-                                session_type_str
+                                conversation_type_str
                             }),
                             message_type: request.message.as_ref().map(|m| {
                                 let message_type_str = match m.message_type {
@@ -132,24 +132,24 @@ impl PushDomainService {
                             conversation_id: request
                                 .message
                                 .as_ref()
-                                .map(|m| m.session_id.clone())
+                                .map(|m| m.conversation_id.clone())
                                 .unwrap_or_default(),
                             sender_id: request
                                 .message
                                 .as_ref()
                                 .map(|m| m.sender_id.clone())
                                 .unwrap_or_default(),
-                            session_type: request
+                            conversation_type: request
                                 .message
                                 .as_ref()
                                 .map(|m| {
-                                    let session_type_str = match m.session_type {
+                                    let conversation_type_str = match m.conversation_type {
                                         1 => "single".to_string(),
                                         2 => "group".to_string(),
                                         3 => "broadcast".to_string(),
                                         _ => "unknown".to_string(),
                                     };
-                                    Some(session_type_str)
+                                    Some(conversation_type_str)
                                 })
                                 .flatten(),
                             message_type: request
@@ -273,8 +273,8 @@ impl PushDomainService {
 
                         let ctx = HookContext {
                             tenant_id,
-                            session_id: None,
-                            session_type: None,
+                            conversation_id: None,
+                            conversation_type: None,
                             message_type: Some("notification".to_string()),
                             sender_id: None, // 通知推送没有明确的发送者
                             trace_id: Some(task_id.clone()),
@@ -302,7 +302,7 @@ impl PushDomainService {
                             client_message_id: None,
                             conversation_id: "push_notification".to_string(),
                             sender_id: "system".to_string(), // 系统发送的通知
-                            session_type: None,
+                            conversation_type: None,
                             message_type: Some("notification".to_string()),
                             persisted_at: std::time::SystemTime::now(),
                             metadata: if let Some(options) = &request.options {

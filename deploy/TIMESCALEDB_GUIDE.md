@@ -59,7 +59,7 @@ SELECT create_hypertable('messages', 'timestamp',
 ```sql
 CREATE TABLE messages (
     id VARCHAR(255) PRIMARY KEY,
-    session_id VARCHAR(255) NOT NULL,
+    conversation_id VARCHAR(255) NOT NULL,
     sender_id VARCHAR(255) NOT NULL,
     receiver_ids JSONB,
     content BYTEA,
@@ -71,10 +71,10 @@ CREATE TABLE messages (
 
 ### 索引
 
-- `idx_messages_session_id`: 会话ID索引
+- `idx_messages_conversation_id`: 会话ID索引
 - `idx_messages_timestamp`: 时间戳索引
 - `idx_messages_sender_id`: 发送者ID索引
-- `idx_messages_session_timestamp`: 会话+时间复合索引
+- `idx_messages_conversation_timestamp`: 会话+时间复合索引
 
 ---
 
@@ -85,7 +85,7 @@ CREATE TABLE messages (
 ```sql
 -- 查询最近 7 天的消息
 SELECT * FROM messages
-WHERE session_id = 'session_123'
+WHERE conversation_id = 'conversation_123'
   AND timestamp >= NOW() - INTERVAL '7 days'
 ORDER BY timestamp DESC
 LIMIT 100;
@@ -154,7 +154,7 @@ SELECT add_compression_policy('messages', INTERVAL '7 days');
 ### 1. 查询优化
 
 - ✅ 使用时间范围查询（利用分区裁剪）
-- ✅ 使用复合索引（session_id + timestamp）
+- ✅ 使用复合索引（conversation_id + timestamp）
 - ✅ 使用连续聚合视图（统计查询）
 
 ### 2. 写入优化

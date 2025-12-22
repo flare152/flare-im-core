@@ -67,8 +67,8 @@ impl Default for HookGroup {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HookContext {
     pub tenant_id: String,
-    pub session_id: Option<String>,
-    pub session_type: Option<String>,
+    pub conversation_id: Option<String>,
+    pub conversation_type: Option<String>,
     pub message_type: Option<String>,
     pub sender_id: Option<String>,
     pub trace_id: Option<String>,
@@ -90,13 +90,13 @@ impl HookContext {
         }
     }
 
-    pub fn with_session<T: Into<String>>(mut self, session_id: T) -> Self {
-        self.session_id = Some(session_id.into());
+    pub fn with_session<T: Into<String>>(mut self, conversation_id: T) -> Self {
+        self.conversation_id = Some(conversation_id.into());
         self
     }
 
-    pub fn with_session_type<T: Into<String>>(mut self, ty: T) -> Self {
-        self.session_type = Some(ty.into());
+    pub fn with_conversation_type<T: Into<String>>(mut self, ty: T) -> Self {
+        self.conversation_type = Some(ty.into());
         self
     }
 
@@ -186,7 +186,7 @@ pub struct MessageRecord {
     pub client_message_id: Option<String>,
     pub conversation_id: String,
     pub sender_id: String,
-    pub session_type: Option<String>,
+    pub conversation_type: Option<String>,
     pub message_type: Option<String>,
     pub persisted_at: SystemTime,
     #[serde(default)]
@@ -287,17 +287,17 @@ pub trait RecallHook: Send + Sync {
     async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome;
 }
 
-/// GetSessionParticipants Hook Trait
+/// GetConversationParticipants Hook Trait
 ///
 /// 业务系统可以通过实现此 Hook 来提供会话参与者列表
 /// 如果 Hook 未实现或返回错误，系统将降级到数据库查询
 #[async_trait]
-pub trait GetSessionParticipantsHook: Send + Sync {
+pub trait GetConversationParticipantsHook: Send + Sync {
     /// 获取会话的所有参与者
     ///
     /// # 参数
     /// * `ctx` - Hook上下文
-    /// * `session_id` - 会话ID
+    /// * `conversation_id` - 会话ID
     ///
     /// # 返回
     /// * `Ok(Some(participants))` - 成功获取参与者列表
@@ -306,7 +306,7 @@ pub trait GetSessionParticipantsHook: Send + Sync {
     async fn get_participants(
         &self,
         ctx: &HookContext,
-        session_id: &str,
+        conversation_id: &str,
     ) -> anyhow::Result<Option<Vec<String>>>;
 }
 

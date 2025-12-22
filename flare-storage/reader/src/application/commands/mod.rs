@@ -17,8 +17,8 @@ pub struct RecallMessageCommand {
 
 /// 清理会话命令
 #[derive(Debug, Clone)]
-pub struct ClearSessionCommand {
-    pub session_id: String,
+pub struct ClearConversationCommand {
+    pub conversation_id: String,
     pub user_id: Option<String>,
     pub clear_before_time: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -35,7 +35,7 @@ pub struct MarkReadCommand {
 pub struct DeleteMessageForUserCommand {
     pub message_ids: Vec<String>,
     pub user_id: String,
-    pub session_id: String,
+    pub conversation_id: String,
     pub permanent: bool,
 }
 
@@ -50,7 +50,7 @@ pub struct SetMessageAttributesCommand {
 /// 导出消息命令
 #[derive(Debug, Clone)]
 pub struct ExportMessagesCommand {
-    pub session_id: String,
+    pub conversation_id: String,
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
     pub limit: Option<i32>,

@@ -22,11 +22,11 @@ impl RedisUserCursorRepository {
 
 #[async_trait]
 impl UserSyncCursorRepository for RedisUserCursorRepository {
-    async fn advance_cursor(&self, session_id: &str, user_id: &str, message_ts: i64) -> Result<()> {
+    async fn advance_cursor(&self, conversation_id: &str, user_id: &str, message_ts: i64) -> Result<()> {
         let mut conn = self.connection().await?;
         let cursor_key = format!("storage:user:cursor:{}", user_id);
         let _: () = conn
-            .hset(cursor_key, session_id, message_ts.to_string())
+            .hset(cursor_key, conversation_id, message_ts.to_string())
             .await?;
         Ok(())
     }

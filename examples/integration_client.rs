@@ -20,7 +20,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, warn};
 
-fn gen_single_session_id(a: &str, b: &str) -> String {
+fn gen_single_conversation_id(a: &str, b: &str) -> String {
     let (min_id, max_id) = if a <= b { (a, b) } else { (b, a) };
     let combined = format!("{}:{}", min_id, max_id);
     let mut hasher = Sha256::new();
@@ -55,10 +55,10 @@ async fn main() -> Result<()> {
     .with_app_version("1.0.0".to_string());
     let user_id = std::env::var("USER_ID").unwrap_or_else(|_| "123456".to_string());
     let peer_id = std::env::var("PEER_ID").unwrap_or_else(|_| "user1".to_string());
-    let session_id = std::env::var("SESSION_ID")
+    let conversation_id = std::env::var("SESSION_ID")
         .ok()
-        .unwrap_or_else(|| gen_single_session_id(&user_id, &peer_id));
-    info!(%user_id, %peer_id, %session_id, host = %default_host, "integration client start");
+        .unwrap_or_else(|| gen_single_conversation_id(&user_id, &peer_id));
+    info!(%user_id, %peer_id, %conversation_id, host = %default_host, "integration client start");
 
     let heartbeat = HeartbeatConfig::default()
         .with_interval(Duration::from_secs(30))
@@ -110,9 +110,9 @@ async fn main() -> Result<()> {
                         if message.is_empty() { continue; }
                         if message == "quit" || message == "exit" { break; }
                         let mut metadata = std::collections::HashMap::new();
-                        metadata.insert("session_id".to_string(), session_id.as_bytes().to_vec());
+                        metadata.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
                         metadata.insert("message_type".to_string(), "text".as_bytes().to_vec());
-                        metadata.insert("session_type".to_string(), "single".as_bytes().to_vec());
+                        metadata.insert("conversation_type".to_string(), "single".as_bytes().to_vec());
                         metadata.insert("business_type".to_string(), "chat".as_bytes().to_vec());
                         metadata.insert("receiver_id".to_string(), peer_id.as_bytes().to_vec());
                         let cmd = send_message(generate_message_id(), message.into_bytes(), Some(metadata), None);

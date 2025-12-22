@@ -46,6 +46,7 @@ use flare_core::client::{FlareClientBuilder, MessageListener};
 use flare_core::common::compression::CompressionAlgorithm;
 use flare_core::common::config_types::{HeartbeatConfig, TransportProtocol};
 use flare_core::common::device::{DeviceInfo, DevicePlatform};
+use flare_core::common::encryption::{Aes256GcmEncryptor, EncryptionUtil};
 use flare_core::common::error::Result;
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
 use flare_core::common::protocol::{
@@ -57,7 +58,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, warn};
 
 use chrono::{DateTime, Local, Utc};
-use flare_core::common::session_id::generate_single_chat_session_id;
+use flare_core::common::conversation::generate_single_chat_conversation_id;
 use flare_proto::common::{Message as ProtoMessage, MessageContent, ServerPacket};
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -87,6 +88,22 @@ async fn main() -> Result<()> {
     )
     .with_model(platform.as_str().to_string())
     .with_app_version("1.0.0".to_string());
+
+    // ============================================================
+    // 注册加密器（如果服务端启用了加密，客户端也需要注册）
+    // ============================================================
+    // 注意：在生产环境中，密钥应该从安全配置中读取，不要硬编码
+    // 这里使用与服务端相同的示例密钥（32 字节）
+    let encryption_key = b"01234567890123456789012345678901"; // 32 bytes for AES-256
+    match Aes256GcmEncryptor::new(encryption_key) {
+        Ok(encryptor) => {
+            EncryptionUtil::register_custom(Arc::new(encryptor));
+            info!("🔐 已注册 AES-256-GCM 加密器");
+        }
+        Err(e) => {
+            warn!(error = %e, "无法注册加密器，如果服务端启用加密，连接可能失败");
+        }
+    }
 
     // 解析用户ID和接收方ID
     let (user_id, recipient_id) = resolve_user_and_recipient_id().await;
@@ -220,7 +237,7 @@ async fn main() -> Result<()> {
                             extensions: vec![],
                         };
 
-                        // 构造完整的Message对象，将recipient_id作为session_id
+                        // 构造完整的Message对象，将recipient_id作为conversation_id
                         let timestamp = prost_types::Timestamp {
                             seconds: chrono::Utc::now().timestamp(),
                             nanos: 0,
@@ -234,11 +251,11 @@ async fn main() -> Result<()> {
                         let receiver_id = recipient_id.clone();
 
                         // 使用工具类生成单聊会话ID（格式：1-{hash}）
-                        let session_id = generate_single_chat_session_id(&user_id, &recipient_id);
+                        let conversation_id = generate_single_chat_conversation_id(&user_id, &recipient_id);
 
                         let msg = flare_proto::common::Message {
                             id: generate_message_id(),
-                            session_id,  // 使用正确的session_id格式
+                            conversation_id,  // 使用正确的conversation_id格式
                             client_msg_id: String::new(),
                             sender_id: user_id.clone(),
                             receiver_id: receiver_id.clone(), // 单聊：直接设置接收者ID
@@ -246,7 +263,7 @@ async fn main() -> Result<()> {
                             source: flare_proto::common::MessageSource::User as i32,
                             seq: 0,
                             timestamp: Some(timestamp.clone()),
-                            session_type: flare_proto::common::SessionType::Single as i32,
+                            conversation_type: flare_proto::common::ConversationType::Single as i32,
                             message_type: flare_proto::common::MessageType::Text as i32,
                             business_type: String::new(),
                             content: Some(message_content),
@@ -577,15 +594,15 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
                     }
                     return None;
                 }
-                Some(flare_proto::common::server_packet::Payload::SyncSessionsResp(_)) => {
+                Some(flare_proto::common::server_packet::Payload::SyncConversationsResp(_)) => {
                     // 会话同步响应，暂不处理
                     return None;
                 }
-                Some(flare_proto::common::server_packet::Payload::SyncSessionsAllResp(_)) => {
+                Some(flare_proto::common::server_packet::Payload::SyncConversationsAllResp(_)) => {
                     // 全量会话同步响应，暂不处理
                     return None;
                 }
-                Some(flare_proto::common::server_packet::Payload::GetSessionDetailResp(_)) => {
+                Some(flare_proto::common::server_packet::Payload::GetConversationDetailResp(_)) => {
                     // 会话详情响应，暂不处理
                     return None;
                 }
@@ -955,9 +972,9 @@ impl ChatListener {
 
         // 构建ACK metadata
         let mut metadata = std::collections::HashMap::new();
-        // 可以添加session_id等元数据
-        if let Some(session_id) = self.get_session_id_for_sender(sender_id) {
-            metadata.insert("session_id".to_string(), session_id.as_bytes().to_vec());
+        // 可以添加conversation_id等元数据
+        if let Some(conversation_id) = self.get_conversation_id_for_sender(sender_id) {
+            metadata.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
         }
 
         // 创建ACK命令
@@ -990,8 +1007,8 @@ impl ChatListener {
     }
 
     /// 获取会话ID（用于ACK metadata）
-    fn get_session_id_for_sender(&self, sender_id: &str) -> Option<String> {
+    fn get_conversation_id_for_sender(&self, sender_id: &str) -> Option<String> {
         // 使用工具类生成单聊会话ID（格式：1-{hash}，自动排序）
-        Some(generate_single_chat_session_id(&self.user_id, sender_id))
+        Some(generate_single_chat_conversation_id(&self.user_id, sender_id))
     }
 }

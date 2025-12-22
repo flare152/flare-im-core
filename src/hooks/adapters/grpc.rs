@@ -256,7 +256,7 @@ fn build_context(
         .attributes
         .get("corridor")
         .cloned()
-        .or_else(|| ctx.session_type.clone())
+        .or_else(|| ctx.conversation_type.clone())
         .unwrap_or_else(|| "messaging".to_string());
 
     let mut attributes = ctx.attributes.clone();
@@ -274,8 +274,8 @@ fn build_context(
     ProtoHookInvocationContext {
         request_context: build_request_context(ctx),
         tenant: Some(build_tenant_context(ctx)),
-        session_id: ctx.session_id.clone().unwrap_or_default(),
-        session_type: ctx.session_type.clone().unwrap_or_default(),
+        conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
+        conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
         corridor,
         tags: ctx.tags.clone(),
         attributes,
@@ -542,22 +542,22 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
 
     let mut message = ProtoStorageMessage::default();
     message.id = record.message_id.clone();
-    message.session_id = record.conversation_id.clone();
+    message.conversation_id = record.conversation_id.clone();
     message.sender_id = record.sender_id.clone();
-    message.session_type = record
-        .session_type
+    message.conversation_type = record
+        .conversation_type
         .as_deref()
         .map(|t| match t.to_ascii_lowercase().as_str() {
-            "single" | "session_type_single" | "1" => {
-                flare_proto::common::SessionType::Single as i32
+            "single" | "conversation_type_single" | "1" => {
+                flare_proto::common::ConversationType::Single as i32
             }
-            "group" | "session_type_group" | "2" => flare_proto::common::SessionType::Group as i32,
-            "channel" | "session_type_channel" | "3" => {
-                flare_proto::common::SessionType::Channel as i32
+            "group" | "conversation_type_group" | "2" => flare_proto::common::ConversationType::Group as i32,
+            "channel" | "conversation_type_channel" | "3" => {
+                flare_proto::common::ConversationType::Channel as i32
             }
-            _ => flare_proto::common::SessionType::Unspecified as i32,
+            _ => flare_proto::common::ConversationType::Unspecified as i32,
         })
-        .unwrap_or(flare_proto::common::SessionType::Unspecified as i32);
+        .unwrap_or(flare_proto::common::ConversationType::Unspecified as i32);
     message.extra = record.metadata.clone();
     message.timestamp = Some(persisted_ts.clone());
     message.message_type = record

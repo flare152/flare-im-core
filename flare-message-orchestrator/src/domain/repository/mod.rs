@@ -113,39 +113,39 @@ impl WalRepository for WalRepositoryItem {
     }
 }
 
-/// Session 仓储接口 - 用于确保 session 存在（Rust 2024: 原生异步 trait）
-pub trait SessionRepository: Send + Sync {
-    /// 确保 session 存在，如果不存在则创建
-    fn ensure_session(
+/// Conversation 仓储接口 - 用于确保 conversation 存在（Rust 2024: 原生异步 trait）
+pub trait ConversationRepository: Send + Sync {
+    /// 确保 conversation 存在，如果不存在则创建
+    fn ensure_conversation(
         &self,
-        session_id: &str,
-        session_type: &str,
+        conversation_id: &str,
+        conversation_type: &str,
         business_type: &str,
         participants: Vec<String>,
         tenant_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 
-/// SessionRepository 的枚举封装，用于在 Rust 2024 下避免 `dyn` + async trait 带来的
+/// ConversationRepository 的枚举封装，用于在 Rust 2024 下避免 `dyn` + async trait 带来的
 /// `E0038: trait is not dyn compatible` 问题。
 #[derive(Debug)]
-pub enum SessionRepositoryItem {
-    Grpc(Arc<crate::infrastructure::external::session_client::GrpcSessionClient>),
+pub enum ConversationRepositoryItem {
+    Grpc(Arc<crate::infrastructure::external::session_client::GrpcConversationClient>),
 }
 
-impl SessionRepository for SessionRepositoryItem {
-    fn ensure_session(
+impl ConversationRepository for ConversationRepositoryItem {
+    fn ensure_conversation(
         &self,
-        session_id: &str,
-        session_type: &str,
+        conversation_id: &str,
+        conversation_type: &str,
         business_type: &str,
         participants: Vec<String>,
         tenant_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         match self {
-            SessionRepositoryItem::Grpc(repo) => repo.ensure_session(
-                session_id,
-                session_type,
+            ConversationRepositoryItem::Grpc(repo) => repo.ensure_conversation(
+                conversation_id,
+                conversation_type,
                 business_type,
                 participants,
                 tenant_id,

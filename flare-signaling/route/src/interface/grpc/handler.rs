@@ -7,7 +7,7 @@ use flare_server_core::error::ErrorCode;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 
-use crate::infrastructure::OnlineServiceClient;
+use crate::infrastructure::{OnlineServiceClient, forwarder::MessageForwarder};
 use crate::util;
 
 /// Router 服务 gRPC 处理器
@@ -15,15 +15,20 @@ use crate::util;
 /// 职责：
 /// - 根据推送策略选择最优设备
 /// - 提供设备路由查询能力
+/// - 路由消息到业务系统（根据 SVID）
 /// - 无状态服务，所有数据实时从 Online 服务查询
 #[derive(Clone)]
 pub struct RouteHandler {
     online_client: Arc<OnlineServiceClient>,
+    message_forwarder: Arc<MessageForwarder>,
 }
 
 impl RouteHandler {
-    pub fn new(online_client: Arc<OnlineServiceClient>) -> Self {
-        Self { online_client }
+    pub fn new(online_client: Arc<OnlineServiceClient>, message_forwarder: Arc<MessageForwarder>) -> Self {
+        Self { 
+            online_client,
+            message_forwarder,
+        }
     }
 
     /// 根据策略选择推送目标设备
@@ -255,6 +260,126 @@ impl RouterService for RouteHandler {
 
         Ok(Response::new(BatchGetDeviceRoutesResponse {
             routes,
+            status: util::rpc_status_ok(),
+        }))
+    }
+
+    async fn route_message(
+        &self,
+        request: Request<RouteMessageRequest>,
+    ) -> std::result::Result<Response<RouteMessageResponse>, Status> {
+        use std::time::Instant;
+        use flare_proto::signaling::router::{RouteMetadata, RouteOptions};
+
+        let req = request.into_inner();
+        let svid = &req.svid;
+        let start_time = Instant::now();
+        let decision_start = Instant::now();
+
+        // 提取路由选项
+        let route_options = req.options.unwrap_or_else(|| RouteOptions {
+            timeout_seconds: 5,
+            enable_tracing: true,
+            retry_strategy: 0, // RETRY_STRATEGY_NONE
+            load_balance_strategy: 1, // LOAD_BALANCE_STRATEGY_ROUND_ROBIN
+            priority: 0,
+        });
+
+        info!(
+            svid = %svid,
+            payload_len = req.payload.len(),
+            timeout_seconds = route_options.timeout_seconds,
+            enable_tracing = route_options.enable_tracing,
+            "Routing message to business system"
+        );
+
+        // 传播追踪信息（如果启用）
+        let trace_context = if route_options.enable_tracing {
+            req.context
+                .as_ref()
+                .and_then(|ctx| ctx.trace.clone())
+        } else {
+            None
+        };
+
+        // 记录路由决策耗时
+        let decision_duration = decision_start.elapsed();
+
+        // 使用 MessageForwarder 转发消息
+        let business_start = Instant::now();
+        let forward_result: Result<(String, Vec<u8>), anyhow::Error> = self
+            .message_forwarder
+            .forward_message(
+                svid,
+                req.payload,
+                req.context,
+                req.tenant,
+                None, // route_repository 暂时为 None，后续可以注入
+            )
+            .await;
+
+        let business_duration = business_start.elapsed();
+        let total_duration = start_time.elapsed();
+
+        let (response_data, routed_endpoint) = match forward_result {
+            Ok((endpoint, data)) => {
+                info!(
+                    svid = %svid,
+                    routed_endpoint = %endpoint,
+                    response_len = %data.len(),
+                    decision_duration_ms = decision_duration.as_millis(),
+                    business_duration_ms = business_duration.as_millis(),
+                    total_duration_ms = total_duration.as_millis(),
+                    "Message routed successfully"
+                );
+                (data, endpoint)
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    svid = %svid,
+                    decision_duration_ms = decision_duration.as_millis(),
+                    total_duration_ms = total_duration.as_millis(),
+                    "Failed to forward message to business system"
+                );
+                return Ok(Response::new(RouteMessageResponse {
+                    response_data: vec![],
+                    routed_endpoint: String::new(),
+                    metadata: Some(RouteMetadata {
+                        route_duration_ms: total_duration.as_millis() as i64,
+                        business_duration_ms: 0,
+                        decision_duration_ms: decision_duration.as_millis() as i64,
+                        from_cache: false,
+                        decision_details: std::collections::HashMap::new(),
+                        trace: trace_context.clone(),
+                    }),
+                    status: util::rpc_status_error(
+                        ErrorCode::InternalError,
+                        &format!("Failed to forward message: {}", e),
+                    ),
+                }));
+            }
+        };
+
+        // 构建路由元数据
+        let metadata = RouteMetadata {
+            route_duration_ms: total_duration.as_millis() as i64,
+            business_duration_ms: business_duration.as_millis() as i64,
+            decision_duration_ms: decision_duration.as_millis() as i64,
+            from_cache: false, // 后续可以从缓存状态中获取
+            decision_details: {
+                let mut details = std::collections::HashMap::new();
+                details.insert("svid".to_string(), svid.clone());
+                details.insert("load_balance_strategy".to_string(), format!("{}", route_options.load_balance_strategy));
+                details
+            },
+            trace: trace_context,
+        };
+
+        Ok(Response::new(RouteMessageResponse {
+            response_data,
+            routed_endpoint,
+            metadata: Some(metadata),
             status: util::rpc_status_ok(),
         }))
     }

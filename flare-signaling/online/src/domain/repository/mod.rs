@@ -3,40 +3,40 @@ use std::collections::HashMap;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::domain::aggregate::Session;
+use crate::domain::aggregate::Connection;
 use crate::domain::model::{DeviceInfo, OnlineStatusRecord};
-use crate::domain::value_object::{DeviceId, SessionId, UserId};
+use crate::domain::value_object::{DeviceId, ConnectionId, UserId};
 
 // Rust 2024: 对于需要作为 trait 对象使用的 trait（Arc<dyn Trait>），
 // 如果方法参数包含引用，需要保留 async-trait 宏
 
 #[async_trait]
-pub trait SessionRepository: Send + Sync {
-    async fn save_session(&self, session: &Session) -> Result<()>;
-    async fn remove_session(&self, session_id: &SessionId, user_id: &UserId) -> Result<()>;
-    async fn touch_session(&self, user_id: &UserId) -> Result<()>;
+pub trait ConversationRepository: Send + Sync {
+    async fn save_connection(&self, connection: &Connection) -> Result<()>;
+    async fn remove_connection(&self, conversation_id: &ConnectionId, user_id: &UserId) -> Result<()>;
+    async fn touch_connection(&self, user_id: &UserId) -> Result<()>;
     async fn fetch_statuses(
         &self,
         user_ids: &[String],
     ) -> Result<HashMap<String, OnlineStatusRecord>>;
-    async fn get_user_sessions(&self, user_id: &UserId) -> Result<Vec<Session>>;
-    async fn remove_user_sessions(
+    async fn get_user_connections(&self, user_id: &UserId) -> Result<Vec<Connection>>;
+    async fn remove_user_connections(
         &self,
         user_id: &UserId,
         device_ids: Option<&[DeviceId]>,
     ) -> Result<()>;
-    async fn get_session_by_device(
+    async fn get_connection_by_device(
         &self,
         user_id: &UserId,
         device_id: &DeviceId,
-    ) -> Result<Option<Session>>;
+    ) -> Result<Option<Connection>>;
     async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceInfo>>;
     async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceInfo>>;
 
-    // 新增方法：获取带有完整Session信息的设备列表
-    async fn list_user_sessions(&self, user_id: &str) -> Result<Vec<Session>> {
+    // 新增方法：获取带有完整Connection信息的设备列表
+    async fn list_user_connections(&self, user_id: &str) -> Result<Vec<Connection>> {
         let user_id_vo = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        self.get_user_sessions(&user_id_vo).await
+        self.get_user_connections(&user_id_vo).await
     }
 }
 

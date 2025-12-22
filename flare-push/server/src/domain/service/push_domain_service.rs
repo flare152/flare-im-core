@@ -83,19 +83,19 @@ impl PushDomainService {
         // 验证消息完整性：receiver_id 和 channel_id 不能同时为空
         if let Some(ref message) = request.message {
             // 单聊消息：必须提供 receiver_id
-            if message.session_type == 1 {
+            if message.conversation_type == 1 {
                 if message.receiver_id.is_empty() {
                     error!(
                         message_id = %message.id,
-                        session_id = %message.session_id,
+                        conversation_id = %message.conversation_id,
                         sender_id = %message.sender_id,
                         user_ids = ?request.user_ids,
                         "Single chat message missing receiver_id in push service"
                     );
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,
-                        format!("Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}", 
-                            message.id, message.session_id, message.sender_id)
+                        format!("Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}", 
+                            message.id, message.conversation_id, message.sender_id)
                     ).build_error());
                 }
 
@@ -114,7 +114,7 @@ impl PushDomainService {
                 }
             }
             // 群聊/频道消息：必须提供 channel_id
-            else if message.session_type == 2 || message.session_type == 3 {
+            else if message.conversation_type == 2 || message.conversation_type == 3 {
                 if message.channel_id.is_empty() {
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,

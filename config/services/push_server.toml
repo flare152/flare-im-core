@@ -8,8 +8,8 @@
 # Kafka 配置 profile 名称（引用 base.toml 中的 [kafka.push]）
 kafka = "push"
 
-# Redis 配置 profile 名称（引用 base.toml 中的 [redis.session_store]）
-redis = "session_store"
+# Redis 配置 profile 名称（引用 base.toml 中的 [redis.conversation_store]）
+redis = "conversation_store"
 
 # Consumer Group 名称
 consumer_group = "push-server"

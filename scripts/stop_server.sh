@@ -46,7 +46,7 @@ CORE_SERVICES=(
     "signaling-online"
     "signaling-route"
     "hook-engine"
-    "session"
+    "conversation"
     "message-orchestrator"
     "storage-writer"
     "storage-reader"

@@ -12,30 +12,30 @@ use prost_types::Timestamp;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::domain::aggregate::{Session, SessionCreateParams};
+use crate::domain::aggregate::{Connection, ConnectionCreateParams};
 use crate::domain::model::OnlineStatusRecord;
-use crate::domain::repository::SessionRepository;
+use crate::domain::repository::ConversationRepository;
 use crate::domain::value_object::{
-    ConnectionQuality, DeviceId, DevicePriority, SessionId, TokenVersion, UserId,
+    ConnectionQuality, DeviceId, DevicePriority, ConnectionId, TokenVersion, UserId,
 };
 use crate::util;
 
 #[derive(Debug, Clone)]
-struct InMemorySession {
-    session: Session,
+struct InMemoryConnection {
+    session: Connection,
 }
 
 /// 在线状态领域服务 - 包含所有业务逻辑
 ///
 /// 注意：领域服务不依赖基础设施层的配置，配置由应用层传入必要参数
 pub struct OnlineStatusService {
-    repository: Arc<dyn SessionRepository + Send + Sync>,
-    sessions: Arc<RwLock<HashMap<String, InMemorySession>>>,
+    repository: Arc<dyn ConversationRepository + Send + Sync>,
+    sessions: Arc<RwLock<HashMap<String, InMemoryConnection>>>,
     gateway_id: String,
 }
 
 impl OnlineStatusService {
-    pub fn new(repository: Arc<dyn SessionRepository + Send + Sync>, gateway_id: String) -> Self {
+    pub fn new(repository: Arc<dyn ConversationRepository + Send + Sync>, gateway_id: String) -> Self {
         Self {
             repository,
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -52,7 +52,7 @@ impl OnlineStatusService {
 
         // 检查现有会话
         let user_vo = UserId::new(user_id.clone()).unwrap();
-        let existing_sessions = self.repository.get_user_sessions(&user_vo).await?;
+        let existing_sessions = self.repository.get_user_connections(&user_vo).await?;
 
         // 根据冲突策略处理现有会话
         if !existing_sessions.is_empty() {
@@ -64,7 +64,7 @@ impl OnlineStatusService {
                         device_id = %device_id,
                         "Exclusive strategy: removing all existing sessions"
                     );
-                    self.repository.remove_user_sessions(&user_vo, None).await?;
+                    self.repository.remove_user_connections(&user_vo, None).await?;
                 }
                 DeviceConflictStrategy::PlatformExclusive => {
                     // 平台互斥：只踢出同平台的旧设备
@@ -81,7 +81,7 @@ impl OnlineStatusService {
                             "Platform exclusive strategy: removing same platform devices"
                         );
                         self.repository
-                            .remove_user_sessions(&user_vo, Some(&same_platform_devices))
+                            .remove_user_connections(&user_vo, Some(&same_platform_devices))
                             .await?;
                     }
                 }
@@ -99,7 +99,7 @@ impl OnlineStatusService {
                         user_id = %user_id,
                         "No conflict strategy specified, using Exclusive"
                     );
-                    self.repository.remove_user_sessions(&user_vo, None).await?;
+                    self.repository.remove_user_connections(&user_vo, None).await?;
                 }
             }
         }
@@ -129,7 +129,7 @@ impl OnlineStatusService {
         let device_vo = DeviceId::new(device_id.clone()).unwrap();
         let priority_vo = DevicePriority::from_i32(device_priority);
         let token_vo = TokenVersion::from(token_version);
-        let params = SessionCreateParams {
+        let params = ConnectionCreateParams {
             user_id: user_vo.clone(),
             device_id: device_vo.clone(),
             device_platform: device_platform.to_string(),
@@ -139,24 +139,24 @@ impl OnlineStatusService {
             token_version: token_vo,
             initial_quality: connection_quality.clone(),
         };
-        let session = Session::create(params);
-        let session_id = session.id().as_str().to_string();
+        let session = Connection::create(params);
+        let conversation_id = session.id().as_str().to_string();
 
         {
             let mut map = self.sessions.write().await;
             map.insert(
-                session_id.clone(),
-                InMemorySession {
+                conversation_id.clone(),
+                InMemoryConnection {
                     session: session.clone(),
                 },
             );
         }
 
-        self.repository.save_session(&session).await?;
+        self.repository.save_connection(&session).await?;
 
         info!(
             user_id = %user_id,
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             device_id = %device_id,
             gateway_id = %gateway_id,
             "User logged in successfully"
@@ -164,7 +164,7 @@ impl OnlineStatusService {
 
         Ok(LoginResponse {
             success: true,
-            session_id,
+            conversation_id,
             route_server: request.server_id,
             error_message: String::new(),
             status: util::rpc_status_ok(),
@@ -174,24 +174,24 @@ impl OnlineStatusService {
 
     pub async fn logout(&self, request: LogoutRequest) -> Result<LogoutResponse> {
         let user_id = &request.user_id;
-        let session_id = &request.session_id;
+        let conversation_id = &request.conversation_id;
 
         // 从内存中移除会话
         {
             let mut map = self.sessions.write().await;
-            map.remove(session_id);
+            map.remove(conversation_id);
         }
 
         // 从Redis中移除会话
         let user_vo = UserId::new(user_id.clone()).unwrap();
-        let session_vo = SessionId::from_string(session_id.clone()).unwrap();
+        let session_vo = ConnectionId::from_string(conversation_id.clone()).unwrap();
         self.repository
-            .remove_session(&session_vo, &user_vo)
+            .remove_connection(&session_vo, &user_vo)
             .await?;
 
         info!(
             user_id = %user_id,
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             "User logged out successfully"
         );
 
@@ -203,19 +203,19 @@ impl OnlineStatusService {
 
     pub async fn heartbeat(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: &str,
         connection_quality: Option<&flare_proto::common::ConnectionQuality>,
     ) -> Result<HeartbeatResponse> {
         // 检查会话是否存在
         {
             let map = self.sessions.read().await;
-            if !map.contains_key(session_id) {
+            if !map.contains_key(conversation_id) {
                 return Ok(HeartbeatResponse {
                     success: false,
                     status: util::rpc_status_error(
                         flare_server_core::error::ErrorCode::InvalidParameter,
-                        "Session not found",
+                        "Connection not found",
                     ),
                 });
             }
@@ -224,7 +224,7 @@ impl OnlineStatusService {
         // 更新内存中的last_seen和链接质量
         {
             let mut map = self.sessions.write().await;
-            if let Some(session) = map.get_mut(session_id) {
+            if let Some(session) = map.get_mut(conversation_id) {
                 // 刷新心跳（含质量）
                 let quality_opt =
                     connection_quality.and_then(|q| ConnectionQuality::from_proto(q).ok());
@@ -237,7 +237,7 @@ impl OnlineStatusService {
 
         // 更新Redis中的会话TTL
         let user_vo = UserId::new(user_id.to_string()).unwrap();
-        self.repository.touch_session(&user_vo).await?;
+        self.repository.touch_connection(&user_vo).await?;
 
         Ok(HeartbeatResponse {
             success: true,

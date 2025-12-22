@@ -1,42 +1,50 @@
 //! 消息路由模块
 //!
-//! 负责将客户端消息路由到 Message Orchestrator
-//! 支持两种模式：
-//! 1. 直接路由模式：直接路由到 message-orchestrator（向后兼容）
-//! 2. Route 服务模式：通过 Route 服务进行 SVID 路由（推荐）
+//! 负责将客户端消息通过 Route 服务路由到对应的业务系统
+//! 架构：Gateway -> Route Service -> Business Service (如 message-orchestrator)
+//!
+//! Route 服务根据 SVID 决定将消息路由到哪个业务系统：
+//! - svid.im -> message-orchestrator
+//! - svid.customer -> customer-service
+//! - svid.ai.bot -> ai-bot-service
+//! 等等
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
-use flare_proto::common::{RequestContext, TenantContext};
-use flare_proto::message::message_service_client::MessageServiceClient;
-use flare_proto::message::{SendMessageRequest, SendMessageResponse};
+use flare_proto::common::{RequestContext, TenantContext, TraceContext};
+use flare_proto::message::SendMessageResponse;
+use flare_proto::signaling::router::router_service_client::RouterServiceClient;
+use flare_proto::signaling::router::{
+    LoadBalanceStrategy, RetryStrategy, RouteMessageRequest, RouteOptions,
+};
 use prost::Message as ProstMessage;
-use prost_types::Timestamp;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn, Span};
 
 use flare_server_core::discovery::ServiceClient;
 
 /// 消息路由服务
 pub struct MessageRouter {
-    service_name: String,
+    /// Route 服务名称（用于服务发现）
+    route_service_name: String,
+    /// 默认租户ID
     default_tenant_id: String,
-    /// gRPC 客户端
-    client: Arc<Mutex<Option<MessageServiceClient<Channel>>>>,
+    /// RouterService gRPC 客户端
+    router_client: Arc<Mutex<Option<RouterServiceClient<Channel>>>>,
+    /// 服务发现客户端
     service_client: Arc<Mutex<Option<ServiceClient>>>,
-    /// 默认 SVID
+    /// 默认 SVID（业务系统标识符）
     default_svid: String,
 }
 
 impl MessageRouter {
-    /// 创建新的消息路由服务（使用服务名称，内部创建服务发现）
-    pub fn new(service_name: String, default_tenant_id: String, default_svid: String) -> Self {
+    /// 创建新的消息路由服务（使用 Route 服务名称，内部创建服务发现）
+    pub fn new(route_service_name: String, default_tenant_id: String, default_svid: String) -> Self {
         Self {
-            client: Arc::new(Mutex::new(None)),
-            service_name,
+            router_client: Arc::new(Mutex::new(None)),
+            route_service_name,
             default_tenant_id,
             service_client: Arc::new(Mutex::new(None)),
             default_svid,
@@ -50,34 +58,34 @@ impl MessageRouter {
         default_svid: String,
     ) -> Self {
         Self {
-            client: Arc::new(Mutex::new(None)),
-            service_name: String::new(), // 不需要 service_name
+            router_client: Arc::new(Mutex::new(None)),
+            route_service_name: String::new(), // 不需要 service_name
             default_tenant_id,
             service_client: Arc::new(Mutex::new(Some(service_client))),
             default_svid,
         }
     }
 
-    /// 初始化客户端连接
+    /// 初始化 Route 服务客户端连接
     pub async fn initialize(&self) -> Result<()> {
         use flare_server_core::discovery::ServiceClient;
 
         info!(
-            service_name = %self.service_name,
-            "Initializing Message Router client..."
+            route_service = %self.route_service_name,
+            "Initializing Route Service client..."
         );
 
         // 使用服务发现获取 Channel
         let mut service_client_guard = self.service_client.lock().await;
         if service_client_guard.is_none() {
             // 如果没有注入 ServiceClient，则创建服务发现器
-            let discover = flare_im_core::discovery::create_discover(&self.service_name)
+            let discover = flare_im_core::discovery::create_discover(&self.route_service_name)
                 .await
                 .map_err(|e| {
                     error!(
-                        service_name = %self.service_name,
+                        route_service = %self.route_service_name,
                         error = %e,
-                        "Failed to create service discover for message orchestrator"
+                        "Failed to create service discover for Route service"
                     );
                     anyhow::anyhow!("Failed to create service discover: {}", e)
                 })?;
@@ -93,7 +101,7 @@ impl MessageRouter {
             .ok_or_else(|| anyhow::anyhow!("Service client not initialized"))?;
         let channel = service_client.get_channel().await.map_err(|e| {
             error!(
-                service_name = %self.service_name,
+                route_service = %self.route_service_name,
                 error = %e,
                 "Failed to get channel from service discovery"
             );
@@ -101,106 +109,196 @@ impl MessageRouter {
         })?;
 
         info!(
-            service_name = %self.service_name,
+            route_service = %self.route_service_name,
             "Successfully got channel from service discovery"
         );
 
-        let client = MessageServiceClient::new(channel);
-        *self.client.lock().await = Some(client);
+        let client = RouterServiceClient::new(channel);
+        *self.router_client.lock().await = Some(client);
 
         info!(
-            service_name = %self.service_name,
-            "✅ Message Router initialized successfully"
+            route_service = %self.route_service_name,
+            "✅ Route Service client initialized successfully"
         );
         Ok(())
     }
 
-    /// 路由消息到 Message Orchestrator
+    /// 路由消息到业务系统（通过 Route 服务）
+    ///
+    /// Route 服务会根据 SVID 将消息路由到对应的业务系统：
+    /// - svid.im -> message-orchestrator
+    /// - svid.customer -> customer-service
+    /// - 等等
+    #[instrument(skip(self), fields(user_id = %user_id, conversation_id = %conversation_id, svid = %self.default_svid))]
     pub async fn route_message(
         &self,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         payload: Vec<u8>,
         tenant_id: Option<&str>,
     ) -> Result<SendMessageResponse> {
-        // 直接路由模式
-        self.route_direct(user_id, session_id, payload, tenant_id)
-            .await
+        self.route_message_with_options(user_id, conversation_id, payload, tenant_id, None).await
     }
 
-    /// 直接路由到 Message Orchestrator（向后兼容模式）
-    async fn route_direct(
+    /// 路由消息到业务系统（带选项配置）
+    ///
+    /// 支持自定义路由选项，如超时、重试策略等
+    #[instrument(skip(self), fields(user_id = %user_id, conversation_id = %conversation_id, svid = %self.default_svid))]
+    pub async fn route_message_with_options(
         &self,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         payload: Vec<u8>,
         tenant_id: Option<&str>,
+        options: Option<RouteOptions>,
     ) -> Result<SendMessageResponse> {
+        let start_time = std::time::Instant::now();
+
         // 确保客户端已初始化
         let mut client_guard = self.ensure_client().await?;
 
         let client = client_guard.as_mut().ok_or_else(|| {
-            anyhow::anyhow!("Message Router client not available after initialization")
+            anyhow::anyhow!("Route Service client not available after initialization")
         })?;
 
-        // 构建发送请求
-        let request = self.build_send_message_request(user_id, session_id, payload, tenant_id)?;
+        // 构建请求上下文（包含追踪信息）
+        let request_context = self.build_request_context_with_trace(user_id, conversation_id);
+        
+        // 构建租户上下文
+        let tenant_context = self.build_tenant_context(tenant_id);
 
-        // 发送请求（添加超时保护，避免阻塞）
-        let timeout_duration = std::time::Duration::from_secs(5); // 5秒超时
+        // 构建路由选项（使用默认值或提供的选项）
+        let route_options = options.unwrap_or_else(|| RouteOptions {
+            timeout_seconds: 5, // 默认5秒超时
+            enable_tracing: true, // 默认启用追踪
+            retry_strategy: RetryStrategy::None as i32, // 默认不重试
+            load_balance_strategy: LoadBalanceStrategy::RoundRobin as i32, // 默认轮询
+            priority: 0, // 默认优先级
+        });
+
+        // 构建路由请求
+        // 使用 prost::Message::default() 来创建默认实例，然后设置字段
+        let mut route_request = RouteMessageRequest::default();
+        route_request.svid = self.default_svid.clone();
+        route_request.payload = payload;
+        route_request.context = Some(request_context);
+        route_request.tenant = Some(tenant_context);
+        
+        // 设置路由选项（proto 重新生成后确保字段存在）
+        // 如果字段不存在，这行代码会编译失败，需要重新生成 proto 代码
+        route_request.options = Some(route_options);
+
+        // 根据选项中的超时配置设置超时
+        let timeout_duration = std::time::Duration::from_secs(route_options.timeout_seconds as u64);
+
+        info!(
+            user_id = %user_id,
+            conversation_id = %conversation_id,
+            svid = %self.default_svid,
+            timeout_secs = timeout_duration.as_secs(),
+            payload_len = route_request.payload.len(),
+            "Routing message to Route Service"
+        );
+
+        // 发送请求到 Route 服务（添加超时保护，避免阻塞）
         let response = match tokio::time::timeout(
             timeout_duration,
-            client.send_message(tonic::Request::new(request)),
+            client.route_message(tonic::Request::new(route_request)),
         )
         .await
         {
-            Ok(Ok(resp)) => resp,
+            Ok(Ok(resp)) => resp.into_inner(),
             Ok(Err(e)) => {
                 error!(
                     error = %e,
                     user_id = %user_id,
-                    session_id = %session_id,
-                    "Failed to send message to Message Orchestrator"
+                    conversation_id = %conversation_id,
+                    svid = %self.default_svid,
+                    duration_ms = start_time.elapsed().as_millis(),
+                    "Failed to route message via Route Service"
                 );
                 // 如果连接失败，清除客户端以便下次重试
                 {
-                    let mut client_guard = self.client.lock().await;
+                    let mut client_guard = self.router_client.lock().await;
                     *client_guard = None;
                 }
                 return Err(anyhow::anyhow!(
-                    "Failed to send message to Message Orchestrator: {}",
+                    "Failed to route message via Route Service: {}",
                     e
                 ));
             }
             Err(_) => {
                 error!(
                     user_id = %user_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
+                    svid = %self.default_svid,
                     timeout_secs = timeout_duration.as_secs(),
-                    "Timeout sending message to Message Orchestrator"
+                    duration_ms = start_time.elapsed().as_millis(),
+                    "Timeout routing message via Route Service"
                 );
                 return Err(anyhow::anyhow!(
-                    "Timeout sending message to Message Orchestrator (timeout: {}s)",
+                    "Timeout routing message via Route Service (timeout: {}s)",
                     timeout_duration.as_secs()
                 ));
             }
         };
 
-        let response = response.into_inner();
+        // 检查响应状态
+        if let Some(status) = &response.status {
+            if status.code != 0 {
+                error!(
+                    user_id = %user_id,
+                    conversation_id = %conversation_id,
+                    error_code = status.code,
+                    error_message = %status.message,
+                    duration_ms = start_time.elapsed().as_millis(),
+                    "Route Service returned error"
+                );
+                return Err(anyhow::anyhow!(
+                    "Route Service error: {} (code: {})",
+                    status.message,
+                    status.code
+                ));
+            }
+        }
 
-        info!(
-            user_id = %user_id,
-            session_id = %session_id,
-            message_id = %response.message_id,
-            "Message routed to Message Orchestrator successfully"
-        );
+        // 解析响应数据
+        let send_response = SendMessageResponse::decode(&response.response_data[..])
+            .context("Failed to decode RouteMessageResponse.response_data as SendMessageResponse")?;
 
-        Ok(response)
+        // 记录路由元数据（如果可用）
+        if let Some(metadata) = &response.metadata {
+            info!(
+                user_id = %user_id,
+                conversation_id = %conversation_id,
+                message_id = %send_response.message_id,
+                svid = %self.default_svid,
+                routed_endpoint = %response.routed_endpoint,
+                route_duration_ms = metadata.route_duration_ms,
+                business_duration_ms = metadata.business_duration_ms,
+                decision_duration_ms = metadata.decision_duration_ms,
+                from_cache = metadata.from_cache,
+                total_duration_ms = start_time.elapsed().as_millis(),
+                "Message routed successfully via Route Service"
+            );
+        } else {
+            info!(
+                user_id = %user_id,
+                conversation_id = %conversation_id,
+                message_id = %send_response.message_id,
+                svid = %self.default_svid,
+                routed_endpoint = %response.routed_endpoint,
+                total_duration_ms = start_time.elapsed().as_millis(),
+                "Message routed successfully via Route Service"
+            );
+        }
+
+        Ok(send_response)
     }
 
     /// 检查客户端是否已连接
     pub async fn is_connected(&self) -> bool {
-        self.client.lock().await.is_some()
+        self.router_client.lock().await.is_some()
     }
 
     /// 确保客户端已初始化（内部辅助函数）
@@ -209,8 +307,8 @@ impl MessageRouter {
     /// 返回客户端引用，如果初始化失败则返回错误
     async fn ensure_client(
         &self,
-    ) -> Result<tokio::sync::MutexGuard<'_, Option<MessageServiceClient<Channel>>>> {
-        let client_guard = self.client.lock().await;
+    ) -> Result<tokio::sync::MutexGuard<'_, Option<RouterServiceClient<Channel>>>> {
+        let client_guard = self.router_client.lock().await;
 
         // 如果客户端已初始化，直接返回
         if client_guard.is_some() {
@@ -219,8 +317,8 @@ impl MessageRouter {
 
         // 客户端未初始化，需要初始化
         warn!(
-            service_name = %self.service_name,
-            "Message Router client not initialized, attempting to initialize..."
+            route_service = %self.route_service_name,
+            "Route Service client not initialized, attempting to initialize..."
         );
         drop(client_guard);
 
@@ -231,8 +329,8 @@ impl MessageRouter {
             match self.initialize().await {
                 Ok(_) => {
                     info!(
-                        service_name = %self.service_name,
-                        "✅ Message Router initialized successfully after retry"
+                        route_service = %self.route_service_name,
+                        "✅ Route Service client initialized successfully after retry"
                     );
                     break;
                 }
@@ -242,17 +340,17 @@ impl MessageRouter {
                     retries -= 1;
                     if retries > 0 {
                         warn!(
-                            service_name = %self.service_name,
+                            route_service = %self.route_service_name,
                             error = %error_msg,
                             retries_left = retries,
-                            "Failed to initialize Message Router, retrying..."
+                            "Failed to initialize Route Service client, retrying..."
                         );
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     } else {
                         error!(
-                            service_name = %self.service_name,
+                            route_service = %self.route_service_name,
                             error = %error_msg,
-                            "❌ Failed to initialize Message Router after all retries"
+                            "❌ Failed to initialize Route Service client after all retries"
                         );
                     }
                 }
@@ -261,95 +359,59 @@ impl MessageRouter {
 
         if let Some(ref err) = last_error {
             error!(
-                service_name = %self.service_name,
+                route_service = %self.route_service_name,
                 error = %err,
-                "Cannot route message: Message Router initialization failed"
+                "Cannot route message: Route Service client initialization failed"
             );
             return Err(anyhow::anyhow!(
-                "Failed to initialize Message Router after retries: {}",
+                "Failed to initialize Route Service client after retries: {}",
                 err
             ));
         }
 
         // 重新获取锁
-        Ok(self.client.lock().await)
+        Ok(self.router_client.lock().await)
     }
 
-    /// 构建 SendMessageRequest（内部辅助函数）
-    ///
-    /// 验证 payload 必须是 Message 对象，然后使用它构建请求
-    fn build_send_message_request(
-        &self,
-        user_id: &str,
-        session_id: &str,
-        payload: Vec<u8>,
-        tenant_id: Option<&str>,
-    ) -> Result<SendMessageRequest> {
-        // 验证 payload 必须是 Message 对象
-        let mut message = flare_proto::Message::decode(&payload[..]).map_err(|e| {
-            anyhow::anyhow!(
-                "Payload must be a valid Message object, decode error: {}",
-                e
-            )
-        })?;
+    /// 构建 RequestContext（内部辅助函数，不包含追踪信息）
+    fn build_request_context(&self, actor_id: &str, conversation_id: &str) -> RequestContext {
+        self.build_request_context_with_trace(actor_id, conversation_id)
+    }
 
-        // 确保消息的基本字段正确（如果 payload 中的字段为空，使用传入的参数填充）
-        if message.session_id.is_empty() {
-            message.session_id = session_id.to_string();
-        }
-        if message.sender_id.is_empty() {
-            message.sender_id = user_id.to_string();
-        }
-        if message.id.is_empty() {
-            message.id = uuid::Uuid::new_v4().to_string();
-        }
+    /// 构建 RequestContext（包含追踪信息传播）
+    fn build_request_context_with_trace(&self, actor_id: &str, conversation_id: &str) -> RequestContext {
+        let mut attributes = std::collections::HashMap::new();
+        attributes.insert("conversation_id".to_string(), conversation_id.to_string());
+        attributes.insert("source".to_string(), "access_gateway".to_string());
 
-        // 使用解析后的 Message 对象，确保时间戳等字段正确
-        if message.timestamp.is_none() {
-            message.timestamp = Some(Timestamp {
-                seconds: chrono::Utc::now().timestamp(),
-                nanos: 0,
+        // 从当前 Span 提取追踪信息（如果存在）
+        let trace_context = Span::current()
+            .id()
+            .and_then(|span_id| {
+                // 尝试从 tracing span 提取追踪信息
+                // 这里使用 span_id 作为 trace_id，实际生产环境应该使用分布式追踪系统（如 Jaeger）
+                Some(TraceContext {
+                    trace_id: uuid::Uuid::new_v4().to_string(), // 生成新的 trace_id
+                    span_id: format!("{}", span_id.into_u64()), // 使用当前 span_id
+                    parent_span_id: String::new(), // 父 span_id（如果有的话）
+                    sampled: "yes".to_string(),
+                    tags: std::collections::HashMap::new(),
+                })
             });
-        }
 
-        // 在 extra 中添加来源标识
-        message
-            .extra
-            .insert("source".to_string(), "access_gateway".to_string());
-        if let Some(tenant_id) = tenant_id {
-            message
-                .extra
-                .insert("tenant_id".to_string(), tenant_id.to_string());
-        }
-
-        // 构建请求上下文
-        let request_context = self.build_request_context(user_id);
-
-        // 构建发送请求
-        Ok(SendMessageRequest {
-            session_id: session_id.to_string(),
-            message: Some(message),
-            sync: false, // 异步模式，立即返回
-            context: Some(request_context),
-            tenant: Some(self.build_tenant_context(tenant_id)),
-        })
-    }
-
-    /// 构建 RequestContext（内部辅助函数）
-    fn build_request_context(&self, actor_id: &str) -> RequestContext {
         RequestContext {
             request_id: uuid::Uuid::new_v4().to_string(),
-            trace: None,
+            trace: trace_context,
             actor: Some(flare_proto::common::ActorContext {
                 actor_id: actor_id.to_string(),
                 r#type: flare_proto::common::ActorType::User as i32, // ACTOR_TYPE_USER = 1
                 roles: vec![],
                 attributes: std::collections::HashMap::new(),
             }),
-            device: None,
-            channel: String::new(),
+            device: None, // 设备信息应该从连接管理器中获取，这里暂时为空
+            channel: "websocket".to_string(), // Gateway 使用的通道类型
             user_agent: String::new(),
-            attributes: std::collections::HashMap::new(),
+            attributes,
         }
     }
 

@@ -10,28 +10,28 @@ use anyhow::Result;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use crate::domain::model::{ConnectionQualityRecord, SessionRecord};
-use crate::domain::repository::SessionRepository;
-use crate::domain::value_object::{SessionId, UserId};
+use crate::domain::model::{ConnectionQualityRecord, ConnectionRecord};
+use crate::domain::repository::ConversationRepository;
+use crate::domain::value_object::{ConnectionId, UserId};
 
 /// 设备管理领域服务
 pub struct DeviceManagerService {
-    repository: Arc<dyn SessionRepository + Send + Sync>,
+    repository: Arc<dyn ConversationRepository + Send + Sync>,
 }
 
 impl DeviceManagerService {
-    pub fn new(repository: Arc<dyn SessionRepository + Send + Sync>) -> Self {
+    pub fn new(repository: Arc<dyn ConversationRepository + Send + Sync>) -> Self {
         Self { repository }
     }
 
     /// 获取用户的所有在线设备会话
-    pub async fn get_user_devices(&self, user_id: &str) -> Result<Vec<SessionRecord>> {
+    pub async fn get_user_devices(&self, user_id: &str) -> Result<Vec<ConnectionRecord>> {
         let uid = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sessions = self.repository.get_user_sessions(&uid).await?;
-        let records: Vec<SessionRecord> = sessions
+        let sessions = self.repository.get_user_connections(&uid).await?;
+        let records: Vec<ConnectionRecord> = sessions
             .into_iter()
-            .map(|s| SessionRecord {
-                session_id: s.id().as_str().to_string(),
+            .map(|s| ConnectionRecord {
+                conversation_id: s.id().as_str().to_string(),
                 user_id: user_id.to_string(),
                 device_id: s.device_id().as_str().to_string(),
                 device_platform: s.device_platform().to_string(),
@@ -62,7 +62,7 @@ impl DeviceManagerService {
         new_token_version: i64,
     ) -> Result<Vec<String>> {
         let uid = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sessions = self.repository.get_user_sessions(&uid).await?;
+        let sessions = self.repository.get_user_connections(&uid).await?;
 
         let mut to_kick = Vec::new();
         for session in sessions {
@@ -70,7 +70,7 @@ impl DeviceManagerService {
             if old_version > 0 && old_version < new_token_version {
                 info!(
                     user_id = %user_id,
-                    session_id = %session.id().as_str(),
+                    conversation_id = %session.id().as_str(),
                     old_version = old_version,
                     new_version = new_token_version,
                     "Token version mismatch, will kick old session"
@@ -85,7 +85,7 @@ impl DeviceManagerService {
     ///
     /// 优先级顺序：Critical(4) > High(3) > Normal(2) > Low(1) > Unspecified(0)
     /// 同优先级按链接质量排序（RTT越低越好）
-    pub fn sort_devices_by_priority(sessions: &mut Vec<SessionRecord>) {
+    pub fn sort_devices_by_priority(sessions: &mut Vec<ConnectionRecord>) {
         sessions.sort_by(|a, b| {
             // 首先按优先级降序
             let priority_cmp = b.device_priority.cmp(&a.device_priority);
@@ -108,15 +108,15 @@ impl DeviceManagerService {
     /// 选择策略：
     /// 1. 优先选择 Critical 或 High 优先级
     /// 2. 同优先级选择链接质量最好的（RTT 最低）
-    pub async fn select_best_device(&self, user_id: &str) -> Result<Option<SessionRecord>> {
+    pub async fn select_best_device(&self, user_id: &str) -> Result<Option<ConnectionRecord>> {
         let uid = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let mut sessions: Vec<SessionRecord> = self
+        let mut sessions: Vec<ConnectionRecord> = self
             .repository
-            .get_user_sessions(&uid)
+            .get_user_connections(&uid)
             .await?
             .into_iter()
-            .map(|s| SessionRecord {
-                session_id: s.id().as_str().to_string(),
+            .map(|s| ConnectionRecord {
+                conversation_id: s.id().as_str().to_string(),
                 user_id: user_id.to_string(),
                 device_id: s.device_id().as_str().to_string(),
                 device_platform: s.device_platform().to_string(),
@@ -156,14 +156,14 @@ impl DeviceManagerService {
         &self,
         user_id: &str,
         include_low_priority: bool,
-    ) -> Result<Vec<SessionRecord>> {
+    ) -> Result<Vec<ConnectionRecord>> {
         let uid = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sessions = self.repository.get_user_sessions(&uid).await?;
+        let sessions = self.repository.get_user_connections(&uid).await?;
 
-        let result: Vec<SessionRecord> = sessions
+        let result: Vec<ConnectionRecord> = sessions
             .into_iter()
-            .map(|s| SessionRecord {
-                session_id: s.id().as_str().to_string(),
+            .map(|s| ConnectionRecord {
+                conversation_id: s.id().as_str().to_string(),
                 user_id: user_id.to_string(),
                 device_id: s.device_id().as_str().to_string(),
                 device_platform: s.device_platform().to_string(),
@@ -193,11 +193,11 @@ impl DeviceManagerService {
             .collect();
 
         if result.is_empty() && include_low_priority {
-            let sessions_all = self.repository.get_user_sessions(&uid).await?;
-            let records_all: Vec<SessionRecord> = sessions_all
+            let sessions_all = self.repository.get_user_connections(&uid).await?;
+            let records_all: Vec<ConnectionRecord> = sessions_all
                 .into_iter()
-                .map(|s| SessionRecord {
-                    session_id: s.id().as_str().to_string(),
+                .map(|s| ConnectionRecord {
+                    conversation_id: s.id().as_str().to_string(),
                     user_id: user_id.to_string(),
                     device_id: s.device_id().as_str().to_string(),
                     device_platform: s.device_platform().to_string(),
@@ -223,16 +223,16 @@ impl DeviceManagerService {
     }
 
     /// 强制踢出指定设备
-    pub async fn kick_device(&self, user_id: &str, session_id: &str, reason: &str) -> Result<()> {
+    pub async fn kick_device(&self, user_id: &str, conversation_id: &str, reason: &str) -> Result<()> {
         let uid = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
-        let sid = SessionId::from_string(session_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
+        let sid = ConnectionId::from_string(conversation_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
         warn!(
             user_id = %user_id,
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             reason = %reason,
             "Kicking device"
         );
-        self.repository.remove_session(&sid, &uid).await?;
+        self.repository.remove_connection(&sid, &uid).await?;
         Ok(())
     }
 
@@ -240,11 +240,11 @@ impl DeviceManagerService {
     pub async fn batch_kick_devices(
         &self,
         user_id: &str,
-        session_ids: &[String],
+        conversation_ids: &[String],
         reason: &str,
     ) -> Result<()> {
-        for session_id in session_ids {
-            self.kick_device(user_id, session_id, reason).await?;
+        for conversation_id in conversation_ids {
+            self.kick_device(user_id, conversation_id, reason).await?;
         }
         Ok(())
     }

@@ -49,7 +49,7 @@ impl MessagePersistenceCommandHandler {
 
         // 构建结果（操作消息不创建新消息，返回操作的目标消息ID）
         let result = PersistenceResult {
-            session_id: command.message.session_id.clone(),
+            conversation_id: command.message.conversation_id.clone(),
             message_id: command.operation.target_message_id.clone(),
             timeline: Default::default(),
             deduplicated: false,
@@ -120,7 +120,7 @@ impl MessagePersistenceCommandHandler {
 
         // 保存必要信息用于后续操作（因为 prepared 会被移动到 persist_message）
         let message_id = prepared.message_id.clone();
-        let session_id = prepared.session_id.clone();
+        let conversation_id = prepared.conversation_id.clone();
         let timeline = prepared.timeline.clone();
 
         // 验证并补全媒资附件
@@ -179,7 +179,7 @@ impl MessagePersistenceCommandHandler {
 
                     tracing::info!(
                         message_id = %message_id,
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         duration_ms = total_duration.as_millis(),
                         "Message persisted successfully"
                     );
@@ -188,7 +188,7 @@ impl MessagePersistenceCommandHandler {
                     tracing::error!(
                         error = %e,
                         message_id = %message_id,
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         "Failed to persist message to database"
                     );
                     return Err(e);
@@ -203,7 +203,7 @@ impl MessagePersistenceCommandHandler {
 
         // 构建结果（使用已保存的信息）
         let result = PersistenceResult {
-            session_id,
+            conversation_id,
             message_id,
             timeline,
             deduplicated,
@@ -322,7 +322,7 @@ impl MessagePersistenceCommandHandler {
 
             // 构建结果
             let result = PersistenceResult {
-                session_id: prepared.session_id.clone(),
+                conversation_id: prepared.conversation_id.clone(),
                 message_id: prepared.message_id.clone(),
                 timeline: prepared.timeline.clone(),
                 deduplicated,

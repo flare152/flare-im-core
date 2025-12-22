@@ -45,7 +45,7 @@ pub struct HookSelector {
     #[serde(default)]
     pub tenants: MatchRule,
     #[serde(default)]
-    pub session_types: MatchRule,
+    pub conversation_types: MatchRule,
     #[serde(default)]
     pub message_types: MatchRule,
 }
@@ -53,7 +53,7 @@ pub struct HookSelector {
 impl HookSelector {
     pub fn matches(&self, ctx: &HookContext) -> bool {
         self.tenants.matches(Some(ctx.tenant_id.as_str()))
-            && self.session_types.matches(ctx.session_type.as_deref())
+            && self.conversation_types.matches(ctx.conversation_type.as_deref())
             && self.message_types.matches(ctx.message_type.as_deref())
     }
 }

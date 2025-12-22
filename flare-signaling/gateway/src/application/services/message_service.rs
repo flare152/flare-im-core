@@ -8,8 +8,8 @@ use prost::Message as ProstMessage;
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 
-use crate::application::services::session_service_client::SessionServiceClient;
-use crate::domain::service::SessionDomainService;
+use crate::application::services::conversation_service_client::ConversationServiceClient;
+use crate::domain::service::ConversationDomainService;
 use crate::infrastructure::AckPublisher;
 use crate::infrastructure::messaging::ack_sender::AckSender;
 use crate::infrastructure::messaging::message_router::MessageRouter;
@@ -24,8 +24,8 @@ pub struct MessageApplicationService {
     message_router: Option<Arc<MessageRouter>>,
     ack_sender: Arc<AckSender>,
     ack_publisher: Option<Arc<dyn AckPublisher>>,
-    session_domain_service: Arc<SessionDomainService>,
-    session_service_client: Option<Arc<SessionServiceClient>>,
+    session_domain_service: Arc<ConversationDomainService>,
+    conversation_service_client: Option<Arc<ConversationServiceClient>>,
     gateway_id: String,
 }
 
@@ -34,8 +34,8 @@ impl MessageApplicationService {
         message_router: Option<Arc<MessageRouter>>,
         ack_sender: Arc<AckSender>,
         ack_publisher: Option<Arc<dyn AckPublisher>>,
-        session_domain_service: Arc<SessionDomainService>,
-        session_service_client: Option<Arc<SessionServiceClient>>,
+        session_domain_service: Arc<ConversationDomainService>,
+        conversation_service_client: Option<Arc<ConversationServiceClient>>,
         gateway_id: String,
     ) -> Self {
         Self {
@@ -43,7 +43,7 @@ impl MessageApplicationService {
             ack_sender,
             ack_publisher,
             session_domain_service,
-            session_service_client,
+            conversation_service_client,
             gateway_id,
         }
     }
@@ -51,7 +51,7 @@ impl MessageApplicationService {
     /// 处理消息发送
     ///
     /// 流程：
-    /// 1. 从 payload 中提取 session_id
+    /// 1. 从 payload 中提取 conversation_id
     /// 2. 路由消息到 Message Orchestrator
     /// 3. 发送 ACK 到客户端
     #[instrument(skip(self, msg_cmd), fields(connection_id, user_id, message_id = %msg_cmd.message_id))]
@@ -91,8 +91,8 @@ impl MessageApplicationService {
             }
         };
 
-        // 从 payload 中提取 session_id
-        let session_id = match self.extract_session_id_from_payload(&msg_cmd.payload) {
+        // 从 payload 中提取 conversation_id
+        let conversation_id = match self.extract_conversation_id_from_payload(&msg_cmd.payload) {
             Ok(sid) => sid,
             Err(e) => {
                 let error_msg = format!("无效的消息格式: {}", e);
@@ -100,7 +100,7 @@ impl MessageApplicationService {
                     ?e,
                     user_id = %user_id,
                     connection_id = %connection_id,
-                    "Failed to extract session_id from message payload"
+                    "Failed to extract conversation_id from message payload"
                 );
                 // 发送错误通知
                 if let Err(e) = self
@@ -123,7 +123,7 @@ impl MessageApplicationService {
         // 路由消息
         let original_message_id = msg_cmd.message_id.clone();
         let route_res = router
-            .route_message(user_id, &session_id, msg_cmd.payload.clone(), tenant_id)
+            .route_message(user_id, &conversation_id, msg_cmd.payload.clone(), tenant_id)
             .await;
 
         let route_duration = start_time.elapsed();
@@ -132,7 +132,7 @@ impl MessageApplicationService {
                 info!(
                     user_id = %user_id,
                     connection_id = %connection_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     message_id = %response.message_id,
                     duration_ms = route_duration.as_millis(),
                     "Message routed successfully"
@@ -140,7 +140,7 @@ impl MessageApplicationService {
                 // 发送 ACK 到客户端
                 if let Err(e) = self
                     .ack_sender
-                    .send_message_ack(connection_id, &response.message_id, &session_id)
+                    .send_message_ack(connection_id, &response.message_id, &conversation_id)
                     .await
                 {
                     // ACK 发送失败不影响消息路由，只记录警告
@@ -159,7 +159,7 @@ impl MessageApplicationService {
                     ?err,
                     user_id = %user_id,
                     connection_id = %connection_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     message_id = %original_message_id,
                     duration_ms = route_duration.as_millis(),
                     "Failed to route message to Message Orchestrator"
@@ -244,11 +244,11 @@ impl MessageApplicationService {
         }
 
         // 推送窗口 ACK 更新会话游标（如果提供）
-        if let Some(ref session_client) = self.session_service_client {
+        if let Some(ref conversation_client) = self.conversation_service_client {
             // 从元数据中提取会话信息
-            if let Some(session_id) = msg_cmd
+            if let Some(conversation_id) = msg_cmd
                 .metadata
-                .get("session_id")
+                .get("conversation_id")
                 .and_then(|v| String::from_utf8(v.clone()).ok())
             {
                 // 提取时间戳（如果有）
@@ -260,20 +260,20 @@ impl MessageApplicationService {
                     .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
                 // 调用会话服务更新游标
-                if let Err(e) = session_client
-                    .update_session_cursor(user_id, &session_id, message_ts)
+                if let Err(e) = conversation_client
+                    .update_session_cursor(user_id, &conversation_id, message_ts)
                     .await
                 {
                     warn!(
                         ?e,
                         user_id = %user_id,
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         "Failed to update session cursor"
                     );
                 } else {
                     info!(
                         user_id = %user_id,
-                        session_id = %session_id,
+                        conversation_id = %conversation_id,
                         message_ts = message_ts,
                         "Session cursor updated successfully"
                     );
@@ -284,8 +284,8 @@ impl MessageApplicationService {
         Ok(())
     }
 
-    /// 从 payload 中提取 session_id
-    fn extract_session_id_from_payload(&self, payload: &[u8]) -> Result<String> {
+    /// 从 payload 中提取 conversation_id
+    fn extract_conversation_id_from_payload(&self, payload: &[u8]) -> Result<String> {
         use flare_proto::Message as ProtoMessage;
 
         let message = ProtoMessage::decode(payload).map_err(|e| {
@@ -295,12 +295,12 @@ impl MessageApplicationService {
             ))
         })?;
 
-        if message.session_id.is_empty() {
+        if message.conversation_id.is_empty() {
             return Err(FlareError::message_format_error(
-                "Message.session_id is required but empty".to_string(),
+                "Message.conversation_id is required but empty".to_string(),
             ));
         }
 
-        Ok(message.session_id)
+        Ok(message.conversation_id)
     }
 }

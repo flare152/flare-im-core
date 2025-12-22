@@ -39,8 +39,8 @@ CREATE TRIGGER messages_set_updated_at
     EXECUTE FUNCTION set_updated_at();
 
 -- 3. 为 seq 字段创建索引（用于按会话查询消息时排序）
-CREATE INDEX IF NOT EXISTS idx_messages_session_seq 
-ON messages (session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_seq 
+ON messages (conversation_id, seq);
 
 -- 4. 为 updated_at 字段创建索引（可选，用于查询最近更新的消息）
 CREATE INDEX IF NOT EXISTS idx_messages_updated_at 

@@ -65,7 +65,7 @@ impl PushServerConfig {
     pub fn from_app_config(app: &FlareAppConfig) -> Self {
         let service = app.push_server_service();
         let kafka_name = service.kafka.as_deref().unwrap_or("push");
-        let redis_name = service.redis.as_deref().unwrap_or("session_store");
+        let redis_name = service.redis.as_deref().unwrap_or("conversation_store");
 
         let kafka_profile = app.kafka_profile(kafka_name);
         let redis_profile: Option<RedisPoolConfig> = app.redis_profile(redis_name).cloned();
@@ -175,7 +175,7 @@ impl PushServerConfig {
 
         // 注意：服务名已统一在 service_names.rs 中定义
         // 所有服务注册和发现都直接使用常量，不再从配置文件读取
-        // 支持通过环境变量覆盖（例如：SESSION_SERVICE=flare-session-dev）
+        // 支持通过环境变量覆盖（例如：SESSION_SERVICE=flare-conversation-dev）
 
         // 推送重试配置
         let push_retry_max_attempts = env::var("PUSH_SERVER_RETRY_MAX_ATTEMPTS")

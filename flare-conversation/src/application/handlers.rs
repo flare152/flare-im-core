@@ -1,0 +1,316 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use tracing::{debug, info};
+
+use crate::application::commands::{
+    BatchAcknowledgeCommand, CreateConversationCommand, DeleteConversationCommand, ForceConversationSyncCommand,
+    ManageParticipantsCommand, UpdateCursorCommand, UpdatePresenceCommand, UpdateConversationCommand,
+};
+use crate::application::queries::{
+    ListConversationsQuery, SearchConversationsQuery, ConversationBootstrapQuery, SyncMessagesQuery,
+};
+use crate::domain::service::conversation_domain_service::{
+    ConversationBootstrapOutput, ConversationDomainService,
+};
+
+/// 会话命令处理器
+pub struct ConversationCommandHandler {
+    domain_service: Arc<ConversationDomainService>,
+}
+
+impl ConversationCommandHandler {
+    pub fn new(domain_service: Arc<ConversationDomainService>) -> Self {
+        Self { domain_service }
+    }
+
+    /// 处理批量确认命令
+    pub async fn handle_batch_acknowledge(&self, command: BatchAcknowledgeCommand) -> Result<()> {
+        debug!(
+            user_id = %command.user_id,
+            count = command.cursors.len(),
+            "Handling batch acknowledge command"
+        );
+
+        self.domain_service
+            .batch_acknowledge(&command.user_id, command.cursors)
+            .await?;
+
+        info!(user_id = %command.user_id, "Batch acknowledge completed");
+        Ok(())
+    }
+
+    /// 处理创建会话命令
+    pub async fn handle_create_conversation(
+        &self,
+        command: CreateConversationCommand,
+    ) -> Result<crate::domain::model::Conversation> {
+        debug!(
+            conversation_type = %command.conversation_type,
+            business_type = %command.business_type,
+            "Handling create session command"
+        );
+
+        let session = self
+            .domain_service
+            .create_conversation(
+                command.conversation_type,
+                command.business_type,
+                command.participants,
+                command.attributes,
+                command.visibility,
+            )
+            .await?;
+
+        info!(conversation_id = %session.conversation_id, "Conversation created");
+        Ok(session)
+    }
+
+    /// 处理删除会话命令
+    pub async fn handle_delete_conversation(&self, command: DeleteConversationCommand) -> Result<()> {
+        debug!(
+            conversation_id = %command.conversation_id,
+            hard_delete = command.hard_delete,
+            "Handling delete session command"
+        );
+
+        self.domain_service
+            .delete_conversation(&command.conversation_id, command.hard_delete)
+            .await?;
+
+        info!(conversation_id = %command.conversation_id, "Conversation deleted");
+        Ok(())
+    }
+
+    /// 处理强制会话同步命令
+    pub async fn handle_force_conversation_sync(
+        &self,
+        command: ForceConversationSyncCommand,
+    ) -> Result<Vec<String>> {
+        debug!(
+            user_id = %command.user_id,
+            session_count = command.conversation_ids.len(),
+            "Handling force session sync command"
+        );
+
+        let missing = self
+            .domain_service
+            .force_conversation_sync(
+                &command.user_id,
+                &command.conversation_ids,
+                command.reason.as_deref(),
+            )
+            .await?;
+
+        Ok(missing)
+    }
+
+    /// 处理管理参与者命令
+    pub async fn handle_manage_participants(
+        &self,
+        command: ManageParticipantsCommand,
+    ) -> Result<Vec<crate::domain::model::ConversationParticipant>> {
+        debug!(
+            conversation_id = %command.conversation_id,
+            to_add = command.to_add.len(),
+            to_remove = command.to_remove.len(),
+            "Handling manage participants command"
+        );
+
+        let participants = self
+            .domain_service
+            .manage_participants(
+                &command.conversation_id,
+                command.to_add,
+                command.to_remove,
+                command.role_updates,
+            )
+            .await?;
+
+        info!(conversation_id = %command.conversation_id, "Participants managed");
+        Ok(participants)
+    }
+
+    /// 处理更新游标命令
+    pub async fn handle_update_cursor(&self, command: UpdateCursorCommand) -> Result<()> {
+        debug!(
+            user_id = %command.user_id,
+            conversation_id = %command.conversation_id,
+            message_ts = command.message_ts,
+            "Handling update cursor command"
+        );
+
+        self.domain_service
+            .update_cursor(&command.user_id, &command.conversation_id, command.message_ts)
+            .await?;
+
+        Ok(())
+    }
+
+    /// 处理更新设备状态命令
+    pub async fn handle_update_presence(&self, command: UpdatePresenceCommand) -> Result<()> {
+        debug!(
+            user_id = %command.user_id,
+            device_id = %command.device_id,
+            state = ?command.state,
+            "Handling update presence command"
+        );
+
+        self.domain_service
+            .update_presence(
+                &command.user_id,
+                &command.device_id,
+                command.device_platform,
+                command.state,
+                command.conflict_resolution,
+                command.notify_conflict,
+                command.conflict_reason,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    /// 处理更新会话命令
+    pub async fn handle_update_conversation(
+        &self,
+        command: UpdateConversationCommand,
+    ) -> Result<crate::domain::model::Conversation> {
+        debug!(
+            conversation_id = %command.conversation_id,
+            "Handling update conversation command"
+        );
+
+        let conversation = self
+            .domain_service
+            .update_conversation(
+                &command.conversation_id,
+                command.display_name,
+                command.attributes,
+                command.visibility,
+                command.lifecycle_state,
+            )
+            .await?;
+
+        info!(conversation_id = %command.conversation_id, "Conversation updated");
+        Ok(conversation)
+    }
+}
+
+/// 会话查询处理器
+pub struct ConversationQueryHandler {
+    domain_service: Arc<ConversationDomainService>,
+}
+
+impl ConversationQueryHandler {
+    pub fn new(
+        _conversation_repo: Arc<dyn crate::domain::repository::ConversationRepository>,
+        _message_provider: Option<
+            Arc<dyn crate::domain::repository::MessageProvider + Send + Sync>,
+        >,
+        domain_service: Arc<ConversationDomainService>,
+    ) -> Self {
+        Self { domain_service }
+    }
+
+    /// 处理列出会话查询
+    pub async fn handle_list_conversations(
+        &self,
+        query: ListConversationsQuery,
+    ) -> Result<(
+        Vec<crate::domain::model::ConversationSummary>,
+        Option<String>,
+        bool,
+    )> {
+        debug!(
+            user_id = %query.user_id,
+            cursor = ?query.cursor,
+            limit = query.limit,
+            "Handling list sessions query"
+        );
+
+        let result = self
+            .domain_service
+            .list_conversations(&query.user_id, query.cursor.as_deref(), query.limit)
+            .await?;
+
+        Ok(result)
+    }
+
+    /// 处理搜索会话查询
+    pub async fn handle_search_conversations(
+        &self,
+        query: SearchConversationsQuery,
+    ) -> Result<(Vec<crate::domain::model::ConversationSummary>, usize)> {
+        debug!(
+            user_id = ?query.user_id,
+            filter_count = query.filters.len(),
+            sort_count = query.sort.len(),
+            limit = query.limit,
+            "Handling search sessions query"
+        );
+
+        let result = self
+            .domain_service
+            .search_conversations(
+                query.user_id.as_deref(),
+                query.filters,
+                query.sort,
+                query.limit,
+                query.offset,
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    /// 处理会话引导查询
+    pub async fn handle_conversation_bootstrap(
+        &self,
+        query: ConversationBootstrapQuery,
+    ) -> Result<ConversationBootstrapOutput> {
+        debug!(
+            user_id = %query.user_id,
+            include_recent = query.include_recent,
+            "Handling session bootstrap query"
+        );
+
+        let result = self
+            .domain_service
+            .bootstrap_conversation(
+                &query.user_id,
+                query.client_cursor,
+                query.include_recent,
+                query.recent_limit,
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    /// 处理同步消息查询
+    pub async fn handle_sync_messages(
+        &self,
+        query: SyncMessagesQuery,
+    ) -> Result<crate::domain::model::MessageSyncResult> {
+        debug!(
+            conversation_id = %query.conversation_id,
+            since_ts = query.since_ts,
+            cursor = ?query.cursor,
+            limit = query.limit,
+            "Handling sync messages query"
+        );
+
+        let result = self
+            .domain_service
+            .sync_messages(
+                &query.conversation_id,
+                query.since_ts,
+                query.cursor.as_deref(),
+                query.limit,
+            )
+            .await?;
+
+        Ok(result)
+    }
+}

@@ -55,8 +55,8 @@ impl HookExecutor {
                 tenant_id: ctx.tenant_id.clone(),
                 ..Default::default()
             }),
-            session_id: ctx.session_id.clone().unwrap_or_default(),
-            session_type: ctx.session_type.clone().unwrap_or_default(),
+            conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
+            conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
             corridor: "push".to_string(),
             tags: ctx.tags.clone(),
             attributes: ctx.attributes.clone(),

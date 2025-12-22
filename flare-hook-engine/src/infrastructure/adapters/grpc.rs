@@ -184,8 +184,8 @@ impl GrpcHookAdapter {
         let mut request = Request::new(request);
         request = self.set_request_metadata(request);
 
-        // 使用一致性哈希时，以 session_id 作为 key
-        let key = ctx.session_id.as_deref();
+        // 使用一致性哈希时，以 conversation_id 作为 key
+        let key = ctx.conversation_id.as_deref();
         let mut client = self.get_client(key).await?;
 
         let response = client
@@ -213,8 +213,8 @@ impl GrpcHookAdapter {
         let mut request = Request::new(request);
         request = self.set_request_metadata(request);
 
-        // 使用一致性哈希时，以 session_id 作为 key
-        let key = ctx.session_id.as_deref();
+        // 使用一致性哈希时，以 conversation_id 作为 key
+        let key = ctx.conversation_id.as_deref();
         let mut client = self.get_client(key).await?;
 
         let response = client
@@ -295,8 +295,8 @@ impl GrpcHookAdapter {
         let mut request = Request::new(request);
         request = self.set_request_metadata(request);
 
-        // 使用一致性哈希时，以 session_id 作为 key
-        let key = ctx.session_id.as_deref();
+        // 使用一致性哈希时，以 conversation_id 作为 key
+        let key = ctx.conversation_id.as_deref();
         let mut client = self.get_client(key).await?;
 
         let response = client

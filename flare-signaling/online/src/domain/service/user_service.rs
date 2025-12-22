@@ -13,21 +13,17 @@ use flare_server_core::error::ErrorCode;
 use prost_types::Timestamp;
 use tracing::{info, warn};
 
-// 引入ConnectionQuality转换适配器
-use crate::domain::value_object::ConnectionQuality;
-
-use crate::domain::aggregate::Session;
-use crate::domain::repository::SessionRepository;
+use crate::domain::repository::ConversationRepository;
 use crate::util;
 
 /// 用户领域服务 - 包含所有业务逻辑
 pub struct UserService {
-    session_repository: Arc<dyn SessionRepository + Send + Sync>,
+    conversation_repository: Arc<dyn ConversationRepository + Send + Sync>,
 }
 
 impl UserService {
-    pub fn new(session_repository: Arc<dyn SessionRepository + Send + Sync>) -> Self {
-        Self { session_repository }
+    pub fn new(conversation_repository: Arc<dyn ConversationRepository + Send + Sync>) -> Self {
+        Self { conversation_repository }
     }
 
     /// 查询用户在线状态
@@ -41,8 +37,8 @@ impl UserService {
         let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
             .map_err(|e| anyhow::anyhow!(e))?;
         let sessions = self
-            .session_repository
-            .get_user_sessions(&user_id_vo)
+            .conversation_repository
+            .get_user_connections(&user_id_vo)
             .await?;
 
         // 计算在线状态
@@ -70,7 +66,7 @@ impl UserService {
                     priority: s.device_priority() as i32,
                     token_version: s.token_version().value(),
                     connection_quality: s.connection_quality().cloned().map(|cq| cq.into()),
-                    session_id: s.id().as_str().to_string(),
+                    conversation_id: s.id().as_str().to_string(),
                     gateway_id: s.gateway_id().to_string(),
                     server_id: s.server_id().to_string(),
                 })
@@ -150,8 +146,8 @@ impl UserService {
         let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
             .map_err(|e| anyhow::anyhow!(e))?;
         let sessions = self
-            .session_repository
-            .get_user_sessions(&user_id_vo)
+            .conversation_repository
+            .get_user_connections(&user_id_vo)
             .await?;
 
         Ok(ListUserDevicesResponse {
@@ -169,7 +165,7 @@ impl UserService {
                     priority: s.device_priority() as i32,
                     token_version: s.token_version().value(),
                     connection_quality: s.connection_quality().cloned().map(|cq| cq.into()),
-                    session_id: s.id().as_str().to_string(),
+                    conversation_id: s.id().as_str().to_string(),
                     gateway_id: s.gateway_id().to_string(),
                     server_id: s.server_id().to_string(),
                 })
@@ -189,20 +185,20 @@ impl UserService {
         let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string())
             .map_err(|e| anyhow::anyhow!(e))?;
         let session = self
-            .session_repository
-            .get_session_by_device(&user_vo, &device_vo)
+            .conversation_repository
+            .get_connection_by_device(&user_vo, &device_vo)
             .await?;
 
         if let Some(session) = session {
             // 删除会话
-            self.session_repository
-                .remove_session(&session.id(), &user_vo)
+            self.conversation_repository
+                .remove_connection(&session.id(), &user_vo)
                 .await?;
 
             info!(
                 user_id = %user_id,
                 device_id = %device_id,
-                session_id = %session.id().as_str(),
+                conversation_id = %session.id().as_str(),
                 "device kicked"
             );
 
@@ -228,8 +224,8 @@ impl UserService {
         let device_vo = crate::domain::value_object::DeviceId::new(device_id.to_string())
             .map_err(|e| anyhow::anyhow!(e))?;
         let session = self
-            .session_repository
-            .get_session_by_device(&user_id_vo, &device_vo)
+            .conversation_repository
+            .get_connection_by_device(&user_id_vo, &device_vo)
             .await?;
 
         if let Some(session) = session {
@@ -246,7 +242,7 @@ impl UserService {
                     priority: session.device_priority() as i32,
                     token_version: session.token_version().value(),
                     connection_quality: session.connection_quality().cloned().map(|cq| cq.into()),
-                    session_id: session.id().as_str().to_string(),
+                    conversation_id: session.id().as_str().to_string(),
                     gateway_id: session.gateway_id().to_string(),
                     server_id: session.server_id().to_string(),
                 }),

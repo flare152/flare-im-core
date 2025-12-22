@@ -8,14 +8,14 @@ pub struct QueryMessageQuery {
     /// 消息ID
     pub message_id: String,
     /// 会话ID
-    pub session_id: String,
+    pub conversation_id: String,
 }
 
 /// 查询消息列表请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryMessagesQuery {
     /// 会话ID
-    pub session_id: String,
+    pub conversation_id: String,
     /// 分页参数
     pub limit: Option<i32>,
     /// 游标（用于分页）
@@ -30,7 +30,7 @@ pub struct QueryMessagesQuery {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchMessagesQuery {
     /// 会话ID（可选）
-    pub session_id: Option<String>,
+    pub conversation_id: Option<String>,
     /// 搜索关键词
     pub keyword: String,
     /// 分页参数

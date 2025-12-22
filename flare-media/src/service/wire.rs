@@ -18,7 +18,7 @@ use crate::infrastructure::cache::redis_metadata::RedisMetadataCache;
 use crate::infrastructure::local::filesystem::FilesystemMediaStore;
 use crate::infrastructure::object_store::adapter::build_object_store;
 use crate::infrastructure::persistence::postgres_metadata::PostgresMetadataStore;
-use crate::infrastructure::session::redis_session::RedisUploadSessionStore;
+use crate::infrastructure::conversation::redis_session::RedisUploadSessionStore;
 use crate::interface::grpc::handler::MediaGrpcHandler;
 
 /// 应用上下文 - 包含所有已初始化的服务
@@ -84,7 +84,7 @@ async fn build_media_service(
         None => None,
     };
 
-    let upload_session_store: Option<UploadSessionStoreRef> =
+    let upload_conversation_store: Option<UploadSessionStoreRef> =
         match config.upload_session_redis_url() {
             Some(url) => {
                 let store = RedisUploadSessionStore::new(
@@ -123,7 +123,7 @@ async fn build_media_service(
             metadata_store,
             reference_store,
             metadata_cache,
-            upload_session_store,
+            upload_conversation_store,
             local_store,
             domain_config,
         )),

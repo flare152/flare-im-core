@@ -15,11 +15,6 @@ mod connection_queries {
     use flare_proto::common::ErrorCode;
     use tonic::Status;
 
-    // Helper function to create OK status
-    fn ok_status() -> Status {
-        Status::ok("")
-    }
-
     // Helper function to create OK RpcStatus
     fn ok_rpc_status() -> RpcStatus {
         RpcStatus {
@@ -109,41 +104,5 @@ mod connection_queries {
     }
 }
 
-// 会话查询
-mod session_queries {
-    use std::sync::Arc;
-
-    use flare_proto::signaling::{GetOnlineStatusRequest, GetOnlineStatusResponse};
-    use flare_server_core::error::{Result, ok_status};
-
-    use crate::domain::repository::SignalingGateway;
-
-    pub struct GetOnlineStatusQuery {
-        pub request: GetOnlineStatusRequest,
-    }
-
-    pub struct SessionQueryService {
-        signaling: Arc<dyn SignalingGateway>,
-    }
-
-    impl SessionQueryService {
-        pub fn new(signaling: Arc<dyn SignalingGateway>) -> Self {
-            Self { signaling }
-        }
-
-        pub async fn handle_get_online_status(
-            &self,
-            query: GetOnlineStatusQuery,
-        ) -> Result<GetOnlineStatusResponse> {
-            let mut response = self.signaling.get_online_status(query.request).await?;
-            if response.status.is_none() {
-                response.status = Some(ok_status());
-            }
-            Ok(response)
-        }
-    }
-}
-
 // 导出
 pub use connection_queries::{ConnectionQueryService, QueryUserConnectionsQuery};
-pub use session_queries::{GetOnlineStatusQuery, SessionQueryService};

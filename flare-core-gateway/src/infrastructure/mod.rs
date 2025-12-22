@@ -28,4 +28,4 @@ pub use hook::GrpcHookClient;
 pub use media::GrpcMediaClient;
 pub use message::GrpcMessageClient;
 pub use online::GrpcOnlineClient;
-pub use session::GrpcSessionClient;
+pub use session::GrpcConversationClient;

@@ -19,12 +19,17 @@ pub struct MessageOrchestratorConfig {
     pub wal_ttl_seconds: u64,
     pub default_tenant_id: Option<String>,
     pub default_business_type: String,
-    pub default_session_type: String,
+    pub default_conversation_type: String,
     pub default_sender_type: String,
     pub reader_endpoint: Option<String>,
     pub hook_config: Option<String>,
     pub hook_config_dir: Option<String>,
-    pub session_service_type: Option<String>,
+    pub conversation_service_type: Option<String>,
+    /// 服务器 ID（用于服务注册，标识服务实例）
+    pub server_id: Option<String>,
+    /// 业务系统标识符（SVID），用于服务发现时的过滤
+    /// 例如："svid.im"、"svid.customer" 等
+    pub svid: Option<String>,
 }
 
 fn env_or_fallback(primary: &str, fallback: &str) -> Option<String> {
@@ -143,7 +148,7 @@ impl MessageOrchestratorConfig {
         )
         .unwrap_or_else(|| "im".to_string());
 
-        let default_session_type = env_or_fallback(
+        let default_conversation_type = env_or_fallback(
             "MESSAGE_ORCHESTRATOR_DEFAULT_SESSION_TYPE",
             "STORAGE_DEFAULT_SESSION_TYPE",
         )
@@ -179,11 +184,22 @@ impl MessageOrchestratorConfig {
                 .and_then(|service| service.hook_config_dir.clone())
         });
 
-        // 从配置中获取 session_service_type
-        let session_service_type = service_config
+        // 从配置中获取 conversation_service_type
+        let conversation_service_type = service_config
             .as_ref()
-            .and_then(|service| service.session_service_type.clone())
+            .and_then(|service| service.conversation_service_type.clone())
             .or_else(|| env::var("MESSAGE_ORCHESTRATOR_SESSION_SERVICE_TYPE").ok());
+
+        // 从环境变量获取 server_id 和 svid
+        let server_id = env_or_fallback(
+            "MESSAGE_ORCHESTRATOR_SERVER_ID",
+            "SERVER_ID",
+        );
+        
+        let svid = env_or_fallback(
+            "MESSAGE_ORCHESTRATOR_SVID",
+            "SVID",
+        ).or_else(|| Some("svid.im".to_string())); // 默认为 svid.im
 
         Self {
             kafka_bootstrap,
@@ -197,12 +213,14 @@ impl MessageOrchestratorConfig {
             wal_ttl_seconds,
             default_tenant_id,
             default_business_type,
-            default_session_type,
+            default_conversation_type,
             default_sender_type,
             reader_endpoint,
             hook_config,
             hook_config_dir,
-            session_service_type,
+            conversation_service_type,
+            server_id,
+            svid,
         }
     }
 
@@ -220,7 +238,7 @@ impl MessageOrchestratorConfig {
     pub fn defaults(&self) -> MessageDefaults {
         MessageDefaults {
             default_business_type: self.default_business_type.clone(),
-            default_session_type: self.default_session_type.clone(),
+            default_conversation_type: self.default_conversation_type.clone(),
             default_sender_type: self.default_sender_type.clone(),
             default_tenant_id: self.default_tenant_id.clone(),
         }

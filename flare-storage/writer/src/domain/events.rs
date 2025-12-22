@@ -3,7 +3,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub struct AckEvent<'a> {
     pub message_id: &'a str,
-    pub session_id: &'a str,
+    pub conversation_id: &'a str,
     pub status: AckStatus,
     pub ingestion_ts: i64,
     pub persisted_ts: i64,

@@ -59,8 +59,8 @@ impl CoreHookRegistry {
         Ok(config.session_delete)
     }
 
-    /// 获取所有SessionLifecycle Hook列表（合并create/update/delete）
-    pub async fn get_session_lifecycle_hooks(&self) -> Result<Vec<HookConfigItem>> {
+    /// 获取所有ConversationLifecycle Hook列表（合并create/update/delete）
+    pub async fn get_conversation_lifecycle_hooks(&self) -> Result<Vec<HookConfigItem>> {
         let config = self.config_watcher.get_config().await;
         let mut hooks = Vec::new();
         hooks.extend(config.session_create);
@@ -111,10 +111,10 @@ impl CoreHookRegistry {
         Ok(config.push_delivery)
     }
 
-    /// 获取GetSessionParticipants Hook列表
-    pub async fn get_session_participants_hooks(&self) -> Result<Vec<HookConfigItem>> {
+    /// 获取GetConversationParticipants Hook列表
+    pub async fn get_conversation_participants_hooks(&self) -> Result<Vec<HookConfigItem>> {
         let config = self.config_watcher.get_config().await;
-        Ok(config.get_session_participants)
+        Ok(config.get_conversation_participants)
     }
 
     /// 重新加载配置

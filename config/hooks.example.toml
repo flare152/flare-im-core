@@ -11,7 +11,7 @@ require_success = true
 
 [pre_send.selector]
 tenants = ["default"]
-session_types = ["single_chat"]
+conversation_types = ["single_chat"]
 message_types = ["text"]
 
 [pre_send.transport]

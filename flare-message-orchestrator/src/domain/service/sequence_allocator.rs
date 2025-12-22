@@ -7,9 +7,9 @@
 ///
 /// # 设计原理（对标微信 MsgService / Telegram）
 ///
-/// 1. **每会话独立序列**：每个 session_id 维护独立的递增序列号
+/// 1. **每会话独立序列**：每个 conversation_id 维护独立的递增序列号
 /// 2. **Redis INCR 原子性**：使用 Redis INCR 命令保证原子递增（单机 10w+ QPS）
-/// 3. **分区保证顺序**：Kafka 按 session_id key 分区，确保同会话消息进入同一 partition
+/// 3. **分区保证顺序**：Kafka 按 conversation_id key 分区，确保同会话消息进入同一 partition
 /// 4. **消费端顺序写入**：StorageWriter 按 partition 顺序消费，保证数据库写入顺序
 ///
 /// # 对比传统方案
@@ -97,7 +97,7 @@ impl SequenceAllocator {
     ///
     /// # 核心逻辑
     ///
-    /// 1. 构建 Redis key：`seq:{tenant_id}:{session_id}`
+    /// 1. 构建 Redis key：`seq:{tenant_id}:{conversation_id}`
     /// 2. 执行 `INCR key` 原子递增（保证线程安全）
     /// 3. 设置 TTL 为 7 天（避免 key 堆积）
     /// 4. 返回递增后的序列号
@@ -109,7 +109,7 @@ impl SequenceAllocator {
     ///
     /// # 参数
     ///
-    /// - `session_id`: 会话 ID（如 "1-{hash}" 或 "2-group123"）
+    /// - `conversation_id`: 会话 ID（如 "1-{hash}" 或 "2-group123"）
     /// - `tenant_id`: 租户 ID（用于多租户隔离）
     ///
     /// # 返回
@@ -123,9 +123,9 @@ impl SequenceAllocator {
     /// let seq = allocator.allocate_seq("session-123", "tenant-a").await?;
     /// println!("Allocated seq: {}", seq); // 输出：Allocated seq: 42
     /// ```
-    pub async fn allocate_seq(&self, session_id: &str, tenant_id: &str) -> Result<u64> {
-        // 构建 Redis key（格式：seq:{tenant_id}:{session_id}）
-        let key = self.build_redis_key(tenant_id, session_id);
+    pub async fn allocate_seq(&self, conversation_id: &str, tenant_id: &str) -> Result<u64> {
+        // 构建 Redis key（格式：seq:{tenant_id}:{conversation_id}）
+        let key = self.build_redis_key(tenant_id, conversation_id);
 
         // 获取 Redis 连接
         let mut conn = self.connection_manager.clone();
@@ -145,7 +145,7 @@ impl SequenceAllocator {
             .context("Failed to set TTL for sequence key")?;
 
         debug!(
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             tenant_id = %tenant_id,
             seq = seq,
             "Allocated session sequence"
@@ -179,7 +179,7 @@ impl SequenceAllocator {
     ///
     /// # 参数
     ///
-    /// - `session_id`: 会话 ID
+    /// - `conversation_id`: 会话 ID
     /// - `tenant_id`: 租户 ID
     ///
     /// # 返回
@@ -198,8 +198,8 @@ impl SequenceAllocator {
     ///     send_to_kafka(message);
     /// }
     /// ```
-    pub async fn allocate_batch(&self, session_id: &str, tenant_id: &str) -> Result<Vec<u64>> {
-        let key = self.build_redis_key(tenant_id, session_id);
+    pub async fn allocate_batch(&self, conversation_id: &str, tenant_id: &str) -> Result<Vec<u64>> {
+        let key = self.build_redis_key(tenant_id, conversation_id);
 
         let mut conn = self.connection_manager.clone();
 
@@ -219,7 +219,7 @@ impl SequenceAllocator {
         let start_seq = end_seq.saturating_sub(self.batch_size) + 1;
 
         debug!(
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             tenant_id = %tenant_id,
             start_seq = start_seq,
             end_seq = end_seq,
@@ -254,7 +254,7 @@ impl SequenceAllocator {
     ///
     /// ```rust
     /// // Redis 不可用时降级
-    /// let seq = match allocator.allocate_seq(session_id, tenant_id).await {
+    /// let seq = match allocator.allocate_seq(conversation_id, tenant_id).await {
     ///     Ok(seq) => seq,
     ///     Err(e) => {
     ///         warn!("Redis unavailable: {}, using degraded mode", e);
@@ -287,7 +287,7 @@ impl SequenceAllocator {
         seq
     }
 
-    /// 构建 Redis key（格式：seq:{tenant_id}:{session_id}）
+    /// 构建 Redis key（格式：seq:{tenant_id}:{conversation_id}）
     ///
     /// # 设计考虑
     ///
@@ -301,8 +301,8 @@ impl SequenceAllocator {
     /// seq:tenant-a:1-{hash}  → 单聊
     /// seq:tenant-b:group:group123      → 群聊
     /// ```
-    fn build_redis_key(&self, tenant_id: &str, session_id: &str) -> String {
-        format!("seq:{}:{}", tenant_id, session_id)
+    fn build_redis_key(&self, tenant_id: &str, conversation_id: &str) -> String {
+        format!("seq:{}:{}", tenant_id, conversation_id)
     }
 
     /// 健康检查：测试 Redis 连接是否可用
@@ -343,13 +343,13 @@ mod tests {
             .await
             .unwrap();
 
-        let session_id = "test-session-1";
+        let conversation_id = "test-session-1";
         let tenant_id = "test-tenant";
 
         // 分配 3 次，验证递增
-        let seq1 = allocator.allocate_seq(session_id, tenant_id).await.unwrap();
-        let seq2 = allocator.allocate_seq(session_id, tenant_id).await.unwrap();
-        let seq3 = allocator.allocate_seq(session_id, tenant_id).await.unwrap();
+        let seq1 = allocator.allocate_seq(conversation_id, tenant_id).await.unwrap();
+        let seq2 = allocator.allocate_seq(conversation_id, tenant_id).await.unwrap();
+        let seq3 = allocator.allocate_seq(conversation_id, tenant_id).await.unwrap();
 
         assert!(seq2 > seq1);
         assert!(seq3 > seq2);
@@ -365,11 +365,11 @@ mod tests {
             .await
             .unwrap();
 
-        let session_id = "test-session-2";
+        let conversation_id = "test-session-2";
         let tenant_id = "test-tenant";
 
         let seqs = allocator
-            .allocate_batch(session_id, tenant_id)
+            .allocate_batch(conversation_id, tenant_id)
             .await
             .unwrap();
 

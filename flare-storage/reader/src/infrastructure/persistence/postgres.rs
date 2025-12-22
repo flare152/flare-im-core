@@ -111,8 +111,8 @@ impl PostgresMessageStorage {
         // 索引列表（与 Writer 保持一致，但使用 IF NOT EXISTS 避免冲突）
         let indexes = vec![
             (
-                "idx_messages_session_id",
-                "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)",
+                "idx_messages_conversation_id",
+                "CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)",
             ),
             (
                 "idx_messages_sender_id",
@@ -120,7 +120,7 @@ impl PostgresMessageStorage {
             ),
             (
                 "idx_messages_session_timestamp",
-                "CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(conversation_id, timestamp DESC)",
             ),
             (
                 "idx_messages_id_unique",
@@ -144,7 +144,7 @@ impl PostgresMessageStorage {
             ),
             (
                 "idx_messages_session_seq",
-                "CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(conversation_id, seq)",
             ),
             (
                 "idx_messages_timestamp",
@@ -187,7 +187,7 @@ impl PostgresMessageStorage {
     /// 从数据库行转换为 Message protobuf
     fn row_to_message(&self, row: &sqlx::postgres::PgRow) -> Result<Message> {
         let id: String = row.get("id");
-        let session_id: String = row.get("session_id");
+        let conversation_id: String = row.get("conversation_id");
         let sender_id: String = row.get("sender_id");
         let receiver_ids: Option<Value> = row.get("receiver_ids");
         let content: Option<Vec<u8>> = row.get("content");
@@ -255,8 +255,8 @@ impl PostgresMessageStorage {
         });
 
         // 从 extra 中提取其他字段
-        // receiver_id 已废弃，通过 session_id 确定接收者
-        let _session_type = extra_map.get("session_type").cloned().unwrap_or_default();
+        // receiver_id 已废弃，通过 conversation_id 确定接收者
+        let _conversation_type = extra_map.get("conversation_type").cloned().unwrap_or_default();
         let source_str = extra_map.get("sender_type").cloned().unwrap_or_default();
         let source = match source_str.as_str() {
             "user" => MessageSource::User as i32,
@@ -280,7 +280,7 @@ impl PostgresMessageStorage {
                 "tenant_id"
                     | "business_id"
                     | "receiver_id"
-                    | "session_type"
+                    | "conversation_type"
                     | "sender_type"
                     | "tags"
                     | "seq"
@@ -479,7 +479,7 @@ impl PostgresMessageStorage {
         // 构建 Message
         Ok(Message {
             id,
-            session_id,
+            conversation_id,
             sender_id,
             receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
             channel_id: String::new(),  // 从数据库读取：channel_id 可能为空（旧数据）
@@ -507,7 +507,7 @@ impl PostgresMessageStorage {
 
 #[async_trait]
 impl MessageStorage for PostgresMessageStorage {
-    async fn store_message(&self, _message: &Message, _session_id: &str) -> Result<()> {
+    async fn store_message(&self, _message: &Message, _conversation_id: &str) -> Result<()> {
         // 读侧存储通常不需要实现 store_message
         // 但为了兼容性，可以提供一个空实现或委托给 Writer
         tracing::warn!(
@@ -519,7 +519,7 @@ impl MessageStorage for PostgresMessageStorage {
 
     async fn query_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
@@ -532,11 +532,11 @@ impl MessageStorage for PostgresMessageStorage {
         // L2 缓存策略：先查 Redis，未命中再查 TimescaleDB
         if let Some(cache) = &self.cache {
             if let Ok(Some(cached_messages)) = cache
-                .get_session_messages(session_id, start_ts, end_ts, limit)
+                .get_session_messages(conversation_id, start_ts, end_ts, limit)
                 .await
             {
                 tracing::debug!(
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     cached_count = cached_messages.len(),
                     "Cache hit: retrieved messages from Redis"
                 );
@@ -550,15 +550,15 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, session_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
             FROM messages
-            WHERE session_id = 
+            WHERE conversation_id = 
             "#,
         );
-        query.push_bind(session_id);
+        query.push_bind(conversation_id);
         // TimescaleDB 时间分区裁剪：使用 timestamp 范围查询，自动裁剪不相关的分区
         query.push(" AND timestamp >= ");
         query.push_bind(start_ts);
@@ -571,7 +571,7 @@ impl MessageStorage for PostgresMessageStorage {
             query.push_bind(uid);
         }
 
-        // 使用索引优化：session_id + timestamp DESC（复合索引）
+        // 使用索引优化：conversation_id + timestamp DESC（复合索引）
         query.push(" ORDER BY timestamp DESC, seq DESC NULLS LAST");
         query.push(" LIMIT ");
         query.push_bind(limit);
@@ -594,10 +594,10 @@ impl MessageStorage for PostgresMessageStorage {
         if let Some(cache) = &self.cache {
             let cache_clone = Arc::clone(cache);
             let messages_clone = messages.clone();
-            let session_id_clone = session_id.to_string();
+            let conversation_id_clone = conversation_id.to_string();
             tokio::spawn(async move {
                 if let Err(e) = cache_clone
-                    .cache_session_messages(&session_id_clone, start_ts, end_ts, &messages_clone)
+                    .cache_session_messages(&conversation_id_clone, start_ts, end_ts, &messages_clone)
                     .await
                 {
                     tracing::warn!(
@@ -613,7 +613,7 @@ impl MessageStorage for PostgresMessageStorage {
 
     async fn query_messages_by_seq(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         after_seq: i64,
         before_seq: Option<i64>,
@@ -625,15 +625,15 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, session_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
             FROM messages
-            WHERE session_id = 
+            WHERE conversation_id = 
             "#,
         );
-        query.push_bind(session_id);
+        query.push_bind(conversation_id);
         query.push(" AND seq > ");
         query.push_bind(after_seq);
 
@@ -668,14 +668,14 @@ impl MessageStorage for PostgresMessageStorage {
 
     async fn get_message(&self, message_id: &str) -> Result<Option<Message>> {
         // L2 缓存策略：先查 Redis，未命中再查 TimescaleDB
-        // 注意：需要从 message_id 中提取 session_id，或通过查询获取
-        // 简化实现：先查数据库获取 session_id，然后查缓存
+        // 注意：需要从 message_id 中提取 conversation_id，或通过查询获取
+        // 简化实现：先查数据库获取 conversation_id，然后查缓存
 
-        // 先尝试从数据库获取（包含 session_id）
+        // 先尝试从数据库获取（包含 conversation_id）
         let row = sqlx::query(
             r#"
             SELECT 
-                id, session_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
@@ -912,13 +912,13 @@ impl MessageStorage for PostgresMessageStorage {
             .context("Failed to update message")?;
 
         // 更新后清除缓存
-        // 注意：需要 session_id 才能清除缓存，但这里只有 message_id
-        // 实际生产环境可以维护 message_id -> session_id 的映射，或通过查询获取
+        // 注意：需要 conversation_id 才能清除缓存，但这里只有 message_id
+        // 实际生产环境可以维护 message_id -> conversation_id 的映射，或通过查询获取
         // 这里暂时不实现缓存失效，因为需要额外的查询开销
         if self.cache.is_some() {
             tracing::debug!(
                 message_id = %message_id,
-                "Message updated, cache invalidation skipped (requires session_id query)"
+                "Message updated, cache invalidation skipped (requires conversation_id query)"
             );
         }
 
@@ -959,7 +959,7 @@ impl MessageStorage for PostgresMessageStorage {
 
     async fn count_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
@@ -968,8 +968,8 @@ impl MessageStorage for PostgresMessageStorage {
         let end_ts = end_time.unwrap_or(Utc::now());
 
         let mut query =
-            sqlx::QueryBuilder::new("SELECT COUNT(*) FROM messages WHERE session_id = ");
-        query.push_bind(session_id);
+            sqlx::QueryBuilder::new("SELECT COUNT(*) FROM messages WHERE conversation_id = ");
+        query.push_bind(conversation_id);
         query.push(" AND timestamp >= ");
         query.push_bind(start_ts);
         query.push(" AND timestamp <= ");
@@ -1004,7 +1004,7 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, session_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, sender_id, receiver_ids, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
@@ -1023,8 +1023,8 @@ impl MessageStorage for PostgresMessageStorage {
             }
 
             match filter.field.as_str() {
-                "session_id" => {
-                    query.push(" AND session_id = ");
+                "conversation_id" => {
+                    query.push(" AND conversation_id = ");
                     query.push_bind(&filter.values[0]);
                 }
                 "sender_id" => {
@@ -1141,7 +1141,7 @@ impl VisibilityStorage for PostgresMessageStorage {
         &self,
         message_id: &str,
         user_id: &str,
-        _session_id: &str,
+        _conversation_id: &str,
         visibility: VisibilityStatus,
     ) -> Result<()> {
         let vis_value = visibility as i32;
@@ -1202,7 +1202,7 @@ impl VisibilityStorage for PostgresMessageStorage {
         &self,
         message_ids: &[String],
         user_id: &str,
-        _session_id: &str,
+        _conversation_id: &str,
         visibility: VisibilityStatus,
     ) -> Result<usize> {
         self.batch_update_visibility(message_ids, user_id, visibility)
@@ -1212,7 +1212,7 @@ impl VisibilityStorage for PostgresMessageStorage {
     async fn query_visible_message_ids(
         &self,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         visibility_status: VisibilityStatus,
     ) -> Result<Vec<String>> {
         let vis_value = visibility_status as i32;
@@ -1221,11 +1221,11 @@ impl VisibilityStorage for PostgresMessageStorage {
             r#"
             SELECT id
             FROM messages
-            WHERE session_id = $1
+            WHERE conversation_id = $1
             AND (visibility->$2)::int = $3
             "#,
         )
-        .bind(session_id)
+        .bind(conversation_id)
         .bind(user_id)
         .bind(vis_value)
         .fetch_all(&self.pool)

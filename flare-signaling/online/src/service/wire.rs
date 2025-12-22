@@ -10,20 +10,19 @@ use redis::Client;
 use crate::application::handlers::{OnlineCommandHandler, OnlineQueryHandler};
 use crate::config::OnlineConfig;
 use crate::domain::repository::{
-    PresenceWatcher, SessionRepository, SignalPublisher, SubscriptionRepository,
+    PresenceWatcher, ConversationRepository, SignalPublisher, SubscriptionRepository,
 };
 use crate::domain::service::{
     OnlineStatusDomainService, SubscriptionDomainService, UserDomainService,
 };
 use crate::infrastructure::persistence::redis::{
-    RedisPresenceWatcher, RedisSessionRepository, RedisSignalPublisher, RedisSubscriptionRepository,
+    RedisPresenceWatcher, RedisConversationRepository, RedisSignalPublisher, RedisSubscriptionRepository,
 };
-use crate::interface::grpc::{handler::OnlineHandler, user_handler::UserHandler};
+use crate::interface::grpc::handler::OnlineHandler;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
-    pub signaling_handler: OnlineHandler,
-    pub user_handler: UserHandler,
+    pub online_handler: OnlineHandler,
 }
 
 /// 构建应用上下文
@@ -50,7 +49,7 @@ pub async fn initialize(
     );
 
     // 3. 构建仓储
-    let session_repository: Arc<dyn SessionRepository> = Arc::new(RedisSessionRepository::new(
+    let conversation_repository: Arc<dyn ConversationRepository> = Arc::new(RedisConversationRepository::new(
         redis_client.clone(),
         online_config.clone(),
     ));
@@ -75,7 +74,7 @@ pub async fn initialize(
         uuid::Uuid::new_v4().to_string()[..8].to_string()
     );
     let online_domain_service = Arc::new(OnlineStatusDomainService::new(
-        session_repository.clone(),
+        conversation_repository.clone(),
         gateway_id,
     ));
 
@@ -84,7 +83,7 @@ pub async fn initialize(
         signal_publisher.clone(),
     ));
 
-    let user_domain_service = Arc::new(UserDomainService::new(session_repository.clone()));
+    let user_domain_service = Arc::new(UserDomainService::new(conversation_repository.clone()));
 
     // 5. 构建应用层 handlers
     let command_handler = Arc::new(OnlineCommandHandler::new(
@@ -93,17 +92,17 @@ pub async fn initialize(
     ));
 
     // Query handler: 直接使用基础设施层（查询侧不经过领域层）
-    let query_handler = Arc::new(OnlineQueryHandler::new(session_repository.clone()));
+    let query_handler = Arc::new(OnlineQueryHandler::new(conversation_repository.clone()));
 
-    // 6. 构建 SignalingService Handler
-    let signaling_handler =
-        OnlineHandler::new(command_handler, query_handler, presence_watcher.clone());
-
-    // 7. 构建 UserService Handler
-    let user_handler = UserHandler::new(user_domain_service, presence_watcher);
+    // 6. 构建 OnlineService Handler（合并了 SignalingService 和 UserService）
+    let online_handler = OnlineHandler::new(
+        command_handler,
+        query_handler,
+        user_domain_service,
+        presence_watcher,
+    );
 
     Ok(ApplicationContext {
-        signaling_handler,
-        user_handler,
+        online_handler,
     })
 }

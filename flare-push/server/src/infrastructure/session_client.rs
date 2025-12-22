@@ -1,24 +1,24 @@
-//! Session 服务客户端（用于查询会话参与者）
+//! Conversation 服务客户端（用于查询会话参与者）
 
 use std::sync::Arc;
 
 use flare_proto::common::{ActorContext, RequestContext};
-use flare_proto::session::session_service_client::SessionServiceClient as SessionServiceClientProto;
-use flare_proto::session::{UpdateSessionRequest, UpdateSessionResponse};
+use flare_proto::conversation::conversation_service_client::ConversationServiceClient as ConversationServiceClientProto;
+use flare_proto::conversation::{UpdateConversationRequest, UpdateConversationResponse};
 use flare_server_core::discovery::ServiceClient;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::debug;
 
-/// Session 服务客户端
-pub struct SessionServiceClient {
+/// Conversation 服务客户端
+pub struct ConversationServiceClient {
     service_name: String,
     service_client: Mutex<Option<ServiceClient>>,
-    client: Mutex<Option<SessionServiceClientProto<Channel>>>,
+    client: Mutex<Option<ConversationServiceClientProto<Channel>>>,
 }
 
-impl SessionServiceClient {
+impl ConversationServiceClient {
     /// 创建新的客户端（使用服务名称，内部创建服务发现）
     pub fn new(service_name: String) -> Arc<Self> {
         Arc::new(Self {
@@ -37,7 +37,7 @@ impl SessionServiceClient {
         })
     }
 
-    async fn ensure_client(&self) -> Result<SessionServiceClientProto<Channel>> {
+    async fn ensure_client(&self) -> Result<ConversationServiceClientProto<Channel>> {
         let mut guard = self.client.lock().await;
         if let Some(client) = guard.as_ref() {
             return Ok(client.clone());
@@ -50,7 +50,7 @@ impl SessionServiceClient {
             let discover = flare_im_core::discovery::create_discover(&self.service_name)
                 .await
                 .map_err(|e| {
-                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+                    ErrorBuilder::new(ErrorCode::ServiceUnavailable, "conversation service unavailable")
                         .details(format!(
                             "Failed to create service discover for {}: {}",
                             self.service_name, e
@@ -63,7 +63,7 @@ impl SessionServiceClient {
             } else {
                 return Err(ErrorBuilder::new(
                     ErrorCode::ServiceUnavailable,
-                    "session service unavailable",
+                    "conversation service unavailable",
                 )
                 .details("Service discovery not configured")
                 .build_error());
@@ -71,7 +71,7 @@ impl SessionServiceClient {
         }
 
         let service_client = service_client_guard.as_mut().ok_or_else(|| {
-            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "conversation service unavailable")
                 .details("Service client not initialized")
                 .build_error()
         })?;
@@ -82,33 +82,33 @@ impl SessionServiceClient {
         )
         .await
         .map_err(|_| {
-            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "conversation service unavailable")
                 .details("Timeout waiting for service discovery to get channel (3s)")
                 .build_error()
         })?
         .map_err(|e| {
-            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session service unavailable")
+            ErrorBuilder::new(ErrorCode::ServiceUnavailable, "conversation service unavailable")
                 .details(format!("Failed to get channel: {}", e))
                 .build_error()
         })?;
 
-        debug!("Got channel for session service from service discovery");
+        debug!("Got channel for conversation service from service discovery");
 
-        let client = SessionServiceClientProto::new(channel);
+        let client = ConversationServiceClientProto::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }
 
-    /// 获取会话的所有参与者（通过 UpdateSession 方法，只传 session_id 获取 Session 信息）
-    pub async fn get_session_participants(
+    /// 获取会话的所有参与者（通过 UpdateConversation 方法，只传 conversation_id 获取 Conversation 信息）
+    pub async fn get_conversation_participants(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         tenant_id: Option<&str>,
     ) -> Result<Vec<String>> {
         let mut client = self.ensure_client().await?;
 
-        // 使用 UpdateSession 方法，只传 session_id，其他字段留空，来获取 Session 信息
-        let request = UpdateSessionRequest {
+        // 使用 UpdateConversation 方法，只传 conversation_id，其他字段留空，来获取 Conversation 信息
+        let request = UpdateConversationRequest {
             context: Some(RequestContext {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 trace: None,
@@ -131,34 +131,34 @@ impl SessionServiceClient {
                 labels: std::collections::HashMap::new(),
                 attributes: std::collections::HashMap::new(),
             }),
-            session_id: session_id.to_string(),
+            conversation_id: conversation_id.to_string(),
             display_name: String::new(),                  // 留空，不更新
             attributes: std::collections::HashMap::new(), // 留空，不更新
             visibility: 0,                                // 留空，不更新
             lifecycle_state: 0,                           // 留空，不更新
         };
 
-        let response: UpdateSessionResponse = client
-            .update_session(tonic::Request::new(request))
+        let response: UpdateConversationResponse = client
+            .update_conversation(tonic::Request::new(request))
             .await
             .map_err(|status| {
-                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "session query failed")
-                    .details(format!("Failed to get session participants: {}", status))
+                ErrorBuilder::new(ErrorCode::ServiceUnavailable, "conversation query failed")
+                    .details(format!("Failed to get conversation participants: {}", status))
                     .build_error()
             })?
             .into_inner();
 
-        // 从 Session 中提取参与者 user_id 列表
-        if let Some(session) = response.session {
-            Ok(session
+        // 从 Conversation 中提取参与者 user_id 列表
+        if let Some(conversation) = response.conversation {
+            Ok(conversation
                 .participants
                 .into_iter()
                 .map(|p| p.user_id)
                 .collect())
         } else {
             Err(
-                ErrorBuilder::new(ErrorCode::InvalidParameter, "session not found")
-                    .details(format!("Session {} not found", session_id))
+                ErrorBuilder::new(ErrorCode::InvalidParameter, "conversation not found")
+                    .details(format!("Conversation {} not found", conversation_id))
                     .build_error(),
             )
         }

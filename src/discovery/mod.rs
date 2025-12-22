@@ -31,8 +31,11 @@ pub use flare_server_core::discovery::{
 // Re-exports
 pub use init::{
     create_discover, create_discover_from_config, create_discover_from_registry_config,
-    init_from_app_config, init_from_config, init_from_registry_config,
-    register_service_from_config, register_service_from_registry_config, register_service_only,
+    create_discover_from_registry_config_with_filters, init_from_app_config, init_from_config,
+    init_from_registry_config, register_service_from_config,
+    register_service_from_config_with_metadata, register_service_from_registry_config,
+    register_service_from_registry_config_with_metadata, register_service_only,
+    register_service_only_with_metadata,
 };
 
 // 类型别名，方便使用

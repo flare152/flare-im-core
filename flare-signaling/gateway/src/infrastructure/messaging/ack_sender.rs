@@ -35,18 +35,18 @@ impl AckSender {
     /// # 参数
     /// * `connection_id` - 连接 ID
     /// * `message_id` - 消息 ID
-    /// * `session_id` - 会话 ID
+    /// * `conversation_id` - 会话 ID
     ///
     /// # ACK 类型
     /// 根据 MessageCommand 规范和 transport.proto 定义：
     /// - Type::Ack (1)：确认回执
     /// - payload：序列化的 SendEnvelopeAck（来自 transport.proto）
-    /// - metadata 包含：session_id（用于路由）
+    /// - metadata 包含：conversation_id（用于路由）
     pub async fn send_message_ack(
         &self,
         connection_id: &str,
         message_id: &str,
-        session_id: &str,
+        conversation_id: &str,
     ) -> Result<()> {
         // 构建 SendEnvelopeAck（使用 transport.proto 定义）
         let send_ack = flare_proto::common::SendEnvelopeAck {
@@ -62,9 +62,9 @@ impl AckSender {
             FlareError::serialization_error(format!("Failed to encode SendEnvelopeAck: {}", e))
         })?;
 
-        // 构建 ACK metadata（只保留路由必需的 session_id）
+        // 构建 ACK metadata（只保留路由必需的 conversation_id）
         let mut md = std::collections::HashMap::new();
-        md.insert("session_id".to_string(), session_id.as_bytes().to_vec());
+        md.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
 
         // 创建 ACK 命令（Type::Ack = 1）
         let ack_cmd = MessageCommand {
@@ -92,7 +92,7 @@ impl AckSender {
         info!(
             connection_id = %connection_id,
             message_id = %message_id,
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             "Message ACK sent to client (SendEnvelopeAck)"
         );
 
@@ -104,7 +104,7 @@ impl AckSender {
     /// # 参数
     /// * `connection_id` - 连接 ID
     /// * `message_id` - 消息 ID
-    /// * `session_id` - 会话 ID
+    /// * `conversation_id` - 会话 ID
     /// * `error_code` - 错误码
     /// * `error_message` - 错误信息
     ///
@@ -114,7 +114,7 @@ impl AckSender {
         &self,
         connection_id: &str,
         message_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         error_code: i32,
         error_message: String,
     ) -> Result<()> {
@@ -134,7 +134,7 @@ impl AckSender {
 
         // 构建 ACK metadata
         let mut md = std::collections::HashMap::new();
-        md.insert("session_id".to_string(), session_id.as_bytes().to_vec());
+        md.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
 
         // 创建 ACK 命令
         let ack_cmd = MessageCommand {
@@ -162,7 +162,7 @@ impl AckSender {
         warn!(
             connection_id = %connection_id,
             message_id = %message_id,
-            session_id = %session_id,
+            conversation_id = %conversation_id,
             error_code = error_code,
             "Failed ACK sent to client (SendEnvelopeAck)"
         );

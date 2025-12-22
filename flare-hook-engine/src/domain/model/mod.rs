@@ -88,7 +88,7 @@ pub struct HookSelectorConfig {
     pub tenants: Vec<String>,
     /// 会话类型列表（空表示匹配所有会话类型）
     #[serde(default)]
-    pub session_types: Vec<String>,
+    pub conversation_types: Vec<String>,
     /// 消息类型列表（空表示匹配所有消息类型）
     #[serde(default)]
     pub message_types: Vec<String>,
@@ -229,9 +229,9 @@ pub struct HookConfig {
     /// PushDelivery Hook配置列表
     #[serde(default)]
     pub push_delivery: Vec<HookConfigItem>,
-    /// GetSessionParticipants Hook配置列表
+    /// GetConversationParticipants Hook配置列表
     #[serde(default)]
-    pub get_session_participants: Vec<HookConfigItem>,
+    pub get_conversation_participants: Vec<HookConfigItem>,
 }
 
 /// Hook执行计划
@@ -328,7 +328,7 @@ impl HookExecutionPlan {
             "post_send" | "push_post_send" => HookKind::PostSend,
             "delivery" | "push_delivery" => HookKind::Delivery,
             "recall" => HookKind::Recall,
-            // 其他类型（session_lifecycle, user_login等）使用PreSend作为默认值
+            // 其他类型（conversation_lifecycle, user_login等）使用PreSend作为默认值
             _ => HookKind::PreSend,
         };
         let metadata = HookMetadata {

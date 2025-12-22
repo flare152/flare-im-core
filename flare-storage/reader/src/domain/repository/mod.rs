@@ -10,11 +10,11 @@ use std::collections::HashMap;
 // 注意：对于 trait 对象（dyn Trait），仍需要使用 async_trait
 #[async_trait::async_trait]
 pub trait MessageStorage: Send + Sync {
-    async fn store_message(&self, message: &Message, session_id: &str) -> Result<()>;
+    async fn store_message(&self, message: &Message, conversation_id: &str) -> Result<()>;
 
     async fn query_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
@@ -24,7 +24,7 @@ pub trait MessageStorage: Send + Sync {
     /// 基于 seq 查询消息（推荐，性能更好）
     ///
     /// # 参数
-    /// * `session_id` - 会话ID
+    /// * `conversation_id` - 会话ID
     /// * `user_id` - 用户ID（可选，用于过滤已删除消息）
     /// * `after_seq` - 查询 seq > after_seq 的消息（用于增量同步）
     /// * `before_seq` - 查询 seq < before_seq 的消息（可选，用于分页）
@@ -34,7 +34,7 @@ pub trait MessageStorage: Send + Sync {
     /// * `Ok(Vec<Message>)` - 消息列表（按 seq 升序排序）
     async fn query_messages_by_seq(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         after_seq: i64,
         before_seq: Option<i64>,
@@ -43,7 +43,7 @@ pub trait MessageStorage: Send + Sync {
 
     async fn count_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
@@ -95,7 +95,7 @@ pub trait VisibilityStorage: Send + Sync {
         &self,
         message_id: &str,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         visibility: VisibilityStatus,
     ) -> Result<()>;
 
@@ -109,14 +109,14 @@ pub trait VisibilityStorage: Send + Sync {
         &self,
         message_ids: &[String],
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         visibility: VisibilityStatus,
     ) -> Result<usize>;
 
     async fn query_visible_message_ids(
         &self,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
         visibility_status: VisibilityStatus,
     ) -> Result<Vec<String>>;
 }

@@ -14,7 +14,7 @@ use crate::infrastructure::cache::online_status_cache::CachedOnlineStatusReposit
 use crate::infrastructure::cache::redis_online::OnlineStatusRepositoryImpl;
 use crate::infrastructure::message_state::MessageStateTracker;
 use crate::infrastructure::mq::kafka_task_publisher::KafkaPushTaskPublisher;
-use crate::infrastructure::session_client::SessionServiceClient;
+use crate::infrastructure::session_client::ConversationServiceClient;
 use crate::infrastructure::signaling::SignalingOnlineClient;
 use crate::interface::consumers::{AckKafkaConsumer, PushKafkaConsumer};
 use deadpool_redis;
@@ -22,7 +22,7 @@ use flare_im_core::ack::{AckModule, AckServiceConfig};
 use flare_im_core::gateway::{GatewayRouter, GatewayRouterConfig, GatewayRouterTrait};
 use flare_im_core::hooks::{HookDispatcher, HookRegistry};
 use flare_im_core::metrics::PushServerMetrics;
-use flare_im_core::service_names::{ACCESS_GATEWAY, SESSION, SIGNALING_ONLINE, get_service_name};
+use flare_im_core::service_names::{ACCESS_GATEWAY, CONVERSATION, SIGNALING_ONLINE, get_service_name};
 
 /// 应用上下文 - 包含所有已初始化的服务
 ///
@@ -76,26 +76,26 @@ pub async fn initialize(
     };
 
     // 3.1 创建 Session 服务发现（从 service_names 获取，支持环境变量覆盖）
-    let session_service = get_service_name(SESSION);
-    let session_discover = flare_im_core::discovery::create_discover(&session_service)
+    let conversation_service = get_service_name(CONVERSATION);
+    let session_discover = flare_im_core::discovery::create_discover(&conversation_service)
         .await
         .map_err(|e| {
             anyhow::anyhow!(
                 "Failed to create session service discover for {}: {}",
-                session_service,
+                conversation_service,
                 e
             )
         })?;
 
-    let session_service_client = if let Some(discover) = session_discover {
+    let conversation_service_client = if let Some(discover) = session_discover {
         Some(flare_server_core::discovery::ServiceClient::new(discover))
     } else {
         None
     };
 
     // 3.2 构建 Session 服务客户端（可选，用于查询会话参与者）
-    let session_client = if let Some(service_client) = session_service_client {
-        Some(SessionServiceClient::with_service_client(service_client))
+    let conversation_client = if let Some(service_client) = conversation_service_client {
+        Some(ConversationServiceClient::with_service_client(service_client))
     } else {
         tracing::warn!(
             "Session service discovery not configured, get_all_online_users_for_session will not work"
@@ -104,10 +104,10 @@ pub async fn initialize(
     };
 
     // 4. 构建在线状态仓库（带5秒TTL本地缓存）
-    let inner_online_repo = if let Some(session_client) = session_client {
-        Arc::new(OnlineStatusRepositoryImpl::with_session_client(
+    let inner_online_repo = if let Some(conversation_client) = conversation_client {
+        Arc::new(OnlineStatusRepositoryImpl::with_conversation_client(
             signaling_client.clone(),
-            session_client,
+            conversation_client,
             server_config.default_tenant_id.clone(),
         ))
     } else {

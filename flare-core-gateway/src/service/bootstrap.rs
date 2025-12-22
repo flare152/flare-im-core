@@ -49,11 +49,8 @@ impl ApplicationBootstrap {
         use flare_proto::hooks::hook_service_server::HookServiceServer;
         use flare_proto::media::media_service_server::MediaServiceServer;
         use flare_proto::message::message_service_server::MessageServiceServer;
-        use flare_proto::session::session_service_server::SessionServiceServer;
-        use flare_proto::signaling::online::{
-            signaling_service_server::SignalingServiceServer,
-            user_service_server::UserServiceServer,
-        };
+        use flare_proto::conversation::conversation_service_server::ConversationServiceServer;
+        use flare_proto::signaling::online::online_service_server::OnlineServiceServer;
         use tonic::transport::Server;
 
         let simple_handler = context.simple_handler;
@@ -73,9 +70,8 @@ impl ApplicationBootstrap {
                     .add_service(MediaServiceServer::new(simple_handler.clone()))
                     .add_service(HookServiceServer::new(simple_handler.clone()))
                     .add_service(MessageServiceServer::new(simple_handler.clone()))
-                    .add_service(SignalingServiceServer::new(simple_handler.clone()))
-                    .add_service(UserServiceServer::new(simple_handler.clone()))
-                    .add_service(SessionServiceServer::new(simple_handler.clone()))
+                    .add_service(OnlineServiceServer::new(simple_handler.clone()))
+                    .add_service(ConversationServiceServer::new(simple_handler.clone()))
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

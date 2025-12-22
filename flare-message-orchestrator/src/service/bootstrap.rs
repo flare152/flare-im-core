@@ -96,16 +96,43 @@ impl ApplicationBootstrap {
                     .map_err(|e| format!("gRPC server error: {}", e).into())
             });
 
+        // 准备服务注册的元数据（server_id 和 svid）
+        // 从环境变量或配置获取（MessageOrchestratorConfig 已经处理了配置）
+        let config = context.config.clone();
+        let mut metadata = std::collections::HashMap::new();
+        
+        // 从配置获取 server_id
+        if let Some(server_id) = &config.server_id {
+            metadata.insert("server_id".to_string(), server_id.clone());
+        }
+        
+        // 从配置获取 svid（默认为 svid.im）
+        let svid = config.svid.as_deref().unwrap_or("svid.im");
+        metadata.insert("svid".to_string(), svid.to_string());
+        
+        // 添加调试日志，确认 metadata 内容
+        info!(
+            svid = %svid,
+            server_id = ?config.server_id,
+            metadata_count = metadata.len(),
+            "准备注册服务，metadata: {:?}",
+            metadata
+        );
+        
+        let metadata_clone = Some(metadata);
+
         // 运行服务（带服务注册）
         runtime
-            .run_with_registration(|addr| {
+            .run_with_registration(move |addr| {
+                let metadata = metadata_clone.clone();
                 Box::pin(async move {
-                    // 注册服务（使用常量）
+                    // 注册服务（使用常量，传入元数据）
                     use flare_im_core::service_names::MESSAGE_ORCHESTRATOR;
-                    match flare_im_core::discovery::register_service_only(
+                    match flare_im_core::discovery::register_service_only_with_metadata(
                         MESSAGE_ORCHESTRATOR,
                         addr,
                         None,
+                        metadata,
                     )
                     .await
                     {

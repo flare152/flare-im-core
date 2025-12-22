@@ -6,7 +6,7 @@
 //! - Hook管理代理 (hooks.proto)
 //! - 消息操作代理 (message.proto)
 //! - 用户在线状态代理 (online.proto)
-//! - 会话管理代理 (session.proto)
+//! - 会话管理代理 (conversation.proto)
 
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -23,21 +23,19 @@ use flare_proto::hooks::*;
 use flare_proto::message::message_service_server::MessageService;
 use flare_proto::message::*;
 
-// 在线状态服务
+// 在线状态服务（已合并为 OnlineService）
 use flare_proto::signaling::online::*;
-use flare_proto::signaling::online::{
-    signaling_service_server::SignalingService, user_service_server::UserService,
-};
+use flare_proto::signaling::online::online_service_server::OnlineService;
 
 // 会话服务
-use flare_proto::session::session_service_server::SessionService;
-use flare_proto::session::*;
+use flare_proto::conversation::conversation_service_server::ConversationService;
+use flare_proto::conversation::*;
 
 use crate::infrastructure::hook::GrpcHookClient;
 use crate::infrastructure::media::GrpcMediaClient;
 use crate::infrastructure::message::GrpcMessageClient;
 use crate::infrastructure::online::GrpcOnlineClient;
-use crate::infrastructure::session::GrpcSessionClient;
+use crate::infrastructure::session::GrpcConversationClient;
 
 /// 简单网关处理器
 #[derive(Clone)]
@@ -51,7 +49,7 @@ pub struct SimpleGatewayHandler {
     /// 在线状态服务客户端
     online_client: Arc<GrpcOnlineClient>,
     /// 会话服务客户端
-    session_client: Arc<GrpcSessionClient>,
+    conversation_client: Arc<GrpcConversationClient>,
 }
 
 impl SimpleGatewayHandler {
@@ -61,14 +59,14 @@ impl SimpleGatewayHandler {
         hook_client: Arc<GrpcHookClient>,
         message_client: Arc<GrpcMessageClient>,
         online_client: Arc<GrpcOnlineClient>,
-        session_client: Arc<GrpcSessionClient>,
+        conversation_client: Arc<GrpcConversationClient>,
     ) -> Self {
         Self {
             media_client,
             hook_client,
             message_client,
             online_client,
-            session_client,
+            conversation_client,
         }
     }
 }
@@ -487,8 +485,11 @@ type SubscribeUserPresenceStream = std::pin::Pin<
 >;
 
 #[tonic::async_trait]
-impl SignalingService for SimpleGatewayHandler {
+impl OnlineService for SimpleGatewayHandler {
     type WatchPresenceStream = WatchPresenceStream;
+    type SubscribeUserPresenceStream = SubscribeUserPresenceStream;
+
+    // ========== 会话管理 RPC ==========
 
     /// 用户登录
     async fn login(
@@ -534,11 +535,8 @@ impl SignalingService for SimpleGatewayHandler {
             .into_inner();
         Ok(Response::new(Box::pin(stream)))
     }
-}
 
-#[tonic::async_trait]
-impl UserService for SimpleGatewayHandler {
-    type SubscribeUserPresenceStream = SubscribeUserPresenceStream;
+    // ========== 用户在线状态 RPC ==========
 
     /// 查询用户在线状态
     async fn get_user_presence(
@@ -595,21 +593,21 @@ impl UserService for SimpleGatewayHandler {
 }
 
 #[tonic::async_trait]
-impl SessionService for SimpleGatewayHandler {
+impl ConversationService for SimpleGatewayHandler {
     /// 会话引导
-    async fn session_bootstrap(
+    async fn conversation_bootstrap(
         &self,
-        request: Request<SessionBootstrapRequest>,
-    ) -> Result<Response<SessionBootstrapResponse>, Status> {
-        self.session_client.session_bootstrap(request).await
+        request: Request<ConversationBootstrapRequest>,
+    ) -> Result<Response<ConversationBootstrapResponse>, Status> {
+        self.conversation_client.conversation_bootstrap(request).await
     }
 
     /// 列出会话
-    async fn list_sessions(
+    async fn list_conversations(
         &self,
-        request: Request<ListSessionsRequest>,
-    ) -> Result<Response<ListSessionsResponse>, Status> {
-        self.session_client.list_sessions(request).await
+        request: Request<ListConversationsRequest>,
+    ) -> Result<Response<ListConversationsResponse>, Status> {
+        self.conversation_client.list_conversations(request).await
     }
 
     /// 同步消息
@@ -617,23 +615,23 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<SyncMessagesRequest>,
     ) -> Result<Response<SyncMessagesResponse>, Status> {
-        self.session_client.sync_messages(request).await
+        self.conversation_client.sync_messages(request).await
     }
 
     /// 会话增量同步
-    async fn sync_sessions(
+    async fn sync_conversations(
         &self,
-        request: Request<flare_proto::common::SyncSessionsRequest>,
-    ) -> Result<Response<flare_proto::common::SyncSessionsResponse>, Status> {
-        self.session_client.sync_sessions(request).await
+        request: Request<flare_proto::common::SyncConversationsRequest>,
+    ) -> Result<Response<flare_proto::common::SyncConversationsResponse>, Status> {
+        self.conversation_client.sync_conversations(request).await
     }
 
     /// 会话全量恢复
-    async fn get_all_sessions(
+    async fn get_all_conversations(
         &self,
-        request: Request<flare_proto::common::SessionSyncAllRequest>,
-    ) -> Result<Response<flare_proto::common::SessionSyncAllResponse>, Status> {
-        self.session_client.get_all_sessions(request).await
+        request: Request<flare_proto::common::ConversationSyncAllRequest>,
+    ) -> Result<Response<flare_proto::common::ConversationSyncAllResponse>, Status> {
+        self.conversation_client.get_all_conversations(request).await
     }
 
     /// 更新游标
@@ -641,7 +639,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<UpdateCursorRequest>,
     ) -> Result<Response<UpdateCursorResponse>, Status> {
-        self.session_client.update_cursor(request).await
+        self.conversation_client.update_cursor(request).await
     }
 
     /// 更新设备在线状态
@@ -649,39 +647,39 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<UpdatePresenceRequest>,
     ) -> Result<Response<UpdatePresenceResponse>, Status> {
-        self.session_client.update_presence(request).await
+        self.conversation_client.update_presence(request).await
     }
 
     /// 强制会话同步
-    async fn force_session_sync(
+    async fn force_conversation_sync(
         &self,
-        request: Request<ForceSessionSyncRequest>,
-    ) -> Result<Response<ForceSessionSyncResponse>, Status> {
-        self.session_client.force_session_sync(request).await
+        request: Request<ForceConversationSyncRequest>,
+    ) -> Result<Response<ForceConversationSyncResponse>, Status> {
+        self.conversation_client.force_conversation_sync(request).await
     }
 
     /// 创建会话
-    async fn create_session(
+    async fn create_conversation(
         &self,
-        request: Request<CreateSessionRequest>,
-    ) -> Result<Response<CreateSessionResponse>, Status> {
-        self.session_client.create_session(request).await
+        request: Request<CreateConversationRequest>,
+    ) -> Result<Response<CreateConversationResponse>, Status> {
+        self.conversation_client.create_conversation(request).await
     }
 
     /// 更新会话
-    async fn update_session(
+    async fn update_conversation(
         &self,
-        request: Request<UpdateSessionRequest>,
-    ) -> Result<Response<UpdateSessionResponse>, Status> {
-        self.session_client.update_session(request).await
+        request: Request<UpdateConversationRequest>,
+    ) -> Result<Response<UpdateConversationResponse>, Status> {
+        self.conversation_client.update_conversation(request).await
     }
 
     /// 删除会话
-    async fn delete_session(
+    async fn delete_conversation(
         &self,
-        request: Request<DeleteSessionRequest>,
-    ) -> Result<Response<DeleteSessionResponse>, Status> {
-        self.session_client.delete_session(request).await
+        request: Request<DeleteConversationRequest>,
+    ) -> Result<Response<DeleteConversationResponse>, Status> {
+        self.conversation_client.delete_conversation(request).await
     }
 
     /// 管理参与者
@@ -689,7 +687,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<ManageParticipantsRequest>,
     ) -> Result<Response<ManageParticipantsResponse>, Status> {
-        self.session_client.manage_participants(request).await
+        self.conversation_client.manage_participants(request).await
     }
 
     /// 批量确认
@@ -697,15 +695,15 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<BatchAcknowledgeRequest>,
     ) -> Result<Response<BatchAcknowledgeResponse>, Status> {
-        self.session_client.batch_acknowledge(request).await
+        self.conversation_client.batch_acknowledge(request).await
     }
 
     /// 搜索会话
-    async fn search_sessions(
+    async fn search_conversations(
         &self,
-        request: Request<SearchSessionsRequest>,
-    ) -> Result<Response<SearchSessionsResponse>, Status> {
-        self.session_client.search_sessions(request).await
+        request: Request<SearchConversationsRequest>,
+    ) -> Result<Response<SearchConversationsResponse>, Status> {
+        self.conversation_client.search_conversations(request).await
     }
 
     /// 创建话题
@@ -713,7 +711,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<CreateThreadRequest>,
     ) -> Result<Response<CreateThreadResponse>, Status> {
-        self.session_client.create_thread(request).await
+        self.conversation_client.create_thread(request).await
     }
 
     /// 获取话题列表
@@ -721,7 +719,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<ListThreadsRequest>,
     ) -> Result<Response<ListThreadsResponse>, Status> {
-        self.session_client.list_threads(request).await
+        self.conversation_client.list_threads(request).await
     }
 
     /// 获取话题详情
@@ -729,7 +727,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<GetThreadRequest>,
     ) -> Result<Response<GetThreadResponse>, Status> {
-        self.session_client.get_thread(request).await
+        self.conversation_client.get_thread(request).await
     }
 
     /// 更新话题
@@ -737,7 +735,7 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<UpdateThreadRequest>,
     ) -> Result<Response<UpdateThreadResponse>, Status> {
-        self.session_client.update_thread(request).await
+        self.conversation_client.update_thread(request).await
     }
 
     /// 删除话题
@@ -745,6 +743,6 @@ impl SessionService for SimpleGatewayHandler {
         &self,
         request: Request<DeleteThreadRequest>,
     ) -> Result<Response<DeleteThreadResponse>, Status> {
-        self.session_client.delete_thread(request).await
+        self.conversation_client.delete_thread(request).await
     }
 }

@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 use tracing::error;
 
 use crate::application::commands::{
-    ClearSessionCommand, DeleteMessageCommand, DeleteMessageForUserCommand, ExportMessagesCommand,
+    ClearConversationCommand, DeleteMessageCommand, DeleteMessageForUserCommand, ExportMessagesCommand,
     MarkReadCommand, RecallMessageCommand, SetMessageAttributesCommand,
 };
 use crate::application::handlers::{MessageStorageCommandHandler, MessageStorageQueryHandler};
@@ -44,7 +44,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         let req = request.into_inner();
         let cursor_clone = req.cursor.clone();
         let query = QueryMessagesQuery {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             start_time: req.start_time,
             end_time: req.end_time,
             limit: req.limit,
@@ -91,7 +91,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
     ) -> Result<Response<flare_proto::storage::QueryMessagesBySeqResponse>, Status> {
         let req = request.into_inner();
         let query = QueryMessagesBySeqQuery {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             after_seq: req.after_seq,
             before_seq: if req.before_seq == 0 {
                 None
@@ -214,11 +214,11 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         request: Request<DeleteMessageForUserRequest>,
     ) -> Result<Response<DeleteMessageForUserResponse>, Status> {
         let req = request.into_inner();
-        // 注意：proto 中可能没有 session_id 字段，需要从消息中获取或使用空字符串
+        // 注意：proto 中可能没有 conversation_id 字段，需要从消息中获取或使用空字符串
         let command = DeleteMessageForUserCommand {
             message_ids: vec![req.message_id],
             user_id: req.user_id,
-            session_id: String::new(), // 从消息中获取或从请求中获取
+            conversation_id: String::new(), // 从消息中获取或从请求中获取
             permanent: req.permanent,
         };
 
@@ -239,10 +239,10 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         }
     }
 
-    async fn clear_session(
+    async fn clear_conversation(
         &self,
-        request: Request<ClearSessionRequest>,
-    ) -> Result<Response<ClearSessionResponse>, Status> {
+        request: Request<ClearConversationRequest>,
+    ) -> Result<Response<ClearConversationResponse>, Status> {
         let req = request.into_inner();
 
         // 解析 clear_before_time
@@ -280,16 +280,16 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 .and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)),
         };
 
-        let command = ClearSessionCommand {
-            session_id: req.session_id,
+        let command = ClearConversationCommand {
+            conversation_id: req.conversation_id,
             user_id: Some(req.user_id),
             clear_before_time,
         };
 
-        match self.command_handler.handle_clear_session(command).await {
+        match self.command_handler.handle_clear_conversation(command).await {
             Ok(cleared_count) => {
                 let cleared_at = Utc::now();
-                Ok(Response::new(ClearSessionResponse {
+                Ok(Response::new(ClearConversationResponse {
                     success: true,
                     error_message: String::new(),
                     cleared_count: cleared_count as i32,
@@ -508,7 +508,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
     ) -> Result<Response<ExportMessagesResponse>, Status> {
         let req = request.into_inner();
         let command = ExportMessagesCommand {
-            session_id: req.session_id,
+            conversation_id: req.conversation_id,
             start_time: req
                 .time_range
                 .as_ref()

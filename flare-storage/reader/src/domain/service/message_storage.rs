@@ -87,17 +87,17 @@ impl MessageStorageDomainService {
     }
 
     /// 查询消息列表（基于时间戳，向后兼容）
-    #[instrument(skip(self), fields(session_id = %session_id))]
+    #[instrument(skip(self), fields(conversation_id = %conversation_id))]
     pub async fn query_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         start_time: i64,
         end_time: i64,
         limit: i32,
         cursor: Option<&str>,
     ) -> Result<QueryMessagesResult> {
-        if session_id.is_empty() {
-            return Err(anyhow!("session_id is required"));
+        if conversation_id.is_empty() {
+            return Err(anyhow!("conversation_id is required"));
         }
 
         let limit = limit.clamp(1, self.config.max_page_size) as usize;
@@ -130,7 +130,7 @@ impl MessageStorageDomainService {
         let total_size = self
             .storage
             .count_messages(
-                session_id,
+                conversation_id,
                 None,
                 Some(start_dt_for_count),
                 Some(end_dt_for_count),
@@ -145,7 +145,7 @@ impl MessageStorageDomainService {
 
         let mut aggregated = self
             .query_from_storage(
-                session_id,
+                conversation_id,
                 start_ts_ms,
                 end_ts_ms,
                 cursor.as_ref(),
@@ -178,7 +178,7 @@ impl MessageStorageDomainService {
     /// 基于 seq 查询消息（推荐，性能更好）
     ///
     /// # 参数
-    /// * `session_id` - 会话ID
+    /// * `conversation_id` - 会话ID
     /// * `user_id` - 用户ID（可选，用于过滤已删除消息）
     /// * `after_seq` - 查询 seq > after_seq 的消息（用于增量同步）
     /// * `before_seq` - 查询 seq < before_seq 的消息（可选，用于分页）
@@ -186,17 +186,17 @@ impl MessageStorageDomainService {
     ///
     /// # 返回
     /// * `Ok(QueryMessagesResult)` - 消息列表（按 seq 升序排序）
-    #[instrument(skip(self), fields(session_id = %session_id, after_seq, before_seq = ?before_seq))]
+    #[instrument(skip(self), fields(conversation_id = %conversation_id, after_seq, before_seq = ?before_seq))]
     pub async fn query_messages_by_seq(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: Option<&str>,
         after_seq: i64,
         before_seq: Option<i64>,
         limit: i32,
     ) -> Result<QueryMessagesResult> {
-        if session_id.is_empty() {
-            return Err(anyhow!("session_id is required"));
+        if conversation_id.is_empty() {
+            return Err(anyhow!("conversation_id is required"));
         }
 
         let limit = limit.clamp(1, self.config.max_page_size) as usize;
@@ -204,7 +204,7 @@ impl MessageStorageDomainService {
         // 使用基于 seq 的查询
         let messages = self
             .storage
-            .query_messages_by_seq(session_id, user_id, after_seq, before_seq, limit as i32)
+            .query_messages_by_seq(conversation_id, user_id, after_seq, before_seq, limit as i32)
             .await
             .map_err(|e| anyhow!("Failed to query messages by seq: {}", e))?;
 
@@ -234,7 +234,7 @@ impl MessageStorageDomainService {
 
     async fn query_from_storage(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         start_ts_ms: i64,
         end_ts_ms: i64,
         cursor: Option<&QueryCursor>,
@@ -266,7 +266,7 @@ impl MessageStorageDomainService {
 
         let messages = self
             .storage
-            .query_messages(session_id, None, Some(start_dt), Some(end_dt), limit as i32)
+            .query_messages(conversation_id, None, Some(start_dt), Some(end_dt), limit as i32)
             .await
             .map_err(|err| anyhow!(err.to_string()))?;
 
@@ -552,7 +552,7 @@ impl MessageStorageDomainService {
                 .batch_set_visibility(
                     &[message_id.to_string()],
                     user_id,
-                    &message.session_id,
+                    &message.conversation_id,
                     visibility,
                 )
                 .await
@@ -714,21 +714,21 @@ impl MessageStorageDomainService {
     }
 
     /// 清理会话
-    #[instrument(skip(self), fields(session_id = %session_id))]
+    #[instrument(skip(self), fields(conversation_id = %conversation_id))]
     pub async fn clear_session(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         user_id: &str,
         clear_before_time: Option<DateTime<Utc>>,
     ) -> Result<usize> {
-        if session_id.is_empty() {
-            return Err(anyhow!("session_id is required"));
+        if conversation_id.is_empty() {
+            return Err(anyhow!("conversation_id is required"));
         }
 
         // 查询需要清理的消息
         let messages = self
             .storage
-            .query_messages(session_id, Some(user_id), None, clear_before_time, 10000)
+            .query_messages(conversation_id, Some(user_id), None, clear_before_time, 10000)
             .await
             .map_err(|e| anyhow!("Failed to query messages: {}", e))?;
 

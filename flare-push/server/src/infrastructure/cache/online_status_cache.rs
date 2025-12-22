@@ -133,10 +133,10 @@ impl OnlineStatusRepository for CachedOnlineStatusRepository {
         Ok(result)
     }
 
-    async fn get_all_online_users_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+    async fn get_all_online_users_for_session(&self, conversation_id: &str) -> Result<Vec<String>> {
         // 直接委托给 inner（不缓存，因为 session 的在线用户列表变化频繁）
         self.inner
-            .get_all_online_users_for_session(session_id)
+            .get_all_online_users_for_session(conversation_id)
             .await
     }
 }

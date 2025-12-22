@@ -4,8 +4,8 @@
 
 pub mod connection_service;
 pub mod message_service;
-pub mod session_service_client;
+pub mod conversation_service_client;
 
 pub use connection_service::ConnectionApplicationService;
 pub use message_service::MessageApplicationService;
-pub use session_service_client::SessionServiceClient;
+pub use conversation_service_client::ConversationServiceClient;

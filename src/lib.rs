@@ -22,7 +22,7 @@ pub use config::{
     AccessGatewayServiceConfig, ConfigManager, FlareAppConfig, KafkaClusterConfig,
     MediaServiceConfig, MessageOrchestratorServiceConfig, MongoInstanceConfig, ObjectStoreConfig,
     PostgresInstanceConfig, RedisPoolConfig, ServiceEndpointConfig, ServiceRuntimeConfig,
-    SessionPolicyConfig, SessionServiceConfig, SignalingOnlineServiceConfig,
+    ConversationServiceConfig, SessionPolicyConfig, SignalingOnlineServiceConfig,
     SignalingRouteServiceConfig, StorageReaderServiceConfig, StorageWriterServiceConfig,
     app_config, load_config, load_config_with_validation,
 };

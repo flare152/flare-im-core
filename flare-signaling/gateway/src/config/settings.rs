@@ -17,6 +17,10 @@ pub struct AccessGatewayConfig {
     // 跨地区网关路由配置
     pub gateway_id: Option<String>,
     pub region: Option<String>,
+    // 压缩和加密配置
+    pub compression_algorithm: Option<String>,
+    pub enable_encryption: bool,
+    pub encryption_key: Option<String>,
 }
 
 impl AccessGatewayConfig {
@@ -108,6 +112,22 @@ impl AccessGatewayConfig {
             .ok()
             .or_else(|| service.region.clone());
 
+        // 压缩算法配置（支持环境变量覆盖）
+        let compression_algorithm = std::env::var("GATEWAY_COMPRESSION_ALGORITHM")
+            .ok()
+            .or_else(|| service.compression_algorithm.clone());
+
+        // 加密配置（支持环境变量覆盖）
+        let enable_encryption = std::env::var("GATEWAY_ENABLE_ENCRYPTION")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .or_else(|| service.enable_encryption)
+            .unwrap_or(false);
+
+        let encryption_key = std::env::var("GATEWAY_ENCRYPTION_KEY")
+            .ok()
+            .or_else(|| service.encryption_key.clone());
+
         Self {
             signaling_service,
             route_service,
@@ -122,6 +142,9 @@ impl AccessGatewayConfig {
             use_ack_report,
             gateway_id,
             region,
+            compression_algorithm,
+            enable_encryption,
+            encryption_key,
         }
     }
 }

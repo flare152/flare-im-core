@@ -5,8 +5,7 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
-use flare_proto::signaling::online::signaling_service_client::SignalingServiceClient;
-use flare_proto::signaling::online::user_service_client::UserServiceClient;
+use flare_proto::signaling::online::online_service_client::OnlineServiceClient;
 use flare_proto::signaling::online::*;
 
 use flare_server_core::discovery::ServiceClient;
@@ -49,8 +48,8 @@ impl GrpcOnlineClient {
         }
     }
 
-    /// 获取SignalingService gRPC客户端
-    async fn get_signaling_client(&self) -> Result<SignalingServiceClient<Channel>, Status> {
+    /// 获取OnlineService gRPC客户端（统一的服务，包含 SignalingService 和 UserService 的所有功能）
+    async fn get_online_client(&self) -> Result<OnlineServiceClient<Channel>, Status> {
         if let Some(service_client) = &self.service_client {
             let mut client = service_client.lock().await;
             let channel = client.get_channel().await.map_err(|e| {
@@ -59,7 +58,7 @@ impl GrpcOnlineClient {
                     e
                 ))
             })?;
-            Ok(SignalingServiceClient::new(channel))
+            Ok(OnlineServiceClient::new(channel))
         } else if let Some(ref address) = self.direct_address {
             let channel = Channel::from_shared(address.clone())
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
@@ -68,7 +67,7 @@ impl GrpcOnlineClient {
                 .map_err(|e| {
                     Status::unavailable(format!("Failed to connect to {}: {}", address, e))
                 })?;
-            Ok(SignalingServiceClient::new(channel))
+            Ok(OnlineServiceClient::new(channel))
         } else {
             // 使用服务名称进行直连（假设服务名称可以直接解析）
             let channel = Channel::from_shared(self.service_name.clone())
@@ -81,43 +80,7 @@ impl GrpcOnlineClient {
                         self.service_name, e
                     ))
                 })?;
-            Ok(SignalingServiceClient::new(channel))
-        }
-    }
-
-    /// 获取UserService gRPC客户端
-    async fn get_user_client(&self) -> Result<UserServiceClient<Channel>, Status> {
-        if let Some(service_client) = &self.service_client {
-            let mut client = service_client.lock().await;
-            let channel = client.get_channel().await.map_err(|e| {
-                Status::unavailable(format!(
-                    "Failed to get channel from service discovery: {}",
-                    e
-                ))
-            })?;
-            Ok(UserServiceClient::new(channel))
-        } else if let Some(ref address) = self.direct_address {
-            let channel = Channel::from_shared(address.clone())
-                .map_err(|e| Status::invalid_argument(format!("Invalid address: {}", e)))?
-                .connect()
-                .await
-                .map_err(|e| {
-                    Status::unavailable(format!("Failed to connect to {}: {}", address, e))
-                })?;
-            Ok(UserServiceClient::new(channel))
-        } else {
-            // 使用服务名称进行直连（假设服务名称可以直接解析）
-            let channel = Channel::from_shared(self.service_name.clone())
-                .map_err(|e| Status::invalid_argument(format!("Invalid service name: {}", e)))?
-                .connect()
-                .await
-                .map_err(|e| {
-                    Status::unavailable(format!(
-                        "Failed to connect to {}: {}",
-                        self.service_name, e
-                    ))
-                })?;
-            Ok(UserServiceClient::new(channel))
+            Ok(OnlineServiceClient::new(channel))
         }
     }
 
@@ -126,7 +89,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<LoginRequest>,
     ) -> Result<Response<LoginResponse>, Status> {
-        let mut client = self.get_signaling_client().await?;
+        let mut client = self.get_online_client().await?;
         client.login(request).await
     }
 
@@ -135,7 +98,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<LogoutRequest>,
     ) -> Result<Response<LogoutResponse>, Status> {
-        let mut client = self.get_signaling_client().await?;
+        let mut client = self.get_online_client().await?;
         client.logout(request).await
     }
 
@@ -144,7 +107,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
-        let mut client = self.get_signaling_client().await?;
+        let mut client = self.get_online_client().await?;
         client.heartbeat(request).await
     }
 
@@ -153,7 +116,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<GetOnlineStatusRequest>,
     ) -> Result<Response<GetOnlineStatusResponse>, Status> {
-        let mut client = self.get_signaling_client().await?;
+        let mut client = self.get_online_client().await?;
         client.get_online_status(request).await
     }
 
@@ -162,7 +125,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<WatchPresenceRequest>,
     ) -> Result<Response<Streaming<PresenceEvent>>, Status> {
-        let mut client = self.get_signaling_client().await?;
+        let mut client = self.get_online_client().await?;
         client.watch_presence(request).await
     }
 
@@ -171,7 +134,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<GetUserPresenceRequest>,
     ) -> Result<Response<GetUserPresenceResponse>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.get_user_presence(request).await
     }
 
@@ -180,7 +143,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<BatchGetUserPresenceRequest>,
     ) -> Result<Response<BatchGetUserPresenceResponse>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.batch_get_user_presence(request).await
     }
 
@@ -189,7 +152,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<SubscribeUserPresenceRequest>,
     ) -> Result<Response<Streaming<UserPresenceEvent>>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.subscribe_user_presence(request).await
     }
 
@@ -198,7 +161,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<ListUserDevicesRequest>,
     ) -> Result<Response<ListUserDevicesResponse>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.list_user_devices(request).await
     }
 
@@ -207,7 +170,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<KickDeviceRequest>,
     ) -> Result<Response<KickDeviceResponse>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.kick_device(request).await
     }
 
@@ -216,7 +179,7 @@ impl GrpcOnlineClient {
         &self,
         request: Request<GetDeviceRequest>,
     ) -> Result<Response<GetDeviceResponse>, Status> {
-        let mut client = self.get_user_client().await?;
+        let mut client = self.get_online_client().await?;
         client.get_device(request).await
     }
 }

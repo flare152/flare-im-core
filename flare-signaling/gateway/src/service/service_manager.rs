@@ -105,7 +105,7 @@ impl PortConfig {
 /// 服务管理器
 ///
 /// 统一管理所有服务的生命周期，包括：
-/// - gRPC 服务（SignalingService、AccessGateway）
+/// - gRPC 服务（AccessGateway）
 /// - 长连接服务（WebSocket、QUIC）
 pub struct ServiceManager {
     /// 应用上下文
@@ -154,7 +154,6 @@ impl ServiceManager {
             .parse()
             .map_err(|err| anyhow::anyhow!("Invalid gRPC address: {}", err))?;
 
-        let signaling_handler = self.context.grpc_services.signaling_handler.clone();
         let access_gateway_handler = self.context.grpc_services.access_gateway_handler.clone();
 
         info!("正在启动 gRPC 服务器: {}", grpc_addr);
@@ -167,11 +166,6 @@ impl ServiceManager {
         let grpc_server_handle = tokio::spawn(async move {
             // 使用 graceful_shutdown 支持优雅停机
             let server_result = Server::builder()
-                .add_service(
-                    flare_proto::signaling::signaling_service_server::SignalingServiceServer::new(
-                        (*signaling_handler).clone(),
-                    ),
-                )
                 .add_service(
                     flare_proto::access_gateway::access_gateway_server::AccessGatewayServer::new(
                         (*access_gateway_handler).clone(),

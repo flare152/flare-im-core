@@ -214,6 +214,15 @@ pub struct AccessGatewayServiceConfig {
     /// 网关所在地区（用于跨地区路由）
     #[serde(default)]
     pub region: Option<String>,
+    /// 压缩算法（none/gzip/zstd，默认 none）
+    #[serde(default)]
+    pub compression_algorithm: Option<String>,
+    /// 是否启用加密（默认 false）
+    #[serde(default)]
+    pub enable_encryption: Option<bool>,
+    /// 加密密钥（32字节，hex编码或直接字符串，如果启用加密但未设置则使用默认密钥）
+    #[serde(default)]
+    pub encryption_key: Option<String>,
 }
 
 /// 核心网关服务配置（业务系统统一入口）
@@ -473,9 +482,9 @@ pub struct MessageOrchestratorServiceConfig {
     /// Hook 配置目录
     #[serde(default)]
     pub hook_config_dir: Option<String>,
-    /// Session 服务类型（用于自动创建 session，如果配置了 registry，会自动发现）
+    /// Conversation 服务类型（用于自动创建 conversation，如果配置了 registry，会自动发现）
     #[serde(default)]
-    pub session_service_type: Option<String>,
+    pub conversation_service_type: Option<String>,
 }
 
 /// 信令在线服务配置
@@ -583,7 +592,7 @@ pub struct SessionPolicyConfig {
 
 /// 会话服务配置
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct SessionServiceConfig {
+pub struct ConversationServiceConfig {
     /// 运行时配置
     #[serde(flatten)]
     pub runtime: ServiceRuntimeConfig,
@@ -595,10 +604,10 @@ pub struct SessionServiceConfig {
     pub postgres: Option<String>,
     /// 会话状态前缀
     #[serde(default)]
-    pub session_state_prefix: Option<String>,
+    pub conversation_state_prefix: Option<String>,
     /// 会话未读前缀
     #[serde(default)]
-    pub session_unread_prefix: Option<String>,
+    pub conversation_unread_prefix: Option<String>,
     /// 用户游标前缀
     #[serde(default)]
     pub user_cursor_prefix: Option<String>,
@@ -778,9 +787,10 @@ impl FlareAppConfig {
     }
 
     /// 获取会话服务配置
-    pub fn session_service(&self) -> SessionServiceConfig {
-        self.services.session.clone().unwrap_or_default()
+    pub fn conversation_service(&self) -> ConversationServiceConfig {
+        self.services.conversation.clone().unwrap_or_default()
     }
+    
 
     /// 组合服务配置
     pub fn compose_service_config(
@@ -972,10 +982,10 @@ impl FlareAppConfig {
         }
 
         // 验证会话服务配置
-        if let Some(cfg) = &self.services.session {
+        if let Some(cfg) = &self.services.conversation {
             if let Some(redis) = &cfg.redis {
                 self.redis_profile(redis)
-                    .ok_or_else(|| anyhow!("Redis config '{}' not found (session)", redis))?;
+                    .ok_or_else(|| anyhow!("Redis config '{}' not found (conversation)", redis))?;
             }
         }
 
@@ -1287,6 +1297,6 @@ pub struct ServicesConfig {
     #[serde(default, rename = "storage_writer")]
     pub storage_writer: Option<StorageWriterServiceConfig>,
     /// 会话服务配置
-    #[serde(default, rename = "session")]
-    pub session: Option<SessionServiceConfig>,
+    #[serde(default, rename = "conversation")]
+    pub conversation: Option<ConversationServiceConfig>,
 }

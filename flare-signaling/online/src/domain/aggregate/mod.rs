@@ -1,4 +1,4 @@
-pub mod session;
+pub mod connection;
 
-pub use session::Session;
-pub use session::SessionCreateParams;
+pub use connection::Connection;
+pub use connection::ConnectionCreateParams;

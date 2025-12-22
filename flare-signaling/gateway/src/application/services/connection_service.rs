@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
 use crate::domain::repository::ConnectionQuery;
-use crate::domain::service::SessionDomainService;
+use crate::domain::service::ConversationDomainService;
 
 /// 连接管理应用服务
 ///
@@ -16,14 +16,14 @@ use crate::domain::service::SessionDomainService;
 /// - 编排连接断开流程
 /// - 协调会话管理和连接管理
 pub struct ConnectionApplicationService {
-    session_domain_service: Arc<SessionDomainService>,
+    session_domain_service: Arc<ConversationDomainService>,
     connection_query: Arc<dyn ConnectionQuery>,
     metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
 }
 
 impl ConnectionApplicationService {
     pub fn new(
-        session_domain_service: Arc<SessionDomainService>,
+        session_domain_service: Arc<ConversationDomainService>,
         connection_query: Arc<dyn ConnectionQuery>,
         metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
     ) -> Self {
@@ -67,14 +67,14 @@ impl ConnectionApplicationService {
             .register_session(user_id, device_id, Some(connection_id))
             .await
         {
-            Ok(session_id) => {
+            Ok(conversation_id) => {
                 info!(
                     user_id = %user_id,
                     connection_id = %connection_id,
-                    session_id = %session_id,
+                    conversation_id = %conversation_id,
                     "Online status registered"
                 );
-                Ok(session_id)
+                Ok(conversation_id)
             }
             Err(err) => {
                 warn!(
@@ -148,10 +148,10 @@ impl ConnectionApplicationService {
         &self,
         connection_id: &str,
         user_id: &str,
-        session_id: &str,
+        conversation_id: &str,
     ) -> Result<()> {
         self.session_domain_service
-            .refresh_heartbeat(user_id, session_id, Some(connection_id))
+            .refresh_heartbeat(user_id, conversation_id, Some(connection_id))
             .await
     }
 }

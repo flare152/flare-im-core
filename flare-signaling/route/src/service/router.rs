@@ -28,7 +28,7 @@ pub trait MonitoringClient: Send + Sync {
 #[derive(Debug, Clone, Default)]
 pub struct RouteContext {
     pub svid: String,
-    pub session_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub user_id: Option<String>,
     pub tenant_id: Option<String>,
     pub client_geo: Option<String>,
@@ -46,8 +46,8 @@ impl ShardManager {
         Self { shard_count }
     }
 
-    pub fn pick_shard(&self, session_id: Option<&str>, user_id: Option<&str>) -> usize {
-        let key = session_id.or(user_id).unwrap_or("default");
+    pub fn pick_shard(&self, conversation_id: Option<&str>, user_id: Option<&str>) -> usize {
+        let key = conversation_id.or(user_id).unwrap_or("default");
         // 简易 Murmur3 替代：使用 Rust 默认哈希（可替换为真正 murmur3）
         let mut hash: u64 = 1469598103934665603; // FNV offset basis
         for b in key.as_bytes() {
@@ -137,7 +137,7 @@ impl ServiceLoadBalancer {
     /// # 参数
     ///
     /// - `candidates`: 从 etcd/Consul 获取的候选实例列表（已包含 shard_id、az 元数据）
-    /// - `shard`: 根据 session_id/user_id 计算的目标分片 ID
+    /// - `shard`: 根据 conversation_id/user_id 计算的目标分片 ID
     /// - `target_az`: 跨机房智能选择的目标机房（可选）
     ///
     /// # 返回
@@ -422,13 +422,13 @@ impl FlowController {
     /// 1. 使用Redis的INCR命令增加计数器
     /// 2. 使用EXPIRE设置过期时间，实现窗口滑动
     /// 3. 返回当前计数器值作为QPS估算
-    async fn get_session_qps(&self, session_id: &str) -> Result<u32> {
+    async fn get_session_qps(&self, conversation_id: &str) -> Result<u32> {
         if self.redis_client.is_none() {
             return Ok(0);
         }
 
         let mut conn = self.get_redis_connection().await?;
-        let key = format!("rate_limit:session_qps:{}", session_id);
+        let key = format!("rate_limit:session_qps:{}", conversation_id);
 
         // 增加计数器并设置过期时间（1秒窗口）
         let count: u32 = conn.incr(&key, 1).await?;
@@ -460,25 +460,25 @@ impl FlowController {
     }
 
     /// 检查是否为热点会话
-    fn is_hot_session(&self, session_id: &str, current_qps: u32) -> bool {
+    fn is_hot_session(&self, conversation_id: &str, current_qps: u32) -> bool {
         current_qps > self.hot_session_threshold
     }
 
     /// 更新热点会话信息
-    fn update_hot_session(&self, session_id: &str, current_qps: u32) {
+    fn update_hot_session(&self, conversation_id: &str, current_qps: u32) {
         let mut hot_sessions = self.hot_sessions.write();
         let info = HotSessionInfo {
             last_detected: std::time::SystemTime::now(),
             current_qps,
             degraded: current_qps > self.hot_session_threshold,
         };
-        hot_sessions.insert(session_id.to_string(), info);
+        hot_sessions.insert(conversation_id.to_string(), info);
     }
 
     /// 检查会话是否已被降级
-    fn is_session_degraded(&self, session_id: &str) -> bool {
+    fn is_session_degraded(&self, conversation_id: &str) -> bool {
         let hot_sessions = self.hot_sessions.read();
-        if let Some(info) = hot_sessions.get(session_id) {
+        if let Some(info) = hot_sessions.get(conversation_id) {
             info.degraded
         } else {
             false
@@ -495,13 +495,13 @@ impl FlowController {
         // 生产实现：
         // 1. 检查会话QPS（Redis INCR + EXPIRE）
         // 使用滑动窗口算法检查会话级QPS是否超过限制
-        let session_qps = if let Some(session_id) = &ctx.session_id {
-            let qps = self.get_session_qps(session_id).await?;
+        let session_qps = if let Some(conversation_id) = &ctx.conversation_id {
+            let qps = self.get_session_qps(conversation_id).await?;
             // 检查是否为热点会话
-            if self.is_hot_session(session_id, qps) {
-                self.update_hot_session(session_id, qps);
+            if self.is_hot_session(conversation_id, qps) {
+                self.update_hot_session(conversation_id, qps);
                 // 如果会话已被降级，则延迟推送
-                if self.is_session_degraded(session_id) {
+                if self.is_session_degraded(conversation_id) {
                     // 延迟推送逻辑（可以根据需要调整延迟时间）
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -511,7 +511,7 @@ impl FlowController {
             0
         };
 
-        if let Some(session_id) = &ctx.session_id {
+        if let Some(conversation_id) = &ctx.conversation_id {
             if session_qps > self.session_qps_limit {
                 return Err(anyhow::anyhow!(
                     "Session QPS limit exceeded: {} > {}",
@@ -548,7 +548,7 @@ impl FlowController {
         // 已在上面的QPS检查中实现
 
         tracing::trace!(
-            session_id = ?ctx.session_id,
+            conversation_id = ?ctx.conversation_id,
             svid = %ctx.svid,
             session_qps,
             "Flow control check passed"
@@ -819,7 +819,7 @@ impl Router {
     ///
     /// 1. **Trace 注入**：生成 trace_id 并传播到下游
     /// 2. **流控检查**：会话QPS + 群聊fanout + 系统反压
-    /// 3. **分片选择**：`shard_id = hash(session_id|user_id) % N`
+    /// 3. **分片选择**：`shard_id = hash(conversation_id|user_id) % N`
     /// 4. **跨机房选择**：基于地理/负载/健康度（可选）
     /// 5. **服务发现**：从 etcd/Consul 获取候选实例列表（带 shard_id、az 元数据）
     /// 6. **业务负载均衡**：在同 shard + 同 az 的实例内根据策略选择
@@ -827,12 +827,12 @@ impl Router {
     ///
     /// # 参数
     ///
-    /// - `ctx`: 路由上下文（SVID、session_id、user_id、tenant_id、geo等）
+    /// - `ctx`: 路由上下文（SVID、conversation_id、user_id、tenant_id、geo等）
     /// - `repository`: 路由表仓储（SVID → endpoint 映射，或 SVID → 服务发现配置）
     ///
     /// # 返回
     ///
-    /// - `Ok(String)`: 目标服务端点（例如 `http://flare-session:8080`）
+    /// - `Ok(String)`: 目标服务端点（例如 `http://flare-conversation:8080`）
     /// - `Err`: 流控拒绝/路由表不存在/服务不可用
     ///
     /// # 与 etcd/Consul/Service Mesh 的集成
@@ -843,7 +843,7 @@ impl Router {
     ///   ↓ (查询服务发现)
     /// etcd/Consul (提供候选实例列表 + shard_id/az 元数据)
     ///   ↓ (Router 根据业务规则选择实例)
-    /// 服务实例 (flare-session-shard-0、shard-1...)
+    /// 服务实例 (flare-conversation-shard-0、shard-1...)
     /// ```
     ///
     /// **模式 2: Service Mesh + 业务路由**（大厂混合模式）
@@ -870,7 +870,7 @@ impl Router {
         // 3. 分片选择
         let shard = self
             .shard_manager
-            .pick_shard(ctx.session_id.as_deref(), ctx.user_id.as_deref());
+            .pick_shard(ctx.conversation_id.as_deref(), ctx.user_id.as_deref());
 
         // 指标：分片分布
         if let Some(ref metrics) = self.metrics {

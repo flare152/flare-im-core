@@ -52,8 +52,8 @@ impl WebhookHookAdapter {
             "hook_type": "pre_send",
             "context": {
                 "tenant_id": ctx.tenant_id,
-                "session_id": ctx.session_id,
-                "session_type": ctx.session_type,
+                "conversation_id": ctx.conversation_id,
+                "conversation_type": ctx.conversation_type,
             },
             "draft": {
                 "message_id": draft.message_id,
@@ -163,7 +163,7 @@ impl WebhookHookAdapter {
             "hook_type": "post_send",
             "context": {
                 "tenant_id": ctx.tenant_id,
-                "session_id": ctx.session_id,
+                "conversation_id": ctx.conversation_id,
             },
             "record": {
                 "message_id": record.message_id,

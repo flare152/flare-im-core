@@ -107,7 +107,7 @@ impl HookService for HookServiceServer {
             "post_send",
             "delivery",
             "recall",
-            "session_lifecycle",
+            "conversation_lifecycle",
             "presence",
             "push_pre_send",
             "push_post_send",
@@ -362,7 +362,7 @@ impl HookService for HookServiceServer {
         if let Some(ref selector) = req.selector {
             hook_item.selector = HookSelectorConfig {
                 tenants: selector.tenants.clone(),
-                session_types: selector.session_types.clone(),
+                conversation_types: selector.conversation_types.clone(),
                 message_types: selector.message_types.clone(),
                 user_ids: vec![],
                 tags: std::collections::HashMap::new(),
@@ -910,7 +910,7 @@ fn protobuf_to_hook_config_item(
         .as_ref()
         .map(|s| HookSelectorConfig {
             tenants: s.tenants.clone(),
-            session_types: s.session_types.clone(),
+            conversation_types: s.conversation_types.clone(),
             message_types: s.message_types.clone(),
             user_ids: vec![],
             tags: std::collections::HashMap::new(),
@@ -1077,7 +1077,7 @@ fn hook_config_item_to_protobuf(
         }),
         selector: Some(HookSelector {
             tenants: item.selector.tenants.clone(),
-            session_types: item.selector.session_types.clone(),
+            conversation_types: item.selector.conversation_types.clone(),
             message_types: item.selector.message_types.clone(),
             business_types: vec![], // 暂时不支持business_types
         }),

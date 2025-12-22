@@ -14,7 +14,7 @@ use tracing::{Span, instrument};
 use crate::domain::model::MessageProfile;
 use crate::domain::model::{MessageDefaults, MessageSubmission};
 use crate::domain::repository::{
-    MessageEventPublisher, MessageEventPublisherItem, SessionRepository, SessionRepositoryItem,
+    MessageEventPublisher, MessageEventPublisherItem, ConversationRepository, ConversationRepositoryItem,
     WalRepository, WalRepositoryItem,
 };
 use crate::domain::service::hook_builder::{
@@ -27,7 +27,7 @@ use crate::domain::service::sequence_allocator::SequenceAllocator;
 pub struct MessageDomainService {
     publisher: Arc<MessageEventPublisherItem>,
     wal_repository: Arc<WalRepositoryItem>,
-    session_repository: Option<Arc<SessionRepositoryItem>>,
+    conversation_repository: Option<Arc<ConversationRepositoryItem>>,
     /// 序列号分配器（核心能力：保证同会话消息顺序）
     sequence_allocator: Arc<SequenceAllocator>,
     defaults: MessageDefaults,
@@ -38,7 +38,7 @@ impl MessageDomainService {
     pub fn new(
         publisher: Arc<MessageEventPublisherItem>,
         wal_repository: Arc<WalRepositoryItem>,
-        session_repository: Option<Arc<SessionRepositoryItem>>,
+        conversation_repository: Option<Arc<ConversationRepositoryItem>>,
         sequence_allocator: Arc<SequenceAllocator>,
         defaults: MessageDefaults,
         hooks: Arc<HookDispatcher>,
@@ -46,7 +46,7 @@ impl MessageDomainService {
         Self {
             publisher,
             wal_repository,
-            session_repository,
+            conversation_repository,
             sequence_allocator,
             defaults,
             hooks,
@@ -119,12 +119,12 @@ impl MessageDomainService {
         // 参考微信 MsgService 设计：每个会话维护独立的递增序列号
         let session_seq = match self
             .sequence_allocator
-            .allocate_seq(&submission.message.session_id, &tenant_id)
+            .allocate_seq(&submission.message.conversation_id, &tenant_id)
             .await
         {
             Ok(seq) => {
                 tracing::debug!(
-                    session_id = %submission.message.session_id,
+                    conversation_id = %submission.message.conversation_id,
                     seq = seq,
                     "Allocated session sequence"
                 );
@@ -133,7 +133,7 @@ impl MessageDomainService {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    session_id = %submission.message.session_id,
+                    conversation_id = %submission.message.conversation_id,
                     "Redis unavailable for sequence allocation, using degraded mode"
                 );
                 // 降级策略：使用时间戳 + 随机数（不保证严格顺序，但保证趋势递增）
@@ -176,27 +176,29 @@ impl MessageDomainService {
             // 让 _wal_span 离开作用域以结束 span
         }
 
-        // 确保 session 存在（异步化，不阻塞消息发送流程）
-        if let Some(session_repo) = &self.session_repository {
+        // 1. 同步确保会话存在，避免 Storage Writer 更新时会话不存在
+        // 2. 如果会话服务不可用，降级处理（记录警告但继续发送消息）
+        // 3. Storage Writer 使用 UPSERT 作为兜底方案
+        if let Some(conversation_repo) = &self.conversation_repository {
             // 提取 participants（发送者 + 接收者）
             let mut participants = vec![submission.message.sender_id.clone()];
 
             // 单聊：添加接收者
-            if submission.message.session_type == flare_proto::common::SessionType::Single as i32 {
+            if submission.message.conversation_type == flare_proto::common::ConversationType::Single as i32 {
                 if !submission.message.receiver_id.is_empty() {
                     participants.push(submission.message.receiver_id.clone());
                 }
             }
             // 群聊/频道：participants 只包含发送者，成员列表由推送服务查询
 
-            // 提取参数（克隆用于异步任务）
-            let session_id = submission.kafka_payload.session_id.clone();
-            let session_type =
-                match flare_proto::common::SessionType::try_from(submission.message.session_type) {
+            // 提取参数
+            let conversation_id = submission.kafka_payload.conversation_id.clone();
+            let conversation_type =
+                match flare_proto::common::ConversationType::try_from(submission.message.conversation_type) {
                     Ok(st) => match st {
-                        flare_proto::common::SessionType::Single => "single".to_string(),
-                        flare_proto::common::SessionType::Group => "group".to_string(),
-                        flare_proto::common::SessionType::Channel => "channel".to_string(),
+                        flare_proto::common::ConversationType::Single => "single".to_string(),
+                        flare_proto::common::ConversationType::Group => "group".to_string(),
+                        flare_proto::common::ConversationType::Channel => "channel".to_string(),
                         _ => "unknown".to_string(),
                     },
                     Err(_) => "unknown".to_string(),
@@ -207,29 +209,43 @@ impl MessageDomainService {
                 .tenant
                 .as_ref()
                 .map(|t| t.tenant_id.clone());
-            let session_repo_clone = session_repo.clone();
 
-            // 异步创建 Session，不阻塞主流程
-            tokio::spawn(async move {
-                if let Err(e) = session_repo_clone
-                    .ensure_session(
-                        &session_id,
-                        &session_type,
-                        &business_type,
-                        participants,
-                        tenant_id.as_deref(),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to ensure session asynchronously: {}, session_id={}",
-                        e,
-                        session_id
+            // 同步确保会话存在（带超时和降级处理）
+            let ensure_result = tokio::time::timeout(
+                std::time::Duration::from_millis(500), // 500ms 超时
+                conversation_repo.ensure_conversation(
+                    &conversation_id,
+                    &conversation_type,
+                    &business_type,
+                    participants,
+                    tenant_id.as_deref(),
+                ),
+            )
+            .await;
+
+            match ensure_result {
+                Ok(Ok(_)) => {
+                    tracing::debug!(
+                        conversation_id = %conversation_id,
+                        "Conversation ensured synchronously"
                     );
-                } else {
-                    tracing::debug!("Session ensured asynchronously: session_id={}", session_id);
                 }
-            });
+                Ok(Err(e)) => {
+                    // 会话服务返回错误，记录警告但继续（Storage Writer 会使用 UPSERT 兜底）
+                    tracing::warn!(
+                        error = %e,
+                        conversation_id = %conversation_id,
+                        "Failed to ensure conversation synchronously, Storage Writer will use UPSERT as fallback"
+                    );
+                }
+                Err(_) => {
+                    // 超时，记录警告但继续（Storage Writer 会使用 UPSERT 兜底）
+                    tracing::warn!(
+                        conversation_id = %conversation_id,
+                        "Timeout ensuring conversation (500ms), Storage Writer will use UPSERT as fallback"
+                    );
+                }
+            }
         }
 
         // 构建推送任务
@@ -281,48 +297,48 @@ impl MessageDomainService {
         // 提取接收者ID列表（优先使用 receiver_id 和 channel_id）
         let mut user_ids = Vec::new();
 
-        if let Ok(session_type) =
-            flare_proto::common::SessionType::try_from(submission.message.session_type)
+        if let Ok(conversation_type) =
+            flare_proto::common::ConversationType::try_from(submission.message.conversation_type)
         {
-            match session_type {
-                flare_proto::common::SessionType::Single => {
+            match conversation_type {
+                flare_proto::common::ConversationType::Single => {
                     // 单聊：优先使用 receiver_id，性能最优
                     if !submission.message.receiver_id.is_empty() {
                         user_ids.push(submission.message.receiver_id.clone());
                         tracing::debug!(
-                            "Single chat message using receiver_id: session_id={}, sender_id={}, receiver_id={}",
-                            submission.message.session_id,
+                            "Single chat message using receiver_id: conversation_id={}, sender_id={}, receiver_id={}",
+                            submission.message.conversation_id,
                             submission.message.sender_id,
                             submission.message.receiver_id
                         );
                     } else {
-                        // receiver_id 为空，降级到从 session_id 提取（向后兼容）
+                        // receiver_id 为空，降级到从 conversation_id 提取（向后兼容）
                         tracing::warn!(
-                            "Single chat message missing receiver_id, falling back to session_id extraction. session_id={}, sender_id={}",
-                            submission.message.session_id,
+                            "Single chat message missing receiver_id, falling back to conversation_id extraction. conversation_id={}, sender_id={}",
+                            submission.message.conversation_id,
                             submission.message.sender_id
                         );
-                        if let Some(participants) = self.extract_participants_from_session_id(
-                            &submission.message.session_id,
+                        if let Some(participants) = self.extract_participants_from_conversation_id(
+                            &submission.message.conversation_id,
                             &submission.message.sender_id,
                         ) {
                             user_ids = participants;
                         }
                     }
                 }
-                flare_proto::common::SessionType::Group
-                | flare_proto::common::SessionType::Channel => {
-                    // 群聊、频道：使用 channel_id 或 session_id 查询成员
-                    // user_ids 留空，由推送服务根据 channel_id/session_id 查询成员
+                flare_proto::common::ConversationType::Group
+                | flare_proto::common::ConversationType::Channel => {
+                    // 群聊、频道：使用 channel_id 或 conversation_id 查询成员
+                    // user_ids 留空，由推送服务根据 channel_id/conversation_id 查询成员
                     let channel_id = if !submission.message.channel_id.is_empty() {
                         &submission.message.channel_id
                     } else {
-                        &submission.message.session_id
+                        &submission.message.conversation_id
                     };
                     tracing::debug!(
-                        "Group/channel message. Push worker will query members. channel_id={}, session_id={}",
+                        "Group/channel message. Push worker will query members. channel_id={}, conversation_id={}",
                         channel_id,
-                        submission.message.session_id
+                        submission.message.conversation_id
                     );
                 }
                 _ => {}
@@ -334,18 +350,18 @@ impl MessageDomainService {
         let mut message_for_push = submission.message.clone();
 
         // 验证 receiver_id 和 channel_id 在克隆后仍然存在
-        if message_for_push.session_type == 1 {
+        if message_for_push.conversation_type == 1 {
             if message_for_push.receiver_id.is_empty() {
                 tracing::error!(
                     message_id = %message_for_push.id,
-                    session_id = %message_for_push.session_id,
+                    conversation_id = %message_for_push.conversation_id,
                     sender_id = %message_for_push.sender_id,
                     "Single chat message missing receiver_id after clone"
                 );
                 anyhow::bail!(
-                    "Single chat message must provide receiver_id. message_id={}, session_id={}, sender_id={}",
+                    "Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}",
                     message_for_push.id,
-                    message_for_push.session_id,
+                    message_for_push.conversation_id,
                     message_for_push.sender_id
                 );
             }
@@ -400,14 +416,14 @@ impl MessageDomainService {
     /// 注意：新格式（1-{hash}）无法从哈希反推用户ID，需要查询会话服务获取参与者
     ///
     /// # 参数
-    /// * `session_id` - 会话ID（格式：1-{hash}）
+    /// * `conversation_id` - 会话ID（格式：1-{hash}）
     /// * `sender_id` - 发送者ID（用于过滤）
     ///
     /// # 返回
     /// * `None` - 新格式无法直接解析，需要查询会话服务
-    fn extract_participants_from_session_id(
+    fn extract_participants_from_conversation_id(
         &self,
-        _session_id: &str,
+        _conversation_id: &str,
         _sender_id: &str,
     ) -> Option<Vec<String>> {
         // 新格式（1-{hash}）无法从哈希反推用户ID，返回None

@@ -37,17 +37,17 @@ impl OnlineCommandHandler {
     }
 
     /// 处理登出命令
-    #[instrument(skip(self), fields(user_id = %command.request.user_id, session_id = %command.request.session_id))]
+    #[instrument(skip(self), fields(user_id = %command.request.user_id, conversation_id = %command.request.conversation_id))]
     pub async fn handle_logout(&self, command: LogoutCommand) -> Result<LogoutResponse> {
         self.online_domain_service.logout(command.request).await
     }
 
     /// 处理心跳命令
-    #[instrument(skip(self), fields(session_id = %command.request.session_id, user_id = %command.request.user_id))]
+    #[instrument(skip(self), fields(conversation_id = %command.request.conversation_id, user_id = %command.request.user_id))]
     pub async fn handle_heartbeat(&self, command: HeartbeatCommand) -> Result<HeartbeatResponse> {
         self.online_domain_service
             .heartbeat(
-                &command.request.session_id,
+                &command.request.conversation_id,
                 &command.request.user_id,
                 command.request.current_quality.as_ref(),
             )

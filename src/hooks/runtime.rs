@@ -17,12 +17,12 @@ impl HookDispatcher {
     }
 
     /// 调用获取会话参与者的Hook
-    pub async fn invoke_get_session_participants(
+    pub async fn invoke_get_conversation_participants(
         &self,
         _ctx: &HookContext,
-        _session_id: &str,
+        _conversation_id: &str,
     ) -> Result<Option<Vec<String>>> {
-        // 在Hook注册表中查找GetSessionParticipantsHook类型的Hook
+        // 在Hook注册表中查找GetConversationParticipantsHook类型的Hook
         // 这里简化实现，实际应该遍历注册表查找合适的Hook
         Ok(None)
     }

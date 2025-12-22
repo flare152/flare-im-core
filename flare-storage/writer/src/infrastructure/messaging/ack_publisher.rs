@@ -37,7 +37,7 @@ impl AckPublisher for KafkaAckPublisher {
 
         let record = FutureRecord::to(&self.topic)
             .payload(&payload)
-            .key(event.session_id);
+            .key(event.conversation_id);
 
         self.producer
             .send(record, Duration::from_millis(self.config.kafka_timeout_ms))

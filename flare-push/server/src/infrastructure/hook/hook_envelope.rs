@@ -126,7 +126,7 @@ pub fn build_post_send_record(envelope: &PushHookEnvelope, draft: &MessageDraft)
         client_message_id: draft.client_message_id.clone(),
         conversation_id: envelope.conversation_id().to_string(),
         sender_id: SENDER_PUSH_SERVER.to_string(),
-        session_type: Some(SESSION_TYPE_PUSH.to_string()),
+        conversation_type: Some(SESSION_TYPE_PUSH.to_string()),
         message_type: Some(envelope.message_type().to_string()),
         persisted_at: SystemTime::now(),
         metadata: draft.metadata.clone(),
@@ -204,7 +204,7 @@ fn prepare_envelope(
 
     let mut context = HookContext::new(tenant_id.clone())
         .with_session(conversation_id.clone())
-        .with_session_type(SESSION_TYPE_PUSH)
+        .with_conversation_type(SESSION_TYPE_PUSH)
         .with_message_type(message_type.to_string())
         .with_sender(SENDER_PUSH_SERVER)
         .occurred_now();

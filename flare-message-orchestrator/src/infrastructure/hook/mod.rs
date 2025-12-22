@@ -39,7 +39,7 @@ pub fn build_hook_context(
 ) -> HookContext {
     let mut ctx = HookContext::new(tenant_id(&request.tenant, default_tenant));
 
-    ctx.session_id = non_empty(request.session_id.clone());
+    ctx.conversation_id = non_empty(request.conversation_id.clone());
     ctx.tags = request.tags.clone();
 
     if let Some(RequestContext {
@@ -96,15 +96,15 @@ pub fn build_hook_context(
     if let Some(message) = request.message.as_ref() {
         let message_type_label = detect_message_type(message);
         ctx.sender_id = non_empty(message.sender_id.clone());
-        ctx.session_type = non_empty(message.session_type.clone());
+        ctx.conversation_type = non_empty(message.conversation_type.clone());
         ctx.message_type = Some(message_type_label.to_string());
 
         ctx.attributes
             .entry("business_type".into())
             .or_insert(message.business_type.clone());
         ctx.attributes
-            .entry("session_type".into())
-            .or_insert(message.session_type.clone());
+            .entry("conversation_type".into())
+            .or_insert(message.conversation_type.clone());
         ctx.attributes
             .entry("receiver_id".into())
             .or_insert(message.receiver_id.clone());
@@ -153,7 +153,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         draft.set_message_id(id);
     }
 
-    if let Some(conv) = non_empty(request.session_id.clone()) {
+    if let Some(conv) = non_empty(request.conversation_id.clone()) {
         draft.set_conversation_id(conv);
     }
 
@@ -164,8 +164,8 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         .entry("business_type".into())
         .or_insert(message.business_type.clone());
     metadata
-        .entry("session_type".into())
-        .or_insert(message.session_type.clone());
+        .entry("conversation_type".into())
+        .or_insert(message.conversation_type.clone());
     metadata
         .entry("message_type".into())
         .or_insert(message_type_label.to_string());
@@ -209,7 +209,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
         });
     draft.metadata = metadata;
 
-    draft.extra("session_id", json!(request.session_id));
+    draft.extra("conversation_id", json!(request.conversation_id));
     draft.extra("sync", json!(request.sync));
     draft.extra("receiver_ids", json!(message.receiver_ids));
 
@@ -253,7 +253,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
 
 pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &MessageDraft) {
     if let Some(conv) = draft.conversation_id.as_ref() {
-        request.session_id = conv.clone();
+        request.conversation_id = conv.clone();
     }
 
     request.tags = draft.headers.clone();
@@ -264,7 +264,7 @@ pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &Message
         }
 
         if let Some(conv) = draft.conversation_id.as_ref() {
-            message.session_id = conv.clone();
+            message.conversation_id = conv.clone();
         }
 
         // message.content 是 MessageContent，需要根据 draft.payload 构建
@@ -311,7 +311,7 @@ pub fn build_message_record(
     let mut metadata: HashMap<String, String> = message.extra.clone();
 
     metadata.insert("business_type".into(), message.business_type.clone());
-    metadata.insert("session_type".into(), message.session_type.clone());
+    metadata.insert("conversation_type".into(), message.conversation_type.clone());
     // 推断 content_type
     let content_type = message.content.as_ref()
         .map(|c| match &c.content {
@@ -351,9 +351,9 @@ pub fn build_message_record(
     MessageRecord {
         message_id: message.id.clone(),
         client_message_id: None,
-        conversation_id: message.session_id.clone(),
+        conversation_id: message.conversation_id.clone(),
         sender_id: message.sender_id.clone(),
-        session_type: Some(message.session_type.clone()),
+        conversation_type: Some(message.conversation_type.clone()),
         message_type: metadata.get("content_type").cloned(),
         persisted_at: SystemTime::now(),
         metadata,
@@ -371,8 +371,8 @@ pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookCo
     if updated.sender_id.is_none() {
         updated.sender_id = original.sender_id.clone();
     }
-    if updated.session_type.is_none() {
-        updated.session_type = original.session_type.clone();
+    if updated.conversation_type.is_none() {
+        updated.conversation_type = original.conversation_type.clone();
     }
     if updated.message_type.is_none() {
         updated.message_type = original.message_type.clone();

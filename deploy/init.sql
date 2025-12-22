@@ -176,7 +176,7 @@ CREATE INDEX IF NOT EXISTS idx_media_references_created_at ON media_references(c
 DROP TABLE IF EXISTS messages CASCADE;
 CREATE TABLE messages (
     id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     sender_id TEXT NOT NULL,
     receiver_ids JSONB,                    -- 接收者ID列表
     content BYTEA,                         -- 消息内容（二进制）
@@ -230,7 +230,7 @@ CREATE TABLE messages (
 
 COMMENT ON TABLE messages IS '消息存储表（TimescaleDB Hypertable）';
 COMMENT ON COLUMN messages.id IS '消息唯一标识符';
-COMMENT ON COLUMN messages.session_id IS '会话ID';
+COMMENT ON COLUMN messages.conversation_id IS '会话ID';
 COMMENT ON COLUMN messages.sender_id IS '发送者ID';
 COMMENT ON COLUMN messages.receiver_ids IS '接收者ID列表（JSON数组）';
 COMMENT ON COLUMN messages.content IS '消息内容（二进制）';
@@ -269,16 +269,16 @@ COMMENT ON COLUMN messages.offline_push_info IS '离线推送信息';
 
 -- 消息表索引
 -- 注意：主键已包含 (timestamp, id)，无需单独创建 timestamp 和 id 索引
-CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(session_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversation_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_id_unique ON messages(id); -- 唯一索引，保证id全局唯一
 CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type);
 CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_status_changed_at ON messages(status_changed_at) WHERE status_changed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_is_recalled ON messages(is_recalled);
-CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq) WHERE seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_seq ON messages(conversation_id, seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(seq) WHERE seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_expire_at ON messages(expire_at) WHERE expire_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_ack_status ON messages(ack_status) WHERE ack_status IS NOT NULL;
@@ -304,11 +304,11 @@ SELECT create_hypertable('messages', 'timestamp',
 -- 
 -- 配置说明：
 -- - enable_columnstore: 启用列式存储
--- - segmentby: 按 session_id 分段，同一会话的消息存储在一起，提高压缩效率
+-- - segmentby: 按 conversation_id 分段，同一会话的消息存储在一起，提高压缩效率
 -- - orderby: 按 timestamp DESC, id 排序，优化时序查询性能
 ALTER TABLE messages SET (
     timescaledb.enable_columnstore = true,
-    timescaledb.segmentby = 'session_id',
+    timescaledb.segmentby = 'conversation_id',
     timescaledb.orderby = 'timestamp DESC, id'
 );
 
@@ -361,7 +361,7 @@ DROP TABLE IF EXISTS message_reliability CASCADE;
 CREATE TABLE message_reliability (
     id BIGSERIAL PRIMARY KEY,
     message_id TEXT NOT NULL,               -- 消息ID
-    session_id TEXT NOT NULL,               -- 会话ID
+    conversation_id TEXT NOT NULL,               -- 会话ID
     sender_id TEXT NOT NULL,                -- 发送者ID
     recipient_ids JSONB,                    -- 接收者ID列表
     send_attempts INTEGER DEFAULT 0,        -- 发送尝试次数
@@ -401,7 +401,7 @@ CREATE TABLE system_metrics (
 COMMENT ON TABLE message_reliability IS '消息可靠性保障表（用于跟踪消息的发送、确认和重试状态）';
 COMMENT ON COLUMN message_reliability.id IS '记录ID（自增主键）';
 COMMENT ON COLUMN message_reliability.message_id IS '消息ID';
-COMMENT ON COLUMN message_reliability.session_id IS '会话ID';
+COMMENT ON COLUMN message_reliability.conversation_id IS '会话ID';
 COMMENT ON COLUMN message_reliability.sender_id IS '发送者ID';
 COMMENT ON COLUMN message_reliability.recipient_ids IS '接收者ID列表';
 COMMENT ON COLUMN message_reliability.send_attempts IS '发送尝试次数';
@@ -432,7 +432,7 @@ COMMENT ON COLUMN system_metrics.created_at IS '创建时间';
 
 -- 消息可靠性保障表索引
 CREATE INDEX IF NOT EXISTS idx_message_reliability_message_id ON message_reliability(message_id);
-CREATE INDEX IF NOT EXISTS idx_message_reliability_session_id ON message_reliability(session_id);
+CREATE INDEX IF NOT EXISTS idx_message_reliability_conversation_id ON message_reliability(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_message_reliability_sender_id ON message_reliability(sender_id);
 CREATE INDEX IF NOT EXISTS idx_message_reliability_delivery_status ON message_reliability(delivery_status);
 CREATE INDEX IF NOT EXISTS idx_message_reliability_confirmation_status ON message_reliability(confirmation_status);
@@ -475,16 +475,16 @@ CREATE TRIGGER trigger_system_metrics_updated_at
     EXECUTE FUNCTION update_system_metrics_updated_at();
 
 -- ============================================================================
--- 3. 会话模块 (Session Module)
+-- 3. 会话模块 (Conversation Module)
 -- ============================================================================
 -- 职责: 会话元数据存储、参与者管理、会话状态维护
 
 -- 会话表
 -- COMMENT: 会话服务核心表，存储会话元数据和基本信息
-DROP TABLE IF EXISTS sessions CASCADE;
-CREATE TABLE sessions (
-    session_id TEXT PRIMARY KEY,
-    session_type TEXT NOT NULL,            -- 会话类型（single, group, channel等）
+DROP TABLE IF EXISTS conversations CASCADE;
+CREATE TABLE conversations (
+    conversation_id TEXT PRIMARY KEY,
+    conversation_type TEXT NOT NULL,            -- 会话类型（single, group, channel等）
     business_type TEXT NOT NULL,          -- 业务类型
     display_name TEXT,                     -- 会话显示名称
     attributes JSONB,                     -- 会话属性（JSON格式）
@@ -516,40 +516,40 @@ CREATE TABLE sessions (
     custom_data JSONB DEFAULT '{}'::jsonb  -- 自定义数据
 );
 
-COMMENT ON TABLE sessions IS '会话表';
-COMMENT ON COLUMN sessions.session_id IS '会话唯一标识符';
-COMMENT ON COLUMN sessions.session_type IS '会话类型（single: 单聊, group: 群聊, channel: 频道）';
-COMMENT ON COLUMN sessions.business_type IS '业务类型';
-COMMENT ON COLUMN sessions.display_name IS '会话显示名称';
-COMMENT ON COLUMN sessions.attributes IS '会话属性（JSON格式）';
-COMMENT ON COLUMN sessions.visibility IS '可见性（public: 公开, private: 私有, hidden: 隐藏）';
-COMMENT ON COLUMN sessions.lifecycle_state IS '生命周期状态（active: 活跃, archived: 归档, deleted: 已删除）';
-COMMENT ON COLUMN sessions.created_at IS '创建时间';
-COMMENT ON COLUMN sessions.updated_at IS '更新时间';
-COMMENT ON COLUMN sessions.metadata IS '扩展元数据（JSON格式）';
-COMMENT ON COLUMN sessions.last_message_id IS '最后一条消息ID';
-COMMENT ON COLUMN sessions.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
-COMMENT ON COLUMN sessions.is_destroyed IS '会话是否被解散（群聊）';
-COMMENT ON COLUMN sessions.description IS '会话描述';
-COMMENT ON COLUMN sessions.avatar_url IS '会话头像URL';
-COMMENT ON COLUMN sessions.owner_id IS '会话拥有者ID';
-COMMENT ON COLUMN sessions.max_members IS '最大成员数';
-COMMENT ON COLUMN sessions.is_public IS '是否公开会话';
-COMMENT ON COLUMN sessions.join_approval_required IS '加入是否需要审批';
-COMMENT ON COLUMN sessions.enable_history_browsing IS '是否允许浏览历史消息';
-COMMENT ON COLUMN sessions.enable_message_reactions IS '是否允许消息反应';
-COMMENT ON COLUMN sessions.enable_message_edit IS '是否允许编辑消息';
-COMMENT ON COLUMN sessions.enable_message_delete IS '是否允许删除消息';
-COMMENT ON COLUMN sessions.message_ttl_seconds IS '消息生存时间（秒）';
-COMMENT ON COLUMN sessions.notification_level IS '通知级别（all, mention, none）';
-COMMENT ON COLUMN sessions.tags IS '标签列表';
-COMMENT ON COLUMN sessions.custom_data IS '自定义数据';
+COMMENT ON TABLE conversations IS '会话表';
+COMMENT ON COLUMN conversations.conversation_id IS '会话唯一标识符';
+COMMENT ON COLUMN conversations.conversation_type IS '会话类型（single: 单聊, group: 群聊, channel: 频道）';
+COMMENT ON COLUMN conversations.business_type IS '业务类型';
+COMMENT ON COLUMN conversations.display_name IS '会话显示名称';
+COMMENT ON COLUMN conversations.attributes IS '会话属性（JSON格式）';
+COMMENT ON COLUMN conversations.visibility IS '可见性（public: 公开, private: 私有, hidden: 隐藏）';
+COMMENT ON COLUMN conversations.lifecycle_state IS '生命周期状态（active: 活跃, archived: 归档, deleted: 已删除）';
+COMMENT ON COLUMN conversations.created_at IS '创建时间';
+COMMENT ON COLUMN conversations.updated_at IS '更新时间';
+COMMENT ON COLUMN conversations.metadata IS '扩展元数据（JSON格式）';
+COMMENT ON COLUMN conversations.last_message_id IS '最后一条消息ID';
+COMMENT ON COLUMN conversations.last_message_seq IS '最后一条消息的seq（用于未读数计算）';
+COMMENT ON COLUMN conversations.is_destroyed IS '会话是否被解散（群聊）';
+COMMENT ON COLUMN conversations.description IS '会话描述';
+COMMENT ON COLUMN conversations.avatar_url IS '会话头像URL';
+COMMENT ON COLUMN conversations.owner_id IS '会话拥有者ID';
+COMMENT ON COLUMN conversations.max_members IS '最大成员数';
+COMMENT ON COLUMN conversations.is_public IS '是否公开会话';
+COMMENT ON COLUMN conversations.join_approval_required IS '加入是否需要审批';
+COMMENT ON COLUMN conversations.enable_history_browsing IS '是否允许浏览历史消息';
+COMMENT ON COLUMN conversations.enable_message_reactions IS '是否允许消息反应';
+COMMENT ON COLUMN conversations.enable_message_edit IS '是否允许编辑消息';
+COMMENT ON COLUMN conversations.enable_message_delete IS '是否允许删除消息';
+COMMENT ON COLUMN conversations.message_ttl_seconds IS '消息生存时间（秒）';
+COMMENT ON COLUMN conversations.notification_level IS '通知级别（all, mention, none）';
+COMMENT ON COLUMN conversations.tags IS '标签列表';
+COMMENT ON COLUMN conversations.custom_data IS '自定义数据';
 
 -- 会话参与者表
 -- COMMENT: 会话参与者关系表，存储会话成员信息
-DROP TABLE IF EXISTS session_participants CASCADE;
-CREATE TABLE session_participants (
-    session_id TEXT NOT NULL,
+DROP TABLE IF EXISTS conversation_participants CASCADE;
+CREATE TABLE conversation_participants (
+    conversation_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     roles TEXT[],                         -- 角色列表（owner: 拥有者, admin: 管理员, member: 成员, guest: 访客, observer: 观察者）
     muted BOOLEAN DEFAULT FALSE,          -- 是否静音（向后兼容，建议使用 mute_until）
@@ -566,32 +566,32 @@ CREATE TABLE session_participants (
     mute_until TIMESTAMP WITH TIME ZONE,   -- 静音截止时间（NULL表示未静音）
     quit_at TIMESTAMP WITH TIME ZONE,      -- 退出时间（NULL表示仍在会话中）
     
-    PRIMARY KEY (session_id, user_id),
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    PRIMARY KEY (conversation_id, user_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 );
 
-COMMENT ON TABLE session_participants IS '会话参与者表';
-COMMENT ON COLUMN session_participants.session_id IS '会话ID';
-COMMENT ON COLUMN session_participants.user_id IS '用户ID';
-COMMENT ON COLUMN session_participants.roles IS '角色列表（owner: 拥有者, admin: 管理员, member: 成员, guest: 访客, observer: 观察者）';
-COMMENT ON COLUMN session_participants.muted IS '是否静音';
-COMMENT ON COLUMN session_participants.pinned IS '是否置顶';
-COMMENT ON COLUMN session_participants.attributes IS '参与者属性（JSON格式）';
-COMMENT ON COLUMN session_participants.created_at IS '加入时间';
-COMMENT ON COLUMN session_participants.updated_at IS '更新时间';
-COMMENT ON COLUMN session_participants.last_read_msg_seq IS '已读消息的seq（用于未读数计算）';
-COMMENT ON COLUMN session_participants.last_sync_msg_seq IS '多端同步游标（最后同步的seq）';
-COMMENT ON COLUMN session_participants.unread_count IS '未读数（冗余字段，用于快速查询）';
-COMMENT ON COLUMN session_participants.is_deleted IS '用户侧"删除会话"（软删除）';
-COMMENT ON COLUMN session_participants.mute_until IS '静音截止时间（NULL表示未静音）';
-COMMENT ON COLUMN session_participants.quit_at IS '退出时间（NULL表示仍在会话中）';
+COMMENT ON TABLE conversation_participants IS '会话参与者表';
+COMMENT ON COLUMN conversation_participants.conversation_id IS '会话ID';
+COMMENT ON COLUMN conversation_participants.user_id IS '用户ID';
+COMMENT ON COLUMN conversation_participants.roles IS '角色列表（owner: 拥有者, admin: 管理员, member: 成员, guest: 访客, observer: 观察者）';
+COMMENT ON COLUMN conversation_participants.muted IS '是否静音';
+COMMENT ON COLUMN conversation_participants.pinned IS '是否置顶';
+COMMENT ON COLUMN conversation_participants.attributes IS '参与者属性（JSON格式）';
+COMMENT ON COLUMN conversation_participants.created_at IS '加入时间';
+COMMENT ON COLUMN conversation_participants.updated_at IS '更新时间';
+COMMENT ON COLUMN conversation_participants.last_read_msg_seq IS '已读消息的seq（用于未读数计算）';
+COMMENT ON COLUMN conversation_participants.last_sync_msg_seq IS '多端同步游标（最后同步的seq）';
+COMMENT ON COLUMN conversation_participants.unread_count IS '未读数（冗余字段，用于快速查询）';
+COMMENT ON COLUMN conversation_participants.is_deleted IS '用户侧"删除会话"（软删除）';
+COMMENT ON COLUMN conversation_participants.mute_until IS '静音截止时间（NULL表示未静音）';
+COMMENT ON COLUMN conversation_participants.quit_at IS '退出时间（NULL表示仍在会话中）';
 
 -- 用户同步光标表
 -- COMMENT: 用户同步光标表，记录用户在各会话中的同步位置（用于多端同步）
 DROP TABLE IF EXISTS user_sync_cursor CASCADE;
 CREATE TABLE user_sync_cursor (
     user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
     last_synced_ts BIGINT NOT NULL,       -- 最后同步时间戳（毫秒）
     device_id TEXT,                       -- 设备ID（可选，用于设备级光标）
     version INTEGER DEFAULT 1,            -- 版本号（用于乐观锁）
@@ -601,12 +601,12 @@ CREATE TABLE user_sync_cursor (
     -- 消息关系模型优化字段（来自 003_message_relation_model_optimization.sql）
     last_synced_seq BIGINT DEFAULT 0,     -- 最后同步的seq（替代时间戳，更精确）
     
-    PRIMARY KEY (user_id, session_id)
+    PRIMARY KEY (user_id, conversation_id)
 );
 
 COMMENT ON TABLE user_sync_cursor IS '用户同步光标表';
 COMMENT ON COLUMN user_sync_cursor.user_id IS '用户ID';
-COMMENT ON COLUMN user_sync_cursor.session_id IS '会话ID';
+COMMENT ON COLUMN user_sync_cursor.conversation_id IS '会话ID';
 COMMENT ON COLUMN user_sync_cursor.last_synced_ts IS '最后同步时间戳（毫秒）';
 COMMENT ON COLUMN user_sync_cursor.device_id IS '设备ID（可选，用于设备级光标）';
 COMMENT ON COLUMN user_sync_cursor.version IS '版本号（用于乐观锁）';
@@ -673,25 +673,25 @@ COMMENT ON COLUMN message_operation_history.created_at IS '创建时间';
 COMMENT ON COLUMN message_operation_history.metadata IS '元数据（扩展字段）';
 
 -- 会话模块索引
-CREATE INDEX IF NOT EXISTS idx_sessions_business_type ON sessions(business_type, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sessions_lifecycle_state ON sessions(lifecycle_state, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sessions_session_type ON sessions(session_type);
-CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sessions_owner_id ON sessions(owner_id) WHERE owner_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sessions_is_public ON sessions(is_public) WHERE is_public = true;
-CREATE INDEX IF NOT EXISTS idx_sessions_notification_level ON sessions(notification_level);
-CREATE INDEX IF NOT EXISTS idx_sessions_tags ON sessions USING GIN(tags) WHERE tags IS NOT NULL AND tags != '{}';
-CREATE INDEX IF NOT EXISTS idx_session_participants_user_id ON session_participants(user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_session_participants_session_id ON session_participants(session_id);
-CREATE INDEX IF NOT EXISTS idx_session_participants_last_read_seq ON session_participants(last_read_msg_seq);
-CREATE INDEX IF NOT EXISTS idx_session_participants_last_sync_seq ON session_participants(last_sync_msg_seq);
-CREATE INDEX IF NOT EXISTS idx_session_participants_unread_count ON session_participants(unread_count);
-CREATE INDEX IF NOT EXISTS idx_session_participants_is_deleted ON session_participants(is_deleted) WHERE is_deleted = true;
-CREATE INDEX IF NOT EXISTS idx_sessions_last_message_id ON sessions(last_message_id) WHERE last_message_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sessions_last_message_seq ON sessions(last_message_seq) WHERE last_message_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_business_type ON conversations(business_type, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_lifecycle_state ON conversations(lifecycle_state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_conversation_type ON conversations(conversation_type);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_owner_id ON conversations(owner_id) WHERE owner_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_is_public ON conversations(is_public) WHERE is_public = true;
+CREATE INDEX IF NOT EXISTS idx_conversations_notification_level ON conversations(notification_level);
+CREATE INDEX IF NOT EXISTS idx_conversations_tags ON conversations USING GIN(tags) WHERE tags IS NOT NULL AND tags != '{}';
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON conversation_participants(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_conversation_id ON conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_last_read_seq ON conversation_participants(last_read_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_last_sync_seq ON conversation_participants(last_sync_msg_seq);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_unread_count ON conversation_participants(unread_count);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_is_deleted ON conversation_participants(is_deleted) WHERE is_deleted = true;
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message_id ON conversations(last_message_id) WHERE last_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message_seq ON conversations(last_message_seq) WHERE last_message_seq IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_id ON user_sync_cursor(user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_session_id ON user_sync_cursor(session_id);
-CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_device ON user_sync_cursor(user_id, device_id, session_id) WHERE device_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_conversation_id ON user_sync_cursor(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_device ON user_sync_cursor(user_id, device_id, conversation_id) WHERE device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_last_synced_seq ON user_sync_cursor(last_synced_seq) WHERE last_synced_seq > 0;
 CREATE INDEX IF NOT EXISTS idx_message_state_message_id ON message_state(message_id);
 CREATE INDEX IF NOT EXISTS idx_message_state_user_id ON message_state(user_id);
@@ -774,7 +774,7 @@ CREATE TRIGGER trigger_message_ack_records_updated_at
 DROP TABLE IF EXISTS threads CASCADE;
 CREATE TABLE threads (
     id TEXT NOT NULL PRIMARY KEY,
-    session_id TEXT NOT NULL,                    -- 会话ID（群组ID）
+    conversation_id TEXT NOT NULL,                    -- 会话ID（群组ID）
     root_message_id TEXT NOT NULL,              -- 根消息ID（话题起始消息）
     title TEXT,                                  -- 话题标题（可选，从根消息提取或用户指定）
     creator_id TEXT NOT NULL,                   -- 创建者ID
@@ -793,7 +793,7 @@ CREATE TABLE threads (
 
 COMMENT ON TABLE threads IS '话题表（Thread），用于群组中的话题讨论';
 COMMENT ON COLUMN threads.id IS '话题ID（通常等于 root_message_id）';
-COMMENT ON COLUMN threads.session_id IS '会话ID（群组ID）';
+COMMENT ON COLUMN threads.conversation_id IS '会话ID（群组ID）';
 COMMENT ON COLUMN threads.root_message_id IS '根消息ID（话题起始消息）';
 COMMENT ON COLUMN threads.title IS '话题标题（可选，从根消息提取或用户指定）';
 COMMENT ON COLUMN threads.creator_id IS '创建者ID';
@@ -828,7 +828,7 @@ COMMENT ON COLUMN thread_participants.reply_count IS '该用户在此话题的�
 COMMENT ON COLUMN thread_participants.is_muted IS '是否静音（不接收通知）';
 
 -- 话题模块索引
-CREATE INDEX IF NOT EXISTS idx_threads_session_id ON threads(session_id);
+CREATE INDEX IF NOT EXISTS idx_threads_conversation_id ON threads(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_threads_root_message_id ON threads(root_message_id);
 CREATE INDEX IF NOT EXISTS idx_threads_creator_id ON threads(creator_id);
 CREATE INDEX IF NOT EXISTS idx_threads_last_reply_at ON threads(last_reply_at DESC);
@@ -850,7 +850,7 @@ CREATE TABLE favorites (
     id TEXT NOT NULL PRIMARY KEY,
     user_id TEXT NOT NULL,                      -- 用户ID
     message_id TEXT NOT NULL,                   -- 消息ID
-    session_id TEXT NOT NULL,                   -- 会话ID（冗余，用于快速查询）
+    conversation_id TEXT NOT NULL,                   -- 会话ID（冗余，用于快速查询）
     tags TEXT[] DEFAULT '{}',                    -- 收藏标签（数组）
     note TEXT,                                  -- 收藏备注
     favorited_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,  -- 收藏时间
@@ -866,7 +866,7 @@ COMMENT ON TABLE favorites IS '用户收藏表，记录用户收藏的消息';
 COMMENT ON COLUMN favorites.id IS '收藏记录ID（UUID）';
 COMMENT ON COLUMN favorites.user_id IS '用户ID';
 COMMENT ON COLUMN favorites.message_id IS '消息ID';
-COMMENT ON COLUMN favorites.session_id IS '会话ID（冗余字段，用于快速查询）';
+COMMENT ON COLUMN favorites.conversation_id IS '会话ID（冗余字段，用于快速查询）';
 COMMENT ON COLUMN favorites.tags IS '收藏标签（数组）';
 COMMENT ON COLUMN favorites.note IS '收藏备注';
 COMMENT ON COLUMN favorites.favorited_at IS '收藏时间';
@@ -874,7 +874,7 @@ COMMENT ON COLUMN favorites.favorited_at IS '收藏时间';
 -- 收藏表索引
 CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_message_id ON favorites(message_id);
-CREATE INDEX IF NOT EXISTS idx_favorites_session_id ON favorites(session_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_conversation_id ON favorites(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_favorited_at ON favorites(favorited_at DESC);
 CREATE INDEX IF NOT EXISTS idx_favorites_tags ON favorites USING GIN(tags);  -- GIN索引支持数组查询
 
@@ -918,7 +918,7 @@ CREATE TABLE hook_configs (
 COMMENT ON TABLE hook_configs IS 'Hook配置表（动态API配置，最高优先级）';
 COMMENT ON COLUMN hook_configs.id IS '配置ID（自增主键）';
 COMMENT ON COLUMN hook_configs.tenant_id IS '租户ID（NULL表示全局配置，对所有租户生效）';
-COMMENT ON COLUMN hook_configs.hook_type IS 'Hook类型（pre_send, post_send, delivery, recall, session_create, user_login等）';
+COMMENT ON COLUMN hook_configs.hook_type IS 'Hook类型（pre_send, post_send, delivery, recall, conversation_create, user_login等）';
 COMMENT ON COLUMN hook_configs.name IS 'Hook名称（唯一标识）';
 COMMENT ON COLUMN hook_configs.version IS 'Hook版本';
 COMMENT ON COLUMN hook_configs.description IS 'Hook描述';
@@ -929,7 +929,7 @@ COMMENT ON COLUMN hook_configs.timeout_ms IS '超时时间（毫秒）';
 COMMENT ON COLUMN hook_configs.max_retries IS '最大重试次数';
 COMMENT ON COLUMN hook_configs.error_policy IS '错误策略（fail_fast: 快速失败, retry: 重试, ignore: 忽略）';
 COMMENT ON COLUMN hook_configs.require_success IS '是否要求成功';
-COMMENT ON COLUMN hook_configs.selector_config IS '选择器配置（JSON格式，包含tenants, session_types, message_types等）';
+COMMENT ON COLUMN hook_configs.selector_config IS '选择器配置（JSON格式，包含tenants, conversation_types, message_types等）';
 COMMENT ON COLUMN hook_configs.transport_config IS '传输配置（JSON格式，包含type, endpoint等）';
 COMMENT ON COLUMN hook_configs.metadata IS '元数据（JSON格式）';
 COMMENT ON COLUMN hook_configs.created_at IS '创建时间';
@@ -987,15 +987,15 @@ CREATE MATERIALIZED VIEW messages_hourly_stats
 WITH (timescaledb.continuous) AS
 SELECT
     time_bucket('1 hour', timestamp) AS hour,
-    session_id,
+    conversation_id,
     COUNT(*) AS message_count,
     COUNT(DISTINCT sender_id) AS unique_senders
 FROM messages
-GROUP BY hour, session_id;
+GROUP BY hour, conversation_id;
 
 COMMENT ON MATERIALIZED VIEW messages_hourly_stats IS '消息每小时统计视图（TimescaleDB连续聚合）';
 COMMENT ON COLUMN messages_hourly_stats.hour IS '小时时间戳';
-COMMENT ON COLUMN messages_hourly_stats.session_id IS '会话ID';
+COMMENT ON COLUMN messages_hourly_stats.conversation_id IS '会话ID';
 COMMENT ON COLUMN messages_hourly_stats.message_count IS '消息数量';
 COMMENT ON COLUMN messages_hourly_stats.unique_senders IS '唯一发送者数量';
 
@@ -1030,7 +1030,7 @@ END $$;
 -- ============================================================================
 
 -- 会话表更新时间戳触发器
-CREATE OR REPLACE FUNCTION update_sessions_updated_at()
+CREATE OR REPLACE FUNCTION update_conversations_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
@@ -1038,13 +1038,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_sessions_updated_at
-    BEFORE UPDATE ON sessions
+CREATE TRIGGER trigger_conversations_updated_at
+    BEFORE UPDATE ON conversations
     FOR EACH ROW
-    EXECUTE FUNCTION update_sessions_updated_at();
+    EXECUTE FUNCTION update_conversations_updated_at();
 
 -- 会话参与者表更新时间戳触发器
-CREATE OR REPLACE FUNCTION update_session_participants_updated_at()
+CREATE OR REPLACE FUNCTION update_conversation_participants_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
@@ -1052,10 +1052,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_session_participants_updated_at
-    BEFORE UPDATE ON session_participants
+CREATE TRIGGER trigger_conversation_participants_updated_at
+    BEFORE UPDATE ON conversation_participants
     FOR EACH ROW
-    EXECUTE FUNCTION update_session_participants_updated_at();
+    EXECUTE FUNCTION update_conversation_participants_updated_at();
 
 -- 用户同步光标表更新时间戳触发器
 CREATE OR REPLACE FUNCTION update_user_sync_cursor_updated_at()

@@ -40,9 +40,9 @@ enabled = false
 service_name = "flare-im-core"
 namespace = "default"
 
-[redis.session_store]
+[redis.conversation_store]
 url = "redis://localhost:26379/0"
-namespace = "flare:session"
+namespace = "flare:conversation"
 ttl_seconds = 3600
 
 [redis.token_store]
@@ -55,7 +55,7 @@ url = "redis://localhost:26379/2"
 namespace = "flare:media"
 ttl_seconds = 3600
 
-[redis.upload_sessions]
+[redis.upload_conversations]
 url = "redis://localhost:26379/3"
 namespace = "flare:media:upload"
 ttl_seconds = 86400

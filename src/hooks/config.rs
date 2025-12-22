@@ -27,7 +27,7 @@ pub struct HookConfig {
 #[serde(default)]
 pub struct HookSelectorConfig {
     pub tenants: Vec<String>,
-    pub session_types: Vec<String>,
+    pub conversation_types: Vec<String>,
     pub message_types: Vec<String>,
 }
 
@@ -98,10 +98,10 @@ impl HookDefinition {
             } else {
                 MatchRule::of(self.selector.tenants.clone())
             },
-            session_types: if self.selector.session_types.is_empty() {
+            conversation_types: if self.selector.conversation_types.is_empty() {
                 MatchRule::Any
             } else {
-                MatchRule::of(self.selector.session_types.clone())
+                MatchRule::of(self.selector.conversation_types.clone())
             },
             message_types: if self.selector.message_types.is_empty() {
                 MatchRule::Any

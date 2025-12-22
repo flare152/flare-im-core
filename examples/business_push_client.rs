@@ -1,7 +1,7 @@
 //! # 业务系统推送消息示例
 //!
 //! 这是一个业务系统接入示例，演示如何通过 `flare-core-gateway` 给所有在线用户推送消息。
-//! 所有消息都发送到同一个聊天室（session_id: "chatroom"），只支持文本消息。
+//! 所有消息都发送到同一个聊天室（conversation_id: "chatroom"），只支持文本消息。
 //!
 //! ## 使用方法
 //!
@@ -143,24 +143,24 @@ async fn main() -> Result<()> {
         extra.insert("chatroom".to_string(), "true".to_string());
     }
 
-    // 统一使用 "chatroom" 作为 session_id，确保所有消息都发送到同一个聊天室
-    // 注意：business_push_client 和 chatroom_client 都使用相同的 session_id
-    let session_id = "chatroom".to_string();
+    // 统一使用 "chatroom" 作为 conversation_id，确保所有消息都发送到同一个聊天室
+    // 注意：business_push_client 和 chatroom_client 都使用相同的 conversation_id
+    let conversation_id = "chatroom".to_string();
 
     let message = Message {
         id: format!("msg-{}", Uuid::new_v4()),
-        session_id: session_id.clone(),
+        conversation_id: conversation_id.clone(),
         client_msg_id: String::new(), // 客户端消息ID（可选）
         sender_id: business_user_id.clone(),
         receiver_id: String::new(),           // 群聊场景：receiver_id 为空
-        channel_id: session_id.clone(),       // 群聊场景：使用 channel_id（等同于 session_id）
+        channel_id: conversation_id.clone(),       // 群聊场景：使用 channel_id（等同于 conversation_id）
         source: MessageSource::System as i32, // 业务系统消息
         seq: 0,
         timestamp: Some(prost_types::Timestamp {
             seconds: now.timestamp(),
             nanos: 0,
         }),
-        session_type: flare_proto::common::SessionType::Group as i32, // 群聊类型
+        conversation_type: flare_proto::common::ConversationType::Group as i32, // 群聊类型
         message_type: MessageType::Text as i32,                       // 文本消息
         business_type: "chatroom".to_string(),
         content: Some(MessageContent {

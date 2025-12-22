@@ -74,7 +74,7 @@ CORE_SERVICES=(
     "signaling-online"
     "signaling-route"
     "hook-engine"
-    "session"
+    "conversation"
     "message-orchestrator"
     "storage-writer"
     "storage-reader"
@@ -196,7 +196,7 @@ echo -e "${GREEN}🚀 启动 Flare IM Core 核心服务...${NC}"
 # 定义服务启动顺序（按照依赖关系排序）
 # 1. 基础服务：signaling-online（在线状态服务）、signaling-route（路由目录服务）
 # 2. Hook引擎：hook-engine（Hook扩展服务）
-# 3. 会话服务：session（会话管理服务）
+# 3. 会话服务：conversation（会话管理服务）
 # 4. 消息编排：message-orchestrator（消息编排服务）
 # 5. 存储服务：storage-writer（消息持久化）、storage-reader（消息查询）
 # 6. 推送服务：push-proxy（推送代理）、push-server（推送服务）、push-worker（推送工作器）
@@ -245,9 +245,9 @@ for service in "${CORE_SERVICES[@]}"; do
             BIN_NAME="flare-hook-engine"
             ENV_VARS=""
             ;;
-        "session")
-            PACKAGE="flare-session"
-            BIN_NAME="flare-session"
+        "conversation")
+            PACKAGE="flare-conversation"
+            BIN_NAME="flare-conversation"
             ENV_VARS=""
             ;;
         "message-orchestrator")

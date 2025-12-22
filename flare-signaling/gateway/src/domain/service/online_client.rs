@@ -1,24 +1,24 @@
 //! Online 服务 gRPC 客户端
 //!
-//! Gateway 通过此客户端调用 Online 服务的 UserService 接口查询设备信息
+//! Gateway 通过此客户端调用 Online 服务的 OnlineService 接口查询设备信息
 
 use anyhow::Result;
 use flare_proto::signaling::online::{
     GetDeviceRequest, GetDeviceResponse, ListUserDevicesRequest, ListUserDevicesResponse,
-    user_service_client::UserServiceClient,
+    online_service_client::OnlineServiceClient as ProtoOnlineServiceClient,
 };
 use flare_proto::{RequestContext, TenantContext};
 use tonic::transport::Channel;
 
 pub struct OnlineServiceClient {
-    client: UserServiceClient<Channel>,
+    client: ProtoOnlineServiceClient<Channel>,
 }
 
 impl OnlineServiceClient {
     pub async fn new(endpoint: String) -> Result<Self> {
         let channel = Channel::from_shared(endpoint)?.connect().await?;
 
-        let client = UserServiceClient::new(channel);
+        let client = ProtoOnlineServiceClient::new(channel);
 
         Ok(Self { client })
     }
@@ -52,8 +52,8 @@ impl OnlineServiceClient {
         Ok(response.into_inner())
     }
 
-    /// 获取底层的UserServiceClient
-    pub fn get_user_service_client(&self) -> UserServiceClient<Channel> {
+    /// 获取底层的 OnlineServiceClient
+    pub fn get_online_service_client(&self) -> ProtoOnlineServiceClient<Channel> {
         self.client.clone()
     }
 }

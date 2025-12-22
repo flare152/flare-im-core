@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use flare_proto::signaling::signaling_service_client::SignalingServiceClient;
-use flare_proto::signaling::{GetOnlineStatusRequest, GetOnlineStatusResponse};
+use flare_proto::signaling::online::online_service_client::OnlineServiceClient;
+use flare_proto::signaling::online::{GetOnlineStatusRequest, GetOnlineStatusResponse};
 use flare_server_core::discovery::ServiceClient;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
@@ -16,7 +16,7 @@ use crate::domain::repository::OnlineStatus;
 pub struct SignalingOnlineClient {
     service_name: String,
     service_client: Mutex<Option<ServiceClient>>,
-    client: Mutex<Option<SignalingServiceClient<Channel>>>,
+    client: Mutex<Option<OnlineServiceClient<Channel>>>,
 }
 
 impl SignalingOnlineClient {
@@ -38,7 +38,7 @@ impl SignalingOnlineClient {
         })
     }
 
-    async fn ensure_client(&self) -> Result<SignalingServiceClient<Channel>> {
+    async fn ensure_client(&self) -> Result<OnlineServiceClient<Channel>> {
         let mut guard = self.client.lock().await;
         if let Some(client) = guard.as_ref() {
             return Ok(client.clone());
@@ -101,7 +101,7 @@ impl SignalingOnlineClient {
 
         tracing::debug!("Got channel for signaling service from service discovery");
 
-        let client = SignalingServiceClient::new(channel);
+        let client = OnlineServiceClient::new(channel);
         *guard = Some(client.clone());
         Ok(client)
     }

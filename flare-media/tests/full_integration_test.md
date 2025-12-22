@@ -48,7 +48,7 @@ profile = "postgres-test"
 [media-service.object-store]
 profile = "s3-test"
 
-[media-service.upload-session-store]
+[media-service.upload-conversation-store]
 profile = "redis-test"
 
 [redis.redis-test]

@@ -1,0 +1,106 @@
+//! 话题领域服务 - 包含所有业务逻辑实现
+
+use std::sync::Arc;
+
+use anyhow::Result;
+use tracing::instrument;
+
+use crate::domain::model::{Thread, ThreadSortOrder};
+use crate::domain::repository::ThreadRepository;
+
+/// 话题领域服务 - 包含所有业务逻辑
+pub struct ThreadDomainService {
+    thread_repo: Arc<dyn ThreadRepository>,
+}
+
+impl ThreadDomainService {
+    pub fn new(thread_repo: Arc<dyn ThreadRepository>) -> Self {
+        Self { thread_repo }
+    }
+
+    /// 创建话题
+    #[instrument(skip(self), fields(conversation_id = %conversation_id, root_message_id = %root_message_id))]
+    pub async fn create_thread(
+        &self,
+        conversation_id: &str,
+        root_message_id: &str,
+        title: Option<&str>,
+        creator_id: &str,
+    ) -> Result<Thread> {
+        let thread_id = self
+            .thread_repo
+            .create_thread(conversation_id, root_message_id, title, creator_id)
+            .await?;
+
+        self.thread_repo
+            .get_thread(&thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Thread not found after creation"))
+    }
+
+    /// 获取话题列表
+    #[instrument(skip(self), fields(conversation_id = %conversation_id))]
+    pub async fn list_threads(
+        &self,
+        conversation_id: &str,
+        limit: i32,
+        offset: i32,
+        include_archived: bool,
+        sort_order: ThreadSortOrder,
+    ) -> Result<(Vec<Thread>, i32)> {
+        self.thread_repo
+            .list_threads(conversation_id, limit, offset, include_archived, sort_order)
+            .await
+    }
+
+    /// 获取话题详情
+    #[instrument(skip(self), fields(thread_id = %thread_id))]
+    pub async fn get_thread(&self, thread_id: &str) -> Result<Option<Thread>> {
+        self.thread_repo.get_thread(thread_id).await
+    }
+
+    /// 更新话题
+    #[instrument(skip(self), fields(thread_id = %thread_id))]
+    pub async fn update_thread(
+        &self,
+        thread_id: &str,
+        title: Option<&str>,
+        is_pinned: Option<bool>,
+        is_locked: Option<bool>,
+        is_archived: Option<bool>,
+    ) -> Result<Thread> {
+        self.thread_repo
+            .update_thread(thread_id, title, is_pinned, is_locked, is_archived)
+            .await?;
+
+        self.thread_repo
+            .get_thread(thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Thread not found after update"))
+    }
+
+    /// 删除话题
+    #[instrument(skip(self), fields(thread_id = %thread_id))]
+    pub async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+        self.thread_repo.delete_thread(thread_id).await
+    }
+
+    /// 增加话题回复计数
+    #[instrument(skip(self), fields(thread_id = %thread_id))]
+    pub async fn increment_reply_count(
+        &self,
+        thread_id: &str,
+        reply_message_id: &str,
+        reply_user_id: &str,
+    ) -> Result<()> {
+        self.thread_repo
+            .increment_reply_count(thread_id, reply_message_id, reply_user_id)
+            .await
+    }
+
+    /// 添加话题参与者
+    #[instrument(skip(self), fields(thread_id = %thread_id, user_id = %user_id))]
+    pub async fn add_participant(&self, thread_id: &str, user_id: &str) -> Result<()> {
+        self.thread_repo.add_participant(thread_id, user_id).await
+    }
+}

@@ -3,7 +3,7 @@
 /// 查询消息列表
 #[derive(Debug, Clone)]
 pub struct QueryMessagesQuery {
-    pub session_id: String,
+    pub conversation_id: String,
     pub start_time: i64,
     pub end_time: i64,
     pub limit: i32,
@@ -34,7 +34,7 @@ pub struct ListMessageTagsQuery {
 /// 基于 seq 查询消息列表
 #[derive(Debug, Clone)]
 pub struct QueryMessagesBySeqQuery {
-    pub session_id: String,
+    pub conversation_id: String,
     pub after_seq: i64,
     pub before_seq: Option<i64>,
     pub limit: i32,

@@ -9,26 +9,24 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use crate::application::handlers::{
-    ConnectionQueryService, PushMessageService, SessionCommandService, SessionQueryService,
+    ConnectionQueryService, PushMessageService,
 };
 use crate::application::services::{ConnectionApplicationService, MessageApplicationService};
 use crate::config::AccessGatewayConfig;
 use crate::domain::repository::{ConnectionQuery, SignalingGateway};
-use crate::domain::service::{GatewayService, PushDomainService, SessionDomainService};
+use crate::domain::service::{GatewayService, PushDomainService, ConversationDomainService};
 use crate::infrastructure::auth::TokenAuthenticator;
 use crate::infrastructure::connection_query::ManagerConnectionQuery;
 use crate::infrastructure::messaging::ack_sender::AckSender;
 use crate::infrastructure::signaling::grpc::GrpcSignalingGateway;
 use crate::infrastructure::{AckPublisher, GrpcAckPublisher};
-use crate::interface::connection::LongConnectionHandler;
-use crate::interface::gateway::UnifiedGatewayHandler;
-use crate::interface::grpc::handler::{AccessGatewayHandler, UnifiedGatewayGrpcHandler};
+use crate::interface::handler::LongConnectionHandler;
+use crate::interface::grpc::handler::AccessGatewayHandler;
 use crate::service::service_manager::PortConfig;
 use tokio::sync::Mutex;
 
-use flare_core::common::message::{
-    ArcMessageMiddleware, LogLevel, LoggingMiddleware, MetricsMiddleware, ValidationMiddleware,
-};
+// 注意：最新的 Flare 模式不再需要在 FlareServerBuilder 中配置中间件
+// 中间件是客户端特性，服务端通过 ServerEventHandler 处理消息
 use flare_core::server::builder::flare::{FlareServer, FlareServerBuilder};
 use flare_core::server::connection::ConnectionManager;
 use flare_core::server::handle::{DefaultServerHandle, ServerHandle};
@@ -37,8 +35,8 @@ use flare_server_core::Config;
 use flare_server_core::auth::{RedisTokenStore, TokenService};
 
 /// gRPC 服务集合
+///
 pub struct GrpcServices {
-    pub signaling_handler: Arc<UnifiedGatewayGrpcHandler>,
     pub access_gateway_handler: Arc<AccessGatewayHandler>,
     pub grpc_addr: std::net::SocketAddr,
 }
@@ -71,7 +69,7 @@ pub async fn initialize(
     runtime_config: &Config,
     port_config: PortConfig,
 ) -> Result<ApplicationContext> {
-    use tracing::{debug, error, info, warn};
+    use tracing::{debug, error, info};
 
     // 1. 加载配置
     let access_config = Arc::new(AccessGatewayConfig::from_app_config(app_config));
@@ -96,7 +94,7 @@ pub async fn initialize(
     let connection_manager = Arc::new(ConnectionManager::new());
 
     // 5. 创建 Signaling 服务发现（使用常量，支持环境变量覆盖）
-    use flare_im_core::service_names::{MESSAGE_ORCHESTRATOR, SIGNALING_ONLINE, get_service_name};
+    use flare_im_core::service_names::{SIGNALING_ONLINE, get_service_name};
     let signaling_service = get_service_name(SIGNALING_ONLINE);
     let signaling_discover = flare_im_core::discovery::create_discover(&signaling_service)
         .await
@@ -143,27 +141,28 @@ pub async fn initialize(
         None
     };
 
-    // 9. 创建 Message Orchestrator 服务发现（用于直接路由模式，使用常量）
-    let message_service = get_service_name(MESSAGE_ORCHESTRATOR);
-    let message_service_discover = flare_im_core::discovery::create_discover(&message_service)
+    // 9. 创建 Route 服务发现（用于消息路由，使用常量）
+    use flare_im_core::service_names::SIGNALING_ROUTE;
+    let route_service = get_service_name(SIGNALING_ROUTE);
+    let route_service_discover = flare_im_core::discovery::create_discover(&route_service)
         .await
         .map_err(|e| {
             anyhow::anyhow!(
-                "Failed to create message service discover for {}: {}",
-                message_service,
+                "Failed to create Route service discover for {}: {}",
+                route_service,
                 e
             )
         })?;
 
-    // 10. 构建消息路由服务
+    // 10. 构建消息路由服务（通过 Route 服务路由消息）
     let message_router: Option<
         Arc<crate::infrastructure::messaging::message_router::MessageRouter>,
     > = {
-        let service_name = message_service.clone();
+        let service_name = route_service.clone();
         let default_tenant_id = "default".to_string();
         let default_svid = access_config.default_svid.clone();
 
-        let router = if let Some(discover) = message_service_discover {
+        let router = if let Some(discover) = route_service_discover {
             let service_client = flare_server_core::discovery::ServiceClient::new(discover);
             Arc::new(
                 crate::infrastructure::messaging::message_router::MessageRouter::with_service_client(
@@ -184,21 +183,21 @@ pub async fn initialize(
         };
 
         // 同步初始化连接（使用超时避免阻塞）
-        info!(service_name = %service_name, "Initializing Message Router");
+        info!(route_service = %service_name, "Initializing Message Router (via Route Service)");
         match tokio::time::timeout(Duration::from_secs(10), router.initialize()).await {
             Ok(Ok(_)) => {
-                info!(service_name = %service_name, "Message Router initialized successfully");
+                info!(route_service = %service_name, "Message Router initialized successfully");
             }
             Ok(Err(e)) => {
                 error!(
                     error = %e,
-                    service_name = %service_name,
+                    route_service = %service_name,
                     "Failed to initialize Message Router, will retry on first message"
                 );
             }
             Err(_) => {
                 error!(
-                    service_name = %service_name,
+                    route_service = %service_name,
                     "Message Router initialization timeout (10s), will retry on first message"
                 );
             }
@@ -233,20 +232,13 @@ pub async fn initialize(
     );
 
     // 13. 构建会话领域服务
-    let session_domain_service = Arc::new(SessionDomainService::new(
+    let session_domain_service = Arc::new(ConversationDomainService::new(
         signaling_gateway.clone(),
         Arc::new(
             crate::domain::service::connection_quality_service::ConnectionQualityService::new(),
         ),
         gateway_id.clone(),
     ));
-
-    // 14. 构建应用服务
-    let session_command_service = Arc::new(SessionCommandService::new(
-        signaling_gateway.clone(),
-        gateway_id.clone(),
-    ));
-    let session_query_service = Arc::new(SessionQueryService::new(signaling_gateway.clone()));
 
     // 15. 构建应用层服务
     let connection_app_service = Arc::new(ConnectionApplicationService::new(
@@ -261,7 +253,7 @@ pub async fn initialize(
         ack_sender.clone(),
         ack_publisher.clone(),
         session_domain_service.clone(),
-        None, // session_service_client
+        None, // conversation_service_client
         gateway_id.clone(),
     ));
 
@@ -291,35 +283,28 @@ pub async fn initialize(
     ));
     let connection_query_service = Arc::new(ConnectionQueryService::new(connection_query.clone()));
 
-    // 19. 构建处理器
-    let handler = Arc::new(UnifiedGatewayHandler::new(
-        session_command_service.clone(),
-        session_query_service.clone(),
-        connection_handler.clone(),
-    ));
-
-    // 20. 构建认证器
+    // 19. 构建认证器
     let authenticator = build_authenticator(&access_config).await;
 
-    // 21. 构建长连接服务器
+    // 20. 构建长连接服务器
     debug!(ws_port = %port_config.ws_port, quic_port = %port_config.quic_port, "Building long connection server");
     let long_connection_server = build_long_connection_server(
         runtime_config,
         port_config.ws_port,
         port_config.quic_port,
-        handler.clone(),
         connection_manager.clone(),
         authenticator,
         connection_handler.clone(),
+        access_config.clone(),
     )
     .await
     .context("Failed to build long connection server")?;
 
     info!("Long connection server built successfully");
 
-    // 22. 构建 gRPC 处理器
+    // 21. 构建 gRPC 处理器
+    // 注意：SignalingService 由 flare-signaling/online 服务实现，Gateway 不再提供
     debug!("Building gRPC handlers");
-    let signaling_grpc_handler = Arc::new(UnifiedGatewayGrpcHandler::new(handler.clone()));
 
     let access_gateway_grpc_handler = Arc::new(AccessGatewayHandler::new(
         push_service.clone(),
@@ -329,7 +314,7 @@ pub async fn initialize(
     ));
     debug!("gRPC handlers built successfully");
 
-    // 23. gRPC 地址
+    // 22. gRPC 地址
     let grpc_addr = format!(
         "{}:{}",
         runtime_config.server.address, port_config.grpc_port
@@ -341,7 +326,6 @@ pub async fn initialize(
     Ok(ApplicationContext {
         long_connection_server,
         grpc_services: GrpcServices {
-            signaling_handler: signaling_grpc_handler,
             access_gateway_handler: access_gateway_grpc_handler,
             grpc_addr,
         },
@@ -387,36 +371,69 @@ async fn build_authenticator(
     Arc::new(TokenAuthenticator::new(Arc::new(token_service)))
 }
 
-/// 配置 FlareServerBuilder 的公共部分
-fn configure_base_builder(
+/// 使用 Flare 模式构建服务器
+///
+/// Flare 模式特点：
+/// - 只需实现 `ServerEventHandler` trait
+/// - 自动消息路由和 ACK 处理
+/// - 支持设备管理、认证、多协议等完整功能
+fn build_flare_server(
     ws_addr: String,
+    quic_addr: Option<String>,
     connection_handler: Arc<LongConnectionHandler>,
-    validation_middleware: ArcMessageMiddleware,
-    logging_middleware: ArcMessageMiddleware,
-    metrics_middleware: ArcMessageMiddleware,
     connection_manager: Arc<ConnectionManager>,
     device_manager: Arc<flare_core::server::device::DeviceManager>,
     authenticator: Arc<dyn flare_core::server::auth::Authenticator + Send + Sync>,
-) -> FlareServerBuilder {
-    FlareServerBuilder::new(ws_addr.clone())
-        .with_listener(connection_handler)
-        .with_middleware(validation_middleware)
-        .with_middleware(logging_middleware)
-        .with_middleware(metrics_middleware)
+    compression_algorithm: flare_core::common::compression::CompressionAlgorithm,
+    encryption_enabled: bool,
+) -> Result<FlareServer> {
+    use flare_core::common::config_types::{HeartbeatConfig, TransportProtocol};
+    use flare_core::common::protocol::SerializationFormat;
+    
+    // LongConnectionHandler 实现了 ServerEventHandler，Flare 模式会自动路由消息
+    let event_handler: Arc<dyn flare_core::server::events::handler::ServerEventHandler> = 
+        connection_handler.clone();
+    
+    let mut builder = FlareServerBuilder::new(ws_addr.clone(), event_handler)
+        // 连接和设备管理
         .with_connection_manager(connection_manager)
         .with_device_manager(device_manager)
+        // 认证配置
         .enable_auth()
         .with_authenticator(authenticator)
         .with_auth_timeout(Duration::from_secs(30))
+        // 连接配置
         .with_max_connections(10000)
         .with_connection_timeout(Duration::from_secs(60))
-        .with_heartbeat(flare_core::common::config_types::HeartbeatConfig {
+        .with_heartbeat(HeartbeatConfig {
             interval: Duration::from_secs(30),
             timeout: Duration::from_secs(90),
             enabled: true,
         })
-        .with_default_format(flare_core::common::protocol::SerializationFormat::Protobuf)
-        .with_default_compression(flare_core::common::compression::CompressionAlgorithm::None)
+        // 协商配置（使用配置的压缩算法）
+        .with_default_format(SerializationFormat::Protobuf)
+        .with_default_compression(compression_algorithm);
+    
+    // 可选：启用加密
+    if encryption_enabled {
+        builder = builder.with_default_encryption(
+            flare_core::common::encryption::EncryptionAlgorithm::Aes256Gcm
+        );
+    }
+    
+    // 协议配置
+    if let Some(quic) = quic_addr {
+        builder = builder
+            .with_protocols(vec![TransportProtocol::WebSocket, TransportProtocol::QUIC])
+            .with_protocol_address(TransportProtocol::WebSocket, ws_addr)
+            .with_protocol_address(TransportProtocol::QUIC, quic);
+    } else {
+        builder = builder
+            .with_protocols(vec![TransportProtocol::WebSocket])
+            .with_protocol_address(TransportProtocol::WebSocket, ws_addr);
+    }
+    
+    builder.build().map_err(|e| anyhow::anyhow!("Failed to build FlareServer: {}", e))
 }
 
 /// 构建长连接服务器
@@ -424,136 +441,180 @@ async fn build_long_connection_server(
     runtime_config: &Config,
     ws_port: u16,
     quic_port: u16,
-    handler: Arc<UnifiedGatewayHandler>,
     connection_manager: Arc<ConnectionManager>,
     authenticator: Arc<dyn flare_core::server::auth::Authenticator + Send + Sync>,
     connection_handler: Arc<LongConnectionHandler>,
+    access_config: Arc<AccessGatewayConfig>,
 ) -> Result<Arc<tokio::sync::Mutex<Option<FlareServer>>>> {
-    use std::io::Write;
     use tracing::{error, info, warn};
 
-    // 创建中间件
-    let validation_middleware = Arc::new(ValidationMiddleware::new(
-        "GatewayValidation",
-        |frame: &flare_core::common::protocol::Frame| -> flare_core::common::error::Result<()> {
-            if frame.message_id.is_empty() {
-                return Err(flare_core::common::error::FlareError::message_format_error(
-                    "Message ID is empty".to_string(),
-                ));
-            }
-            Ok(())
-        },
-    )) as ArcMessageMiddleware;
-
-    let logging_middleware =
-        Arc::new(LoggingMiddleware::new("GatewayLogging").with_level(LogLevel::Info))
-            as ArcMessageMiddleware;
-
-    let metrics_middleware =
-        Arc::new(MetricsMiddleware::new("GatewayMetrics")) as ArcMessageMiddleware;
-
-    // 创建设备管理器（用于设备冲突管理）
+    // 创建设备管理器（平台互斥策略：同一用户同一平台只能有一个设备在线）
     use flare_core::common::device::DeviceConflictStrategyBuilder;
     use flare_core::server::device::DeviceManager;
     let device_manager = Arc::new(DeviceManager::new(
         DeviceConflictStrategyBuilder::new()
-            .platform_exclusive() // 平台互斥：同一用户同一平台只能有一个设备在线
+            .platform_exclusive()
             .build(),
     ));
 
     let ws_addr = format!("{}:{}", runtime_config.server.address, ws_port);
     let quic_addr = format!("{}:{}", runtime_config.server.address, quic_port);
 
-    // 尝试构建 QUIC + WebSocket 服务器
-    let builder_with_quic = configure_base_builder(
+    // 配置压缩和加密（从配置读取）
+    info!(
+        compression_algorithm = ?access_config.compression_algorithm,
+        enable_encryption = %access_config.enable_encryption,
+        "Reading compression and encryption configuration"
+    );
+    
+    let compression_algorithm = parse_compression_algorithm(
+        access_config.compression_algorithm.as_deref()
+    );
+    
+    // 先注册加密器（如果启用），必须在构建服务器之前注册
+    let encryption_config = setup_encryption_config(
+        access_config.enable_encryption,
+        access_config.encryption_key.as_deref(),
+    ).await;
+    
+    info!(
+        compression = ?compression_algorithm,
+        encryption_enabled = %encryption_config.enabled,
+        "Configuration parsed, building FlareServer"
+    );
+
+    // 尝试构建服务器（优先使用 QUIC + WebSocket）
+    let server = match build_flare_server(
         ws_addr.clone(),
+        Some(quic_addr.clone()),
         connection_handler.clone(),
-        validation_middleware.clone(),
-        logging_middleware.clone(),
-        metrics_middleware.clone(),
         connection_manager.clone(),
         device_manager.clone(),
         authenticator.clone(),
-    )
-    .with_protocols(vec![
-        flare_core::common::config_types::TransportProtocol::WebSocket,
-        flare_core::common::config_types::TransportProtocol::QUIC,
-    ])
-    .with_protocol_address(
-        flare_core::common::config_types::TransportProtocol::WebSocket,
-        ws_addr.clone(),
-    )
-    .with_protocol_address(
-        flare_core::common::config_types::TransportProtocol::QUIC,
-        quic_addr.clone(),
-    );
-
-    let server = match builder_with_quic.build() {
+        compression_algorithm.clone(),
+        encryption_config.enabled,
+    ) {
         Ok(server) => server,
         Err(e) => {
             let error_msg = e.to_string();
-
-            // 检查是否是端口占用错误
-            if !error_msg.contains("Address already in use")
-                && !error_msg.contains("创建 QUIC 端点失败")
-            {
+            // QUIC 端口被占用，降级为仅 WebSocket
+            if error_msg.contains("Address already in use") 
+                || error_msg.contains("创建 QUIC 端点失败") {
+                warn!(quic_addr = %quic_addr, "QUIC port unavailable, falling back to WebSocket-only mode");
+                build_flare_server(
+                    ws_addr.clone(),
+                    None, // 仅 WebSocket
+                    connection_handler.clone(),
+                    connection_manager.clone(),
+                    device_manager.clone(),
+                    authenticator.clone(),
+                    compression_algorithm,
+                    encryption_config.enabled,
+                )?
+            } else {
                 error!(error = %e, "Failed to build FlareServer");
                 return Err(anyhow::anyhow!("Failed to build server: {}", e));
             }
-
-            // QUIC 端口被占用，降级为仅 WebSocket
-            warn!(quic_addr = %quic_addr, "QUIC port unavailable, falling back to WebSocket-only mode");
-
-            let builder_ws_only = configure_base_builder(
-                ws_addr.clone(),
-                connection_handler.clone(),
-                validation_middleware.clone(),
-                logging_middleware.clone(),
-                metrics_middleware.clone(),
-                connection_manager.clone(),
-                device_manager.clone(),
-                authenticator.clone(),
-            )
-            .with_protocols(vec![
-                flare_core::common::config_types::TransportProtocol::WebSocket,
-            ])
-            .with_protocol_address(
-                flare_core::common::config_types::TransportProtocol::WebSocket,
-                ws_addr.clone(),
-            );
-
-            builder_ws_only.build().map_err(|e2| {
-                error!(error = %e2, "Failed to build FlareServer (WebSocket only)");
-                anyhow::anyhow!("Failed to build server: {}", e2)
-            })?
         }
     };
 
-    // 设置 server handle 和 connection manager
-    info!("Setting server handle and connection manager");
+    // 设置 server handle 和 connection manager（用于消息发送和连接管理）
+    setup_server_components(&connection_handler, &connection_manager).await;
+    
+    // 启动服务器
+    server.start().await.map_err(|e| {
+        error!(error = %e, "Failed to start FlareServer");
+        anyhow::anyhow!("Failed to start server: {}", e)
+    })?;
+
+    info!(ws_addr = %ws_addr, quic_addr = %quic_addr, "✅ Long connection server started");
+
+    Ok(Arc::new(tokio::sync::Mutex::new(Some(server))))
+}
+
+/// 加密配置
+struct EncryptionConfig {
+    enabled: bool,
+}
+
+/// 解析压缩算法
+fn parse_compression_algorithm(algorithm: Option<&str>) -> flare_core::common::compression::CompressionAlgorithm {
+    use flare_core::common::compression::CompressionAlgorithm;
+
+    let result = match algorithm {
+        Some("gzip") => CompressionAlgorithm::Gzip,
+        Some("zstd") => CompressionAlgorithm::Zstd,
+        Some("none") | Some("") | None => CompressionAlgorithm::None,
+        Some(other) => {
+            tracing::warn!(algorithm = %other, "Unknown compression algorithm, using None");
+            CompressionAlgorithm::None
+        }
+    };
+    
+    tracing::debug!(algorithm = ?algorithm, parsed = ?result, "Parsed compression algorithm");
+    result
+}
+
+/// 配置加密（如果启用）
+async fn setup_encryption_config(
+    enable_encryption: bool,
+    encryption_key: Option<&str>,
+) -> EncryptionConfig {
+    if !enable_encryption {
+        return EncryptionConfig { enabled: false };
+    }
+
+    use flare_core::common::encryption::{Aes256GcmEncryptor, EncryptionUtil};
+    use tracing::{info, warn};
+
+    // 解析加密密钥（32字节）
+    let key_bytes = encryption_key.and_then(|key| {
+        if key.len() == 32 {
+            // 直接32字符的字符串
+            Some(key.as_bytes().to_vec())
+        } else if key.len() == 64 {
+            // hex 编码的 64 字符字符串（32字节）
+            (0..32).try_fold(Vec::new(), |mut acc, i| {
+                u8::from_str_radix(&key[i * 2..i * 2 + 2], 16)
+                    .map(|b| { acc.push(b); acc })
+            }).ok()
+        } else {
+            None
+        }
+    });
+
+    let encryption_key = key_bytes.unwrap_or_else(|| {
+        warn!("Encryption key not set or invalid (expected 32 bytes or 64 hex chars), using default key (NOT SECURE FOR PRODUCTION)");
+        b"01234567890123456789012345678901".to_vec() // 32 bytes for AES-256
+    });
+
+    match Aes256GcmEncryptor::new(&encryption_key) {
+        Ok(encryptor) => {
+            EncryptionUtil::register_custom(Arc::new(encryptor));
+            info!("🔐 AES-256-GCM encryption enabled with custom key");
+            EncryptionConfig { enabled: true }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to create encryption, encryption disabled");
+            EncryptionConfig { enabled: false }
+        }
+        }
+}
+
+/// 设置服务器组件（ServerHandle 和 ConnectionManager）
+async fn setup_server_components(
+    connection_handler: &Arc<LongConnectionHandler>,
+    connection_manager: &Arc<ConnectionManager>,
+) {
+    use tracing::info;
 
     let manager_trait: Arc<dyn flare_core::server::connection::ConnectionManagerTrait> =
         connection_manager.clone();
     let server_handle: Arc<dyn ServerHandle> =
         Arc::new(DefaultServerHandle::new(manager_trait.clone()));
 
-    handler.set_server_handle(server_handle).await;
-    handler.set_connection_manager(manager_trait).await;
-    info!("Server handle and connection manager configured");
-
-    // 启动长连接服务器
-    info!("Starting long connection server");
-    let _ = std::io::stdout().flush();
-
-    server.start().await.map_err(|e| {
-        error!(error = %e, "Failed to start FlareServer");
-        eprintln!("Failed to start long connection server: {}", e);
-        anyhow::anyhow!("Failed to start server: {}", e)
-    })?;
-
-    info!(ws_addr = %ws_addr, quic_addr = %quic_addr, "Long connection server started");
-
-    let _ = std::io::stdout().flush();
-
-    Ok(Arc::new(tokio::sync::Mutex::new(Some(server))))
+    connection_handler.set_server_handle(server_handle).await;
+    connection_handler.set_connection_manager(manager_trait).await;
+    
+    info!("✅ Server handle and connection manager configured");
 }

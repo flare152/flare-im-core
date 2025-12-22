@@ -36,8 +36,8 @@ impl HookExecutor {
                     tenant_id: ctx.tenant_id.clone(),
                     ..Default::default()
                 }),
-                session_id: ctx.session_id.clone().unwrap_or_default(),
-                session_type: ctx.session_type.clone().unwrap_or_default(),
+                conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
+                conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
                 corridor: "messaging".to_string(), // 或根据实际情况设置
                 tags: ctx.tags.clone(),
                 attributes: ctx.attributes.clone(),
@@ -120,8 +120,8 @@ impl HookExecutor {
                     tenant_id: ctx.tenant_id.clone(),
                     ..Default::default()
                 }),
-                session_id: ctx.session_id.clone().unwrap_or_default(),
-                session_type: ctx.session_type.clone().unwrap_or_default(),
+                conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
+                conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
                 corridor: "messaging".to_string(), // 或根据实际情况设置
                 tags: ctx.tags.clone(),
                 attributes: ctx.attributes.clone(),

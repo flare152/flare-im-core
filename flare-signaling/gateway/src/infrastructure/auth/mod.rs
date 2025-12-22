@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flare_core::common::device::DeviceInfo;
-use flare_core::common::error::{FlareError, Result};
+use flare_core::common::error::Result;
 use flare_core::server::auth::{AuthResult, Authenticator};
 use flare_server_core::TokenService;
 use tracing::{debug, instrument, warn};

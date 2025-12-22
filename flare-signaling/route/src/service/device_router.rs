@@ -16,7 +16,7 @@ pub struct DeviceRouteInfo {
     pub user_id: String,
     pub device_id: String,
     pub gateway_id: String,
-    pub session_id: String,
+    pub conversation_id: String,
 
     // 设备优先级（0=未指定, 1=低, 2=普通, 3=高, 4=关键）
     pub device_priority: i32,
@@ -75,7 +75,7 @@ impl DeviceRouter {
         user_id: String,
         device_id: String,
         gateway_id: String,
-        session_id: String,
+        conversation_id: String,
         device_priority: i32,
         rtt_ms: i64,
         packet_loss_rate: f64,
@@ -86,7 +86,7 @@ impl DeviceRouter {
             user_id: user_id.clone(),
             device_id: device_id.clone(),
             gateway_id,
-            session_id,
+            conversation_id,
             device_priority,
             rtt_ms,
             packet_loss_rate,

@@ -11,10 +11,10 @@ use flare_server_core::kafka::build_kafka_producer;
 use crate::application::handlers::MessageCommandHandler;
 use crate::config::MessageOrchestratorConfig;
 use crate::domain::repository::{
-    MessageEventPublisherItem, SessionRepositoryItem, WalRepositoryItem,
+    MessageEventPublisherItem, ConversationRepositoryItem, WalRepositoryItem,
 };
 use crate::domain::service::{MessageDomainService, SequenceAllocator};
-use crate::infrastructure::external::session_client::GrpcSessionClient;
+use crate::infrastructure::external::session_client::GrpcConversationClient;
 use crate::infrastructure::messaging::kafka_publisher::KafkaMessagePublisher;
 use crate::infrastructure::persistence::noop_wal::NoopWalRepository;
 use crate::infrastructure::persistence::redis_wal::RedisWalRepository;
@@ -22,11 +22,12 @@ use crate::interface::grpc::handler::MessageGrpcHandler;
 use flare_im_core::hooks::adapters::DefaultHookFactory;
 use flare_im_core::hooks::{HookConfigLoader, HookDispatcher, HookRegistry};
 use flare_im_core::metrics::MessageOrchestratorMetrics;
-use flare_proto::session::session_service_client::SessionServiceClient;
+use flare_proto::conversation::conversation_service_client::ConversationServiceClient;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
     pub handler: MessageGrpcHandler,
+    pub config: Arc<MessageOrchestratorConfig>,
 }
 
 /// 构建应用上下文
@@ -71,13 +72,13 @@ pub async fn initialize(
     let metrics = Arc::new(MessageOrchestratorMetrics::new());
 
     // 8. 构建 Session 服务客户端（可选）
-    let session_repository = build_session_client(&config).await;
+    let conversation_repository = build_conversation_client(&config).await;
 
     // 9. 构建领域服务
     let domain_service = Arc::new(MessageDomainService::new(
         Arc::clone(&publisher), // 使用 Arc::clone 避免移动
         wal_repository,
-        session_repository,
+        conversation_repository,
         sequence_allocator,
         config.defaults(),
         hooks,
@@ -103,7 +104,10 @@ pub async fn initialize(
         publisher, // 现在可以安全地移动，因为 domain_service 使用的是 clone
     );
 
-    Ok(ApplicationContext { handler })
+    Ok(ApplicationContext {
+        handler,
+        config,
+    })
 }
 
 // build_kafka_producer 函数已移除，现在直接使用 flare_server_core::kafka::build_kafka_producer
@@ -193,21 +197,21 @@ async fn build_hook_dispatcher(
 }
 
 /// 构建 Session 服务客户端
-async fn build_session_client(
+async fn build_conversation_client(
     config: &Arc<MessageOrchestratorConfig>,
-) -> Option<Arc<SessionRepositoryItem>> {
+) -> Option<Arc<ConversationRepositoryItem>> {
     // 使用服务发现创建 session 服务客户端（使用常量，支持环境变量覆盖）
-    use flare_im_core::service_names::{SESSION, get_service_name};
-    let session_service = config
-        .session_service_type
+    use flare_im_core::service_names::{CONVERSATION, get_service_name};
+    let conversation_service = config
+        .conversation_service_type
         .as_deref()
         .map(|s| s.to_string())
-        .unwrap_or_else(|| get_service_name(SESSION));
+        .unwrap_or_else(|| get_service_name(CONVERSATION));
 
     // 添加超时保护，避免服务发现阻塞整个启动过程
     let discover_result = tokio::time::timeout(
         std::time::Duration::from_secs(3),
-        flare_im_core::discovery::create_discover(&session_service),
+        flare_im_core::discovery::create_discover(&conversation_service),
     )
     .await;
 
@@ -222,31 +226,31 @@ async fn build_session_client(
             .await
             {
                 Ok(Ok(channel)) => {
-                    tracing::info!(service = %session_service, "Connected to Session service via service discovery");
-                    Some(Arc::new(SessionRepositoryItem::Grpc(Arc::new(
-                        GrpcSessionClient::new(SessionServiceClient::new(channel)),
+                    tracing::info!(service = %conversation_service, "Connected to Session service via service discovery");
+                    Some(Arc::new(ConversationRepositoryItem::Grpc(Arc::new(
+                        GrpcConversationClient::new(ConversationServiceClient::new(channel)),
                     ))))
                 }
                 Ok(Err(err)) => {
-                    tracing::warn!(error = %err, service = %session_service, "Failed to get Session service channel, session auto-creation disabled");
+                    tracing::warn!(error = %err, service = %conversation_service, "Failed to get Session service channel, session auto-creation disabled");
                     None
                 }
                 Err(_) => {
-                    tracing::warn!(service = %session_service, "Timeout getting Session service channel after 3s, session auto-creation disabled");
+                    tracing::warn!(service = %conversation_service, "Timeout getting Session service channel after 3s, session auto-creation disabled");
                     None
                 }
             }
         }
         Ok(Ok(None)) => {
-            tracing::debug!(service = %session_service, "Session service discovery not configured, session auto-creation disabled");
+            tracing::debug!(service = %conversation_service, "Session service discovery not configured, session auto-creation disabled");
             None
         }
         Ok(Err(err)) => {
-            tracing::warn!(error = %err, service = %session_service, "Failed to create Session service discover, session auto-creation disabled");
+            tracing::warn!(error = %err, service = %conversation_service, "Failed to create Session service discover, session auto-creation disabled");
             None
         }
         Err(_) => {
-            tracing::warn!(service = %session_service, "Timeout creating Session service discover after 3s, session auto-creation disabled");
+            tracing::warn!(service = %conversation_service, "Timeout creating Session service discover after 3s, session auto-creation disabled");
             None
         }
     }

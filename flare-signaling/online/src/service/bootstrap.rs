@@ -40,14 +40,10 @@ impl ApplicationBootstrap {
 
     /// 运行服务（带应用上下文）
     async fn run_with_context(context: ApplicationContext, address: SocketAddr) -> Result<()> {
-        use flare_proto::signaling::{
-            signaling_service_server::SignalingServiceServer,
-            user_service_server::UserServiceServer,
-        };
+        use flare_proto::signaling::online::online_service_server::OnlineServiceServer;
         use tonic::transport::Server;
 
-        let signaling_handler = context.signaling_handler.clone();
-        let user_handler = context.user_handler.clone();
+        let online_handler = context.online_handler.clone();
 
         info!(
             address = %address,
@@ -60,10 +56,8 @@ impl ApplicationBootstrap {
         let runtime = ServiceRuntime::new("signaling-online", address)
             .add_spawn_with_shutdown("signaling-online-grpc", move |shutdown_rx| async move {
                 Server::builder()
-                    // 注册 SignalingService
-                    .add_service(SignalingServiceServer::new(signaling_handler))
-                    // 注册 UserService
-                    .add_service(UserServiceServer::new(user_handler))
+                    // 注册 OnlineService（合并了 SignalingService 和 UserService）
+                    .add_service(OnlineServiceServer::new(online_handler))
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

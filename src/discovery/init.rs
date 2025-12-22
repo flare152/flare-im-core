@@ -10,7 +10,7 @@ use flare_server_core::{
     RegistryConfig,
     discovery::{
         BackendType, DiscoveryFactory, ServiceDiscover, ServiceDiscoverUpdater, ServiceInstance,
-        ServiceRegistry,
+        ServiceRegistry, TagFilter,
     },
 };
 
@@ -194,11 +194,37 @@ pub async fn register_service_only(
     service_address: SocketAddr,
     instance_id: Option<String>,
 ) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
+    register_service_only_with_metadata(service_type, service_address, instance_id, None).await
+}
+
+/// 注册服务（支持元数据）
+///
+/// # 参数
+/// * `service_type` - 服务类型
+/// * `service_address` - 服务地址
+/// * `instance_id` - 可选的实例 ID
+/// * `metadata` - 可选的元数据 HashMap（用于服务发现时的过滤）
+///
+/// # 返回
+/// 返回 `ServiceRegistry`（如果配置了 registry），否则返回 None
+pub async fn register_service_only_with_metadata(
+    service_type: &str,
+    service_address: SocketAddr,
+    instance_id: Option<String>,
+    metadata: Option<std::collections::HashMap<String, String>>,
+) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
     // 获取全局配置
     use crate::config::app_config;
     let app_config = app_config();
     // 从配置注册服务
-    register_service_from_config(app_config, service_type, service_address, instance_id).await
+    register_service_from_config_with_metadata(
+        app_config,
+        service_type,
+        service_address,
+        instance_id,
+        metadata,
+    )
+    .await
 }
 
 /// 从应用配置只注册服务（不进行服务发现）
@@ -217,13 +243,42 @@ pub async fn register_service_from_config(
     service_address: SocketAddr,
     instance_id: Option<String>,
 ) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
+    register_service_from_config_with_metadata(
+        app_config,
+        service_type,
+        service_address,
+        instance_id,
+        None,
+    )
+    .await
+}
+
+/// 从应用配置只注册服务（不进行服务发现，支持元数据）
+///
+/// # 参数
+/// * `app_config` - 应用配置
+/// * `service_type` - 服务类型
+/// * `service_address` - 服务地址
+/// * `instance_id` - 可选的实例 ID（如果不提供，会自动生成）
+/// * `metadata` - 可选的元数据 HashMap（用于服务发现时的过滤）
+///
+/// # 返回
+/// 返回 `ServiceRegistry`（如果配置了 registry），否则返回 None
+pub async fn register_service_from_config_with_metadata(
+    app_config: &FlareAppConfig,
+    service_type: &str,
+    service_address: SocketAddr,
+    instance_id: Option<String>,
+    metadata: Option<std::collections::HashMap<String, String>>,
+) -> Result<Option<ServiceRegistry>, Box<dyn std::error::Error + Send + Sync>> {
     // 如果配置了 registry，只注册服务
     if let Some(registry_config) = &app_config.core.registry {
-        register_service_from_registry_config(
+        register_service_from_registry_config_with_metadata(
             registry_config,
             service_type,
             service_address,
             instance_id,
+            metadata,
         )
         .await
         .map(Some)
@@ -247,6 +302,40 @@ pub async fn register_service_from_registry_config(
     service_type: &str,
     service_address: SocketAddr,
     instance_id: Option<String>,
+) -> Result<ServiceRegistry, Box<dyn std::error::Error + Send + Sync>> {
+    register_service_from_registry_config_with_metadata(
+        registry_config,
+        service_type,
+        service_address,
+        instance_id,
+        None,
+    )
+    .await
+}
+
+/// 从注册中心配置只注册服务（不进行服务发现，支持元数据）
+///
+/// # 参数
+/// * `registry_config` - 注册中心配置
+/// * `service_type` - 服务类型
+/// * `service_address` - 服务地址
+/// * `instance_id` - 可选的实例 ID（如果不提供，会自动生成）
+/// * `metadata` - 可选的元数据 HashMap（key-value 对，会添加到 tags 和 metadata.custom 中）
+///   常用的 key 包括：
+///   - `svid`: 业务系统标识符（如 "svid.im"），用于服务发现过滤
+///   - `server_id`: 服务器 ID，用于标识服务实例
+///   - `shard_id`: 分片 ID（如果使用分片）
+///   - `region`: 区域标识
+///   - `az`: 可用区标识
+///
+/// # 返回
+/// 返回 `ServiceRegistry`
+pub async fn register_service_from_registry_config_with_metadata(
+    registry_config: &RegistryConfig,
+    service_type: &str,
+    service_address: SocketAddr,
+    instance_id: Option<String>,
+    metadata: Option<std::collections::HashMap<String, String>>,
 ) -> Result<ServiceRegistry, Box<dyn std::error::Error + Send + Sync>> {
     let backend_type = parse_backend_type(&registry_config.registry_type)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::from(e) })?;
@@ -309,18 +398,39 @@ pub async fn register_service_from_registry_config(
         instance = instance.with_namespace(&registry_config.namespace);
     }
 
+    // 添加元数据（如果提供了）
+    if let Some(metadata) = metadata {
+        for (key, value) in metadata {
+            // 同时添加到 tags 和 metadata.custom
+            // tags 用于 Consul/etcd 的标签过滤
+            // metadata.custom 用于其他场景（如 Service Mesh）
+            instance = instance.with_tag(key.clone(), value.clone());
+            instance.metadata.custom.insert(key, value);
+        }
+    }
+
     // 注册服务实例
     backend
         .register(instance.clone())
         .await
         .map_err(|e| format!("Failed to register service: {}", e))?;
 
+    // 记录注册时的 tags 和 metadata，用于调试
+    let tags_info: Vec<String> = instance.tags.iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect();
+    let metadata_info: Vec<String> = instance.metadata.custom.iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect();
+    
     tracing::info!(
         service_type = %service_type,
         instance_id = %instance.instance_id,
         address = %instance.address,
         registry_type = %registry_config.registry_type,
-        "✅ Service registered"
+        tags = ?tags_info,
+        metadata = ?metadata_info,
+        "✅ Service registered with tags and metadata"
     );
 
     // 创建服务注册器（自动处理心跳和注销）
@@ -402,6 +512,24 @@ pub async fn create_discover_from_registry_config(
     registry_config: &RegistryConfig,
     service_type: &str,
 ) -> Result<ServiceDiscover, Box<dyn std::error::Error + Send + Sync>> {
+    create_discover_from_registry_config_with_filters(registry_config, service_type, None).await
+}
+
+/// 从注册中心配置创建服务发现器（支持标签过滤）
+///
+/// # 参数
+/// * `registry_config` - 注册中心配置
+/// * `service_type` - 要发现的服务类型
+/// * `tag_filters` - 可选的标签过滤器 HashMap（用于根据标签过滤服务实例）
+///   例如：`{"svid": "svid.im"}` 只会返回 svid=svid.im 的服务实例
+///
+/// # 返回
+/// 返回 `ServiceDiscover`
+pub async fn create_discover_from_registry_config_with_filters(
+    registry_config: &RegistryConfig,
+    service_type: &str,
+    tag_filters: Option<std::collections::HashMap<String, String>>,
+) -> Result<ServiceDiscover, Box<dyn std::error::Error + Send + Sync>> {
     // 将 RegistryConfig 转换为 BackendType
     let backend_type = match registry_config.registry_type.to_lowercase().as_str() {
         "etcd" => BackendType::Etcd,
@@ -417,23 +545,97 @@ pub async fn create_discover_from_registry_config(
         }
     };
 
-    // 注意：后端配置准备代码已移除，因为当前使用 create_with_defaults 方法
-    // 未来如果需要自定义配置，可以恢复 backend_config 的构建逻辑
+    // 如果有标签过滤器，使用 DiscoveryConfig 创建服务发现器
+    if let Some(filters) = tag_filters {
+        use serde_json::json;
+        use std::collections::HashMap;
+        let mut backend_config = HashMap::new();
+        match backend_type {
+            BackendType::Etcd => {
+                backend_config.insert("endpoints".to_string(), json!(registry_config.endpoints));
+                backend_config.insert("service_type".to_string(), json!(service_type));
+            }
+            BackendType::Consul => {
+                backend_config.insert(
+                    "url".to_string(),
+                    json!(
+                        registry_config
+                            .endpoints
+                            .first()
+                            .unwrap_or(&"http://localhost:8500".to_string())
+                    ),
+                );
+                backend_config.insert("service_type".to_string(), json!(service_type));
+            }
+            _ => {
+                // DNS 和 Mesh 后端不支持标签过滤，使用默认创建方式
+                let (discover, _updater) = DiscoveryFactory::create_with_defaults(
+                    backend_type,
+                    registry_config.endpoints.clone(),
+                    service_type.to_string(),
+                )
+                .await
+                .map_err(|e| format!("Failed to create service discover: {}", e))?;
 
-    // 使用 DiscoveryFactory::create_with_defaults 创建服务发现器
-    let (discover, _updater) = DiscoveryFactory::create_with_defaults(
-        backend_type,
-        registry_config.endpoints.clone(),
-        service_type.to_string(),
-    )
-    .await
-    .map_err(|e| format!("Failed to create service discover: {}", e))?;
+                tracing::debug!(
+                    service_type = %service_type,
+                    registry_type = %registry_config.registry_type,
+                    "✅ Service discover created (without tag filters, backend doesn't support it)"
+                );
 
-    tracing::debug!(
-        service_type = %service_type,
-        registry_type = %registry_config.registry_type,
-        "✅ Service discover created"
-    );
+                return Ok(discover);
+            }
+        }
 
-    Ok(discover)
+        use flare_server_core::discovery::{DiscoveryConfig, LoadBalanceStrategy};
+        // 将 HashMap 转换为 TagFilter 向量
+        let tag_filters: Vec<TagFilter> = filters
+            .into_iter()
+            .map(|(key, value)| TagFilter {
+                key,
+                value: Some(value),
+                pattern: Some("exact".to_string()),
+            })
+            .collect();
+        
+        let config = DiscoveryConfig {
+            backend: backend_type,
+            backend_config,
+            namespace: None,
+            version: None,
+            tag_filters,
+            load_balance: LoadBalanceStrategy::ConsistentHash,
+            health_check: None,
+            refresh_interval: Some(30),
+        };
+
+        let (discover, _updater) = DiscoveryFactory::create_discover(config)
+            .await
+            .map_err(|e| format!("Failed to create service discover with filters: {}", e))?;
+
+        tracing::debug!(
+            service_type = %service_type,
+            registry_type = %registry_config.registry_type,
+            "✅ Service discover created with tag filters"
+        );
+
+        Ok(discover)
+    } else {
+        // 没有标签过滤器，使用默认创建方式
+        let (discover, _updater) = DiscoveryFactory::create_with_defaults(
+            backend_type,
+            registry_config.endpoints.clone(),
+            service_type.to_string(),
+        )
+        .await
+        .map_err(|e| format!("Failed to create service discover: {}", e))?;
+
+        tracing::debug!(
+            service_type = %service_type,
+            registry_type = %registry_config.registry_type,
+            "✅ Service discover created"
+        );
+
+        Ok(discover)
+    }
 }

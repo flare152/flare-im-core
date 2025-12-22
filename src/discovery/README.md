@@ -17,7 +17,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│             业务服务层 (flare-session, etc.)              │
+│             业务服务层 (flare-conversation, etc.)              │
 │             使用 init_from_app_config 初始化              │
 └────────────────────┬────────────────────────────────────┘
                      │
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 从配置自动初始化服务注册和发现
     if let Some((registry, discover, updater)) = init_from_app_config(
-        "session",  // 服务类型
+        "conversation",  // 服务类型
         address,    // 服务地址
         None,       // 实例 ID（可选，不提供则自动生成）
     ).await? {
@@ -109,8 +109,8 @@ use std::net::SocketAddr;
 use flare_im_core::discovery::init_from_app_config;
 use flare_server_core::discovery::{ServiceRegistry, ServiceDiscover, ServiceDiscoverUpdater};
 
-pub struct SessionServiceApp {
-    handler: SessionGrpcHandler,
+pub struct ConversationServiceApp {
+    handler: ConversationGrpcHandler,
     address: SocketAddr,
     /// 服务注册器（如果启用了服务发现）
     _registry: Option<ServiceRegistry>,
@@ -118,7 +118,7 @@ pub struct SessionServiceApp {
     _discover: Option<ServiceDiscover>,
 }
 
-impl SessionServiceApp {
+impl ConversationServiceApp {
     pub async fn new() -> Result<Self> {
         // ... 其他初始化代码 ...
         
@@ -126,7 +126,7 @@ impl SessionServiceApp {
         
         // 初始化服务注册和发现
         let (registry, discover, _updater) = if let Some((r, d, u)) = init_from_app_config(
-            "session",
+            "conversation",
             address,
             None,
         ).await? {
@@ -172,7 +172,7 @@ let address: SocketAddr = "127.0.0.1:8080".parse()?;
 
 let (registry, discover, updater) = init_from_registry_config(
     &registry_config,
-    "session",
+    "conversation",
     address,
     Some("custom-instance-id".to_string()),
 ).await?;

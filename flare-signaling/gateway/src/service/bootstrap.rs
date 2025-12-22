@@ -15,9 +15,26 @@ impl ApplicationBootstrap {
     /// 运行应用的主入口点
     pub async fn run() -> Result<()> {
         use flare_im_core::load_config;
+        use std::path::Path;
 
-        // 加载应用配置
-        let app_config = load_config(Some("../config"));
+        // 加载应用配置（尝试多个候选路径）
+        // 优先级：环境变量 > ./config > ../config > config
+        let config_path = std::env::var("FLARE_CONFIG_PATH")
+            .ok()
+            .or_else(|| {
+                // 尝试多个候选路径
+                let candidates = ["./config", "../config", "config"];
+                for candidate in &candidates {
+                    if Path::new(candidate).exists() {
+                        return Some(candidate.to_string());
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| "config".to_string()); // 默认使用 "config"
+        
+        info!(config_path = %config_path, "Loading configuration");
+        let app_config = load_config(Some(&config_path));
         // 初始化 OpenTelemetry 追踪
         #[cfg(feature = "tracing")]
         {

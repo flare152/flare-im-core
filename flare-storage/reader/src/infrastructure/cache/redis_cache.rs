@@ -39,7 +39,7 @@ impl RedisMessageCache {
     pub async fn cache_message(&self, message: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", message.session_id, message.id);
+        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
 
         // 编码消息为 protobuf bytes，然后 base64 编码
         let mut buf = Vec::new();
@@ -75,7 +75,7 @@ impl RedisMessageCache {
         };
 
         for message in messages {
-            let message_key = format!("cache:msg:{}:{}", message.session_id, message.id);
+            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
 
             let mut buf = Vec::new();
             message.encode(&mut buf)?;
@@ -99,10 +99,10 @@ impl RedisMessageCache {
     }
 
     /// 从缓存获取消息
-    pub async fn get_message(&self, session_id: &str, message_id: &str) -> Result<Option<Message>> {
+    pub async fn get_message(&self, conversation_id: &str, message_id: &str) -> Result<Option<Message>> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", session_id, message_id);
+        let message_key = format!("cache:msg:{}:{}", conversation_id, message_id);
 
         let encoded: Option<String> = conn.get(&message_key).await?;
 
@@ -123,7 +123,7 @@ impl RedisMessageCache {
     /// 批量从缓存获取消息
     pub async fn get_messages_batch(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         message_ids: &[String],
     ) -> Result<HashMap<String, Message>> {
         if message_ids.is_empty() {
@@ -135,7 +135,7 @@ impl RedisMessageCache {
         // 构建所有 key
         let keys: Vec<String> = message_ids
             .iter()
-            .map(|id| format!("cache:msg:{}:{}", session_id, id))
+            .map(|id| format!("cache:msg:{}:{}", conversation_id, id))
             .collect();
 
         // 使用 MGET 批量获取
@@ -158,7 +158,7 @@ impl RedisMessageCache {
     /// 缓存会话消息列表（按时间范围）
     pub async fn cache_session_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
         messages: &[Message],
@@ -173,7 +173,7 @@ impl RedisMessageCache {
         // 缓存查询结果索引（使用 Sorted Set，按 timestamp 排序）
         let index_key = format!(
             "cache:session:{}:query:{}:{}",
-            session_id,
+            conversation_id,
             start_time.timestamp(),
             end_time.timestamp()
         );
@@ -204,14 +204,14 @@ impl RedisMessageCache {
     /// 从缓存获取会话消息列表
     pub async fn get_session_messages(
         &self,
-        session_id: &str,
+        conversation_id: &str,
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
         limit: i32,
     ) -> Result<Option<Vec<Message>>> {
         let index_key = format!(
             "cache:session:{}:query:{}:{}",
-            session_id,
+            conversation_id,
             start_time.timestamp(),
             end_time.timestamp()
         );
@@ -226,7 +226,7 @@ impl RedisMessageCache {
         }
 
         // 批量获取消息
-        let cached_messages = self.get_messages_batch(session_id, &message_ids).await?;
+        let cached_messages = self.get_messages_batch(conversation_id, &message_ids).await?;
 
         // 按 message_ids 顺序返回
         let mut messages = Vec::new();
@@ -240,41 +240,41 @@ impl RedisMessageCache {
     }
 
     /// 清除消息缓存
-    pub async fn invalidate_message(&self, session_id: &str, message_id: &str) -> Result<()> {
+    pub async fn invalidate_message(&self, conversation_id: &str, message_id: &str) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", session_id, message_id);
+        let message_key = format!("cache:msg:{}:{}", conversation_id, message_id);
         let _: () = conn.del(&message_key).await?;
 
         Ok(())
     }
 
     /// 清除会话缓存
-    pub async fn invalidate_session(&self, session_id: &str) -> Result<()> {
+    pub async fn invalidate_session(&self, conversation_id: &str) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
         // 使用 KEYS 命令查找所有相关的 key（注意：KEYS 在生产环境可能阻塞，但用于缓存失效场景可接受）
         // 更好的方案是维护一个会话 key 的 SET，但为了简化实现，这里使用 KEYS
-        let pattern = format!("cache:session:{}:*", session_id);
+        let pattern = format!("cache:session:{}:*", conversation_id);
         let keys: Vec<String> = conn.keys(&pattern).await?;
 
         if !keys.is_empty() {
             let _: () = conn.del(&keys).await?;
             tracing::debug!(
-                session_id = %session_id,
+                conversation_id = %conversation_id,
                 deleted_keys = keys.len(),
                 "Invalidated session cache"
             );
         }
 
         // 同时清除消息缓存（使用消息 key 模式）
-        let msg_pattern = format!("cache:msg:{}:*", session_id);
+        let msg_pattern = format!("cache:msg:{}:*", conversation_id);
         let msg_keys: Vec<String> = conn.keys(&msg_pattern).await?;
 
         if !msg_keys.is_empty() {
             let _: () = conn.del(&msg_keys).await?;
             tracing::debug!(
-                session_id = %session_id,
+                conversation_id = %conversation_id,
                 deleted_msg_keys = msg_keys.len(),
                 "Invalidated message cache for session"
             );

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::config::RouteConfig;
-use crate::infrastructure::OnlineServiceClient;
+use crate::infrastructure::{OnlineServiceClient, forwarder::MessageForwarder};
 use crate::interface::grpc::handler::RouteHandler;
+use flare_server_core::discovery::ServiceClient;
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
@@ -48,8 +49,18 @@ pub async fn initialize(
             .context("Failed to connect to Online service")?,
     );
 
-    // 3. 构建 gRPC Handler
-    let handler = RouteHandler::new(online_client);
+    // 3. 创建 MessageForwarder（不使用预创建的 ServiceClient，让 MessageForwarder 在需要时创建）
+    // MessageForwarder 会根据具体的服务类型（如 message-orchestrator）创建带 svid 过滤的 ServiceClient
+    let default_tenant_id = route_config
+        .default_tenant_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+    let message_forwarder = Arc::new(
+        MessageForwarder::new(default_tenant_id)
+    );
+
+    // 5. 构建 gRPC Handler
+    let handler = RouteHandler::new(online_client, message_forwarder);
 
     Ok(ApplicationContext { handler })
 }

@@ -11,10 +11,10 @@ use crate::application::handlers::MessagePersistenceCommandHandler;
 use crate::config::StorageWriterConfig;
 use crate::domain::repository::{
     AckPublisher, ArchiveStoreRepository, HotCacheRepository, MediaAttachmentVerifier,
-    MessageIdempotencyRepository, SessionStateRepository, UserSyncCursorRepository,
+    MessageIdempotencyRepository, ConversationStateRepository, UserSyncCursorRepository,
     WalCleanupRepository,
 };
-use crate::domain::repository::{SeqGenerator, SessionUpdateRepository};
+use crate::domain::repository::{SeqGenerator, ConversationUpdateRepository};
 use crate::domain::service::{MessageOperationDomainService, MessagePersistenceDomainService};
 use crate::infrastructure::external::media::MediaAttachmentClient;
 use crate::infrastructure::messaging::ack_publisher::KafkaAckPublisher;
@@ -22,8 +22,8 @@ use crate::infrastructure::persistence::postgres_store::PostgresMessageStore;
 use crate::infrastructure::persistence::redis_cache::RedisHotCacheRepository;
 use crate::infrastructure::persistence::redis_idempotency::RedisIdempotencyRepository;
 use crate::infrastructure::persistence::redis_wal_cleanup::RedisWalCleanupRepository;
-use crate::infrastructure::persistence::session_repo::PostgresSessionRepository;
-use crate::infrastructure::persistence::session_state::RedisSessionStateRepository;
+use crate::infrastructure::persistence::conversation_repo::PostgresConversationRepository;
+use crate::infrastructure::persistence::conversation_state::RedisConversationStateRepository;
 use crate::infrastructure::persistence::user_cursor::RedisUserCursorRepository;
 use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerator};
 use crate::interface::messaging::consumer::StorageWriterConsumer;
@@ -102,10 +102,10 @@ pub async fn initialize(
         };
 
     // 11. 创建会话状态仓储（可选）
-    let mut session_state_repo: Option<Arc<dyn SessionStateRepository + Send + Sync>> =
+    let mut conversation_state_repo: Option<Arc<dyn ConversationStateRepository + Send + Sync>> =
         redis_client
             .as_ref()
-            .map(|client| Arc::new(RedisSessionStateRepository::new(client.clone())) as Arc<_>);
+            .map(|client| Arc::new(RedisConversationStateRepository::new(client.clone())) as Arc<_>);
 
     // 12. 创建用户游标仓储（可选）
     let user_cursor_repo: Option<Arc<dyn UserSyncCursorRepository + Send + Sync>> = redis_client
@@ -144,13 +144,13 @@ pub async fn initialize(
         };
 
     // 14. 创建 Session 更新仓储（可选，需要 PostgreSQL）
-    let session_update_repo: Option<Arc<dyn SessionUpdateRepository + Send + Sync>> =
+    let session_update_repo: Option<Arc<dyn ConversationUpdateRepository + Send + Sync>> =
         archive_repo.as_ref().and_then(|archive| {
             if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                Some(Arc::new(PostgresSessionRepository::new(Arc::new(
+                Some(Arc::new(PostgresConversationRepository::new(Arc::new(
                     pg_store.pool().clone(),
                 )))
-                    as Arc<dyn SessionUpdateRepository + Send + Sync>)
+                    as Arc<dyn ConversationUpdateRepository + Send + Sync>)
             } else {
                 None
             }
@@ -160,14 +160,14 @@ pub async fn initialize(
     let metrics = Arc::new(StorageWriterMetrics::new());
 
     // 16. 创建 Session 服务客户端（用于获取会话参与者列表）
-    let session_client: Option<Arc<tokio::sync::Mutex<ServiceClient>>> = {
-        use flare_im_core::service_names::{SESSION, get_service_name};
-        let session_service = get_service_name(SESSION);
+    let conversation_client: Option<Arc<tokio::sync::Mutex<ServiceClient>>> = {
+        use flare_im_core::service_names::{CONVERSATION, get_service_name};
+        let conversation_service = get_service_name(CONVERSATION);
 
         // 添加超时保护，避免服务发现阻塞整个启动过程
         let discover_result = tokio::time::timeout(
             std::time::Duration::from_secs(3),
-            flare_im_core::discovery::create_discover(&session_service),
+            flare_im_core::discovery::create_discover(&conversation_service),
         )
         .await;
 
@@ -201,19 +201,19 @@ pub async fn initialize(
         wal_cleanup_repo,
         ack_publisher,
         media_verifier,
-        session_state_repo.clone(), // 先传入原始的session_state_repo
+        conversation_state_repo.clone(), // 先传入原始的conversation_state_repo
         user_cursor_repo,
         seq_generator,
         session_update_repo,
-        session_client, // 添加session_client参数
+        conversation_client, // 添加conversation_client参数
     ));
 
-    // 更新session_state_repo，注入domain_service
-    if let Some(repo) = &mut session_state_repo {
-        // 由于Rust的所有权机制，我们需要重新构建session_state_repo
+    // 更新conversation_state_repo，注入domain_service
+    if let Some(repo) = &mut conversation_state_repo {
+        // 由于Rust的所有权机制，我们需要重新构建conversation_state_repo
         if let Some(client) = redis_client {
             *repo = Arc::new(
-                RedisSessionStateRepository::new(client.clone())
+                RedisConversationStateRepository::new(client.clone())
                     .with_domain_service(Some(domain_service.clone())),
             );
         }
