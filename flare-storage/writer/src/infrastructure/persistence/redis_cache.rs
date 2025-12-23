@@ -37,7 +37,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
     async fn store_hot(&self, message: &flare_proto::common::Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
+        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.server_id);
         let index_key = format!("cache:session:{}:index", message.conversation_id);
 
         // 将 Message 编码为 protobuf bytes，然后 base64 编码存储
@@ -58,7 +58,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
         .ingestion_ts;
         let score = ingestion_ts as f64;
         let _: () = conn
-            .zadd(index_key.clone(), message.id.clone(), score)
+            .zadd(index_key.clone(), message.server_id.clone(), score)
             .await?;
         if self.ttl_seconds > 0 {
             let ttl: i64 = self.ttl_seconds.try_into()?;
@@ -96,7 +96,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
 
         // 准备所有命令
         for message in messages {
-            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
+            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.server_id);
 
             // 编码消息
             let mut buf = Vec::new();
@@ -121,7 +121,7 @@ impl HotCacheRepository for RedisHotCacheRepository {
             session_indices
                 .entry(message.conversation_id.clone())
                 .or_insert_with(Vec::new)
-                .push((message.id.clone(), score));
+                .push((message.server_id.clone(), score));
         }
 
         // 批量执行 Pipeline（一次性发送所有命令）

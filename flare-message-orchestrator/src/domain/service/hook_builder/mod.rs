@@ -121,9 +121,6 @@ pub fn build_hook_context(
                 ctx.attributes
                     .entry("receiver_id".into())
                     .or_insert(message.receiver_id.clone());
-                ctx.attributes
-                    .entry("receiver_ids".into())
-                    .or_insert(message.receiver_id.clone());
             }
         }
         // 群聊/频道：使用 channel_id
@@ -170,7 +167,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     let mut draft = MessageDraft::new(content_bytes);
     let message_type_label = detect_message_type(message);
 
-    if let Some(id) = non_empty(message.id.clone()) {
+    if let Some(id) = non_empty(message.server_id.clone()) {
         draft.set_message_id(id);
     }
 
@@ -243,13 +240,6 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     metadata
         .entry("receiver_id".into())
         .or_insert(receiver_list.first().cloned().unwrap_or_default());
-    metadata
-        .entry("receiver_ids".into())
-        .or_insert(if receiver_list.is_empty() {
-            String::new()
-        } else {
-            receiver_list.join(",")
-        });
 
     // 群聊/频道：使用 channel_id
     if !message.channel_id.is_empty() {
@@ -262,7 +252,6 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
 
     draft.extra("conversation_id", json!(request.conversation_id));
     draft.extra("sync", json!(request.sync));
-    draft.extra("receiver_ids", json!(receiver_list));
     if !message.channel_id.is_empty() {
         draft.extra("channel_id", json!(message.channel_id));
     }
@@ -314,7 +303,7 @@ pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &Message
 
     if let Some(message) = request.message.as_mut() {
         if let Some(id) = draft.message_id.as_ref() {
-            message.id = id.clone();
+            message.server_id = id.clone();
         }
 
         if let Some(conv) = draft.conversation_id.as_ref() {
@@ -406,8 +395,8 @@ pub fn build_message_record(
     }
 
     MessageRecord {
-        message_id: message.id.clone(),
-        client_message_id: None,
+        message_id: message.server_id.clone(),
+        client_message_id: Some(message.client_msg_id.clone()),
         conversation_id: message.conversation_id.clone(),
         sender_id: message.sender_id.clone(),
         conversation_type: Some(conversation_type_str.to_string()),

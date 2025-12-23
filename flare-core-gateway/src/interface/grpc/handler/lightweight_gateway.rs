@@ -534,7 +534,7 @@ impl OnlineService for LightweightGatewayHandler {
             .await?
             .into_inner();
         Ok(Response::new(Box::pin(stream)))
-    }
+}
 
     // ========== 用户在线状态 RPC ==========
 

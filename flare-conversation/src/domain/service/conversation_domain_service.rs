@@ -99,7 +99,7 @@ impl ConversationDomainService {
                         .await
                     {
                         if let Some(last_msg) = sync_result.messages.first() {
-                            summary.last_message_id = Some(last_msg.id.clone());
+                            summary.last_message_id = Some(last_msg.server_id.clone());
 
                             // 转换 Timestamp 为 DateTime<Utc>
                             summary.last_message_time =

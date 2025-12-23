@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
     let conversation_id = "chatroom".to_string();
 
     let message = Message {
-        id: format!("msg-{}", Uuid::new_v4()),
+        server_id: format!("msg-{}", Uuid::new_v4()),
         conversation_id: conversation_id.clone(),
         client_msg_id: String::new(), // 客户端消息ID（可选）
         sender_id: business_user_id.clone(),

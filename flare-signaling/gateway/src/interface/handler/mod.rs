@@ -33,7 +33,7 @@
 //!   ↓ (自动路由，带超时保护)
 //! ServerEventHandler.handle_message_command_by_type
 //!   ↓
-//! 应用层服务（MessageApplicationService）
+//! 应用层处理器（MessageHandler）
 //! ```
 //!
 //! ### 自定义命令流程

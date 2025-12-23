@@ -484,7 +484,7 @@ mod push_commands {
 
                     let ack_event = crate::infrastructure::AckAuditEvent {
                         ack: crate::infrastructure::AckData {
-                            message_id: message.id.clone(),
+                            message_id: message.server_id.clone(),
                             status: ack_status,
                             error_code: None,
                             error_message: if domain_result.failure_count > 0 {
@@ -504,7 +504,7 @@ mod push_commands {
                     if let Err(e) = ack_publisher.publish_ack(&ack_event).await {
                         tracing::warn!(
                             error = %e,
-                            message_id = %message.id,
+                            message_id = %message.server_id,
                             user_id = %user_id,
                             "Failed to publish push ACK"
                         );
@@ -543,11 +543,10 @@ mod push_commands {
     }
 }
 
-// 会话命令
-mod session_commands {
-    use std::sync::Arc;
-
-}
+// 会话命令（预留，未来扩展）
+// mod session_commands {
+//     use std::sync::Arc;
+// }
 
 // 导出
 pub use push_commands::{BatchPushMessageCommand, PushMessageCommand, PushMessageService};

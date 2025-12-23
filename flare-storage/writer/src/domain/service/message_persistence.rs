@@ -97,8 +97,9 @@ impl MessagePersistenceDomainService {
             message.conversation_id = conversation_id.clone();
         }
 
-        if message.id.is_empty() {
-            message.id = Uuid::new_v4().to_string();
+        // 服务端应该已经生成了 server_id，这里只做验证
+        if message.server_id.is_empty() {
+            return Err(anyhow::anyhow!("Message server_id cannot be empty"));
         }
 
         // 消息从 Kafka 队列中读取出来时，说明已经成功发送并被接收
@@ -117,7 +118,7 @@ impl MessagePersistenceDomainService {
 
         Ok(PreparedMessage {
             conversation_id,
-            message_id: message.id.clone(),
+            message_id: message.server_id.clone(),
             message,
             timeline,
             sync: request.sync,
@@ -153,18 +154,61 @@ impl MessagePersistenceDomainService {
     }
 
     /// 检查消息是否为新消息（幂等性检查）
+    /// 
+    /// 优先使用 client_msg_id 进行去重检查，如果没有 client_msg_id 则使用 message_id
     #[instrument(skip(self), fields(message_id = %prepared.message_id))]
     pub async fn check_idempotency(&self, prepared: &PreparedMessage) -> Result<bool> {
         match &self.idempotency_repo {
-            Some(repo) => match repo.is_new(&prepared.message_id).await {
-                Ok(value) => Ok(value),
-                Err(err) => {
-                    warn!(
-                        error = ?err,
-                        message_id = %prepared.message_id,
-                        "Idempotency check failed; treating as new"
-                    );
-                    Ok(true)
+            Some(repo) => {
+                // 优先使用 client_msg_id 进行去重（更准确）
+                if !prepared.message.client_msg_id.is_empty() {
+                    match repo.is_new_by_client_msg_id(
+                        &prepared.message.client_msg_id,
+                        Some(&prepared.message.sender_id),
+                    ).await {
+                        Ok(value) => {
+                            if !value {
+                                tracing::debug!(
+                                    client_msg_id = %prepared.message.client_msg_id,
+                                    sender_id = %prepared.message.sender_id,
+                                    "Message deduplicated by client_msg_id"
+                                );
+                            }
+                            Ok(value)
+                        },
+                        Err(err) => {
+                            warn!(
+                                error = ?err,
+                                client_msg_id = %prepared.message.client_msg_id,
+                                "Client msg id idempotency check failed; falling back to message_id"
+                            );
+                            // 降级到使用 message_id 检查
+                            match repo.is_new(&prepared.message_id).await {
+                                Ok(value) => Ok(value),
+                                Err(e) => {
+                                    warn!(
+                                        error = ?e,
+                                        message_id = %prepared.message_id,
+                                        "Idempotency check failed; treating as new"
+                                    );
+                                    Ok(true) // 出错时当作新消息处理
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 没有 client_msg_id，使用 message_id 检查
+                    match repo.is_new(&prepared.message_id).await {
+                        Ok(value) => Ok(value),
+                        Err(err) => {
+                            warn!(
+                                error = ?err,
+                                message_id = %prepared.message_id,
+                                "Idempotency check failed; treating as new"
+                            );
+                            Ok(true)
+                        }
+                    }
                 }
             },
             None => Ok(true),
@@ -227,14 +271,7 @@ impl MessagePersistenceDomainService {
                 .await?;
         }
 
-        // 5. 构建持久化结果
-        let result = PersistenceResult {
-            message_id,
-            conversation_id,
-            timeline, // 使用克隆的 timeline
-            deduplicated: false,
-        };
-
+        // 批量持久化完成
         Ok(())
     }
 

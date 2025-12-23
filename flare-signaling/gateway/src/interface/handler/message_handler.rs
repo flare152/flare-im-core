@@ -4,9 +4,7 @@
 
 use async_trait::async_trait;
 use flare_core::common::error::{FlareError as CoreFlareError, Result as CoreResult};
-use flare_core::common::protocol::{
-    Frame, MessageCommand, NotificationCommand, Reliability, generate_message_id,
-};
+use flare_core::common::protocol::{Frame, MessageCommand, NotificationCommand, Reliability, generate_message_id, ack_message, frame_with_message_command};
 use flare_core::common::protocol::builder::{FrameBuilder, current_timestamp};
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
 use flare_core::server::events::handler::ServerEventHandler;
@@ -26,16 +24,29 @@ impl ServerEventHandler for LongConnectionHandler {
         command: &MessageCommand,
         connection_id: &str,
     ) -> CoreResult<Option<Frame>> {
-        // 处理消息发送
-        self.handle_message_send(command, connection_id).await?;
+        let client_message_id = command.message_id.clone();
+        // 处理消息发送，获取服务端生成的消息ID
+        let server_message_id = self.handle_message_send(command, connection_id).await?;
+        
+        // 记录服务端消息ID（用于追踪和日志）
+        debug!(
+            connection_id = %connection_id,
+            client_message_id = %command.message_id,
+            server_message_id = %server_message_id,
+            "Message sent, server_id generated"
+        );
         
         // 刷新会话心跳（忽略错误，不影响主流程）
         if let Err(err) = self.refresh_session(connection_id).await {
             warn!(?err, %connection_id, "failed to refresh session heartbeat");
         }
-        
-        // 返回 None 表示使用自动 ACK
-        Ok(None)
+        // 创建ack
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("server_message_id".to_string(), server_message_id.as_bytes().to_vec());
+
+        let ack =ack_message(client_message_id, Some(metadata));
+        let frame  = frame_with_message_command(ack, Reliability::AtLeastOnce);
+        Ok(Some(frame))
     }
 
     /// 处理 ACK 消息命令
@@ -133,12 +144,15 @@ impl LongConnectionHandler {
     /// 处理消息发送（协议适配层）
     ///
     /// 从连接信息获取 user_id，委托给应用层服务处理
+    ///
+    /// # 返回值
+    /// 返回服务端生成的消息 ID（server_id），用于在 ACK 中返回给 SDK
     #[instrument(skip(self), fields(connection_id, message_id = %msg_cmd.message_id))]
     pub(crate) async fn handle_message_send(
         &self,
         msg_cmd: &MessageCommand,
         connection_id: &str,
-    ) -> CoreResult<()> {
+    ) -> CoreResult<String> {
         let user_id = self
             .user_id_for_connection(connection_id)
             .await
@@ -151,7 +165,7 @@ impl LongConnectionHandler {
 
         let tenant_id = self.get_tenant_id_for_connection(connection_id).await;
 
-        self.message_app_service
+        self.message_handler
             .handle_message_send(connection_id, &user_id, msg_cmd, tenant_id.as_deref())
             .await
             .map_err(|e| CoreFlareError::system(format!("Failed to handle message send: {}", e)))
@@ -172,7 +186,7 @@ impl LongConnectionHandler {
             .unwrap_or_else(|| "unknown".to_string());
 
         // 委托给应用层服务处理
-        self.message_app_service
+        self.message_handler
             .handle_client_ack(connection_id, &user_id, msg_cmd)
             .await?;
 

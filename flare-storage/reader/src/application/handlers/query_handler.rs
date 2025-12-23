@@ -132,7 +132,7 @@ impl MessageStorageQueryHandler {
                 .and_then(|msg| {
                     msg.timestamp
                         .as_ref()
-                        .map(|ts| format!("{}:{}", ts.seconds, msg.id.clone()))
+                        .map(|ts| format!("{}:{}", ts.seconds, msg.server_id.clone()))
                 })
                 .unwrap_or_default();
             let has_more = message_count >= query.limit;

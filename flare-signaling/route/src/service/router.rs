@@ -888,7 +888,7 @@ impl Router {
             .await
             .context("Failed to read route repository")?;
 
-        let candidate = route.map(|r| r.endpoint);
+        let candidate = route.map(|r| r.endpoint().as_str().to_string());
         let candidates = candidate.into_iter().collect::<Vec<_>>();
 
         // 5. 负载均衡选择候选

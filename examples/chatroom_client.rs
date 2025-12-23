@@ -254,7 +254,7 @@ async fn main() -> Result<()> {
                         let conversation_id = generate_single_chat_conversation_id(&user_id, &recipient_id);
 
                         let msg = flare_proto::common::Message {
-                            id: generate_message_id(),
+                            server_id: generate_message_id(),
                             conversation_id,  // 使用正确的conversation_id格式
                             client_msg_id: String::new(),
                             sender_id: user_id.clone(),
@@ -307,10 +307,14 @@ async fn main() -> Result<()> {
                             format!("Failed to encode message: {}", e)
                         ))?;
 
+                        // 构建 metadata，包含 conversation_id（Gateway 需要从 metadata 中提取）
+                        let mut metadata = std::collections::HashMap::new();
+                        metadata.insert("conversation_id".to_string(), msg.conversation_id.as_bytes().to_vec());
+
                         let cmd = send_message(
-                            msg.id.clone(),
+                            msg.server_id.clone(),
                             buf,
-                            None,
+                            Some(metadata),
                             None,
                         );
                         let frame = frame_with_message_command(cmd, Reliability::AtLeastOnce);
@@ -320,13 +324,13 @@ async fn main() -> Result<()> {
                         // 记录待确认的消息ID
                         {
                             let mut pending = chat_listener.pending_acks.lock().unwrap();
-                            pending.insert(msg.id.clone(), std::time::Instant::now());
+                            pending.insert(msg.server_id.clone(), std::time::Instant::now());
                         }
 
                         // 使用较长的超时时间发送消息，确保消息真正发送
                         let frame_clone = frame.clone();
                         let listener_clone = chat_listener.clone();
-                        let message_id = msg.id.clone();
+                        let message_id = msg.server_id.clone();
                         let recipient_id_clone = recipient_id.clone();
                         let message_clone = message.clone();
                         match tokio::time::timeout(
@@ -354,22 +358,22 @@ async fn main() -> Result<()> {
                                     }
                                     Err(err) => {
                                         let elapsed = send_start.elapsed();
-                                        error!(?err, message_id = %msg.id, "发送消息失败 (耗时: {:?})", elapsed);
+                                        error!(?err, message_id = %msg.server_id, "发送消息失败 (耗时: {:?})", elapsed);
                                         eprintln!("❌ 发送失败: {}", err);
                                         // 移除待确认的消息ID
                                         let mut pending = chat_listener.pending_acks.lock().unwrap();
-                                        pending.remove(&msg.id);
+                                        pending.remove(&msg.server_id);
                                     }
                                 }
                             }
                             Err(_) => {
                                 // 超时，消息发送失败
                                 let elapsed = send_start.elapsed();
-                                error!(message_id = %msg.id, "消息发送超时 (耗时: {:?})", elapsed);
+                                error!(message_id = %msg.server_id, "消息发送超时 (耗时: {:?})", elapsed);
                                 eprintln!("❌ 发送超时: 消息可能未成功发送");
                                 // 移除待确认的消息ID
                                 let mut pending = chat_listener.pending_acks.lock().unwrap();
-                                pending.remove(&msg.id);
+                                pending.remove(&msg.server_id);
                             }
                         }
 
@@ -544,7 +548,7 @@ fn extract_message_id_fast(data: &[u8]) -> Option<String> {
             server_packet.payload
         {
             if let Some(first_msg) = envelope.messages.first() {
-                return Some(first_msg.id.clone());
+                return Some(first_msg.server_id.clone());
             }
         }
     }
@@ -552,13 +556,13 @@ fn extract_message_id_fast(data: &[u8]) -> Option<String> {
     // 尝试解析为 MessageEnvelope
     if let Ok(envelope) = flare_proto::common::MessageEnvelope::decode(data) {
         if let Some(first_msg) = envelope.messages.first() {
-            return Some(first_msg.id.clone());
+            return Some(first_msg.server_id.clone());
         }
     }
 
     // 尝试直接解析为 Message
     if let Ok(message) = ProtoMessage::decode(data) {
-        return Some(message.id.clone());
+        return Some(message.server_id.clone());
     }
 
     None
@@ -649,7 +653,7 @@ fn parse_single_message(message: &ProtoMessage) -> Option<MessageDisplayInfo> {
     // 检查消息是否已撤回
     if message.is_recalled {
         return Some(MessageDisplayInfo {
-            id: message.id.clone(),
+            id: message.server_id.clone(),
             sender_id: message.sender_id.clone(),
             receiver_id: message.receiver_id.clone(),
             content: "[消息已撤回]".to_string(),
@@ -673,7 +677,7 @@ fn parse_single_message(message: &ProtoMessage) -> Option<MessageDisplayInfo> {
     let (type_name, _) = get_message_type_display(message.message_type);
 
     Some(MessageDisplayInfo {
-        id: message.id.clone(),
+        id: message.server_id.clone(),
         sender_id: message.sender_id.clone(),
         receiver_id: message.receiver_id.clone(),
         content,

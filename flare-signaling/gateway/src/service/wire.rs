@@ -11,10 +11,10 @@ use uuid::Uuid;
 use crate::application::handlers::{
     ConnectionQueryService, PushMessageService,
 };
-use crate::application::services::{ConnectionApplicationService, MessageApplicationService};
+use crate::application::handlers::{ConnectionHandler, MessageHandler};
 use crate::config::AccessGatewayConfig;
 use crate::domain::repository::{ConnectionQuery, SignalingGateway};
-use crate::domain::service::{GatewayService, PushDomainService, ConversationDomainService};
+use crate::domain::service::{GatewayService, PushDomainService, ConversationDomainService, MessageDomainService};
 use crate::infrastructure::auth::TokenAuthenticator;
 use crate::infrastructure::connection_query::ManagerConnectionQuery;
 use crate::infrastructure::messaging::ack_sender::AckSender;
@@ -240,15 +240,19 @@ pub async fn initialize(
         gateway_id.clone(),
     ));
 
-    // 15. 构建应用层服务
-    let connection_app_service = Arc::new(ConnectionApplicationService::new(
+    // 15. 构建领域服务
+    let message_domain_service = Arc::new(MessageDomainService::new());
+
+    // 16. 构建应用层处理器（只负责编排，业务逻辑在领域层）
+    let connection_handler_app = Arc::new(ConnectionHandler::new(
         session_domain_service.clone(),
         connection_query.clone(),
         metrics.clone(),
     ));
 
     let ack_sender = Arc::new(AckSender::new(Arc::new(Mutex::new(None))));
-    let message_app_service = Arc::new(MessageApplicationService::new(
+    let message_handler_app = Arc::new(MessageHandler::new(
+        message_domain_service,
         message_router.clone(),
         ack_sender.clone(),
         ack_publisher.clone(),
@@ -257,15 +261,15 @@ pub async fn initialize(
         gateway_id.clone(),
     ));
 
-    // 16. 更新连接处理器中的应用服务引用
+    // 16. 更新连接处理器中的应用处理器引用
     let connection_handler = Arc::new(LongConnectionHandler::new(
         signaling_gateway.clone(),
         gateway_id.clone(),
         ack_publisher.clone(),
         message_router.clone(),
         metrics.clone(),
-        connection_app_service.clone(),
-        message_app_service.clone(),
+        connection_handler_app.clone(),
+        message_handler_app.clone(),
     ));
 
     // 17. 构建推送领域服务

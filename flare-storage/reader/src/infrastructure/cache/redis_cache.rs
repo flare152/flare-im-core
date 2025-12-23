@@ -39,7 +39,7 @@ impl RedisMessageCache {
     pub async fn cache_message(&self, message: &Message) -> Result<()> {
         let mut conn = self.get_connection().await?;
 
-        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
+        let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.server_id);
 
         // 编码消息为 protobuf bytes，然后 base64 编码
         let mut buf = Vec::new();
@@ -75,7 +75,7 @@ impl RedisMessageCache {
         };
 
         for message in messages {
-            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.id);
+            let message_key = format!("cache:msg:{}:{}", message.conversation_id, message.server_id);
 
             let mut buf = Vec::new();
             message.encode(&mut buf)?;
@@ -187,7 +187,7 @@ impl RedisMessageCache {
         for message in messages {
             if let Some(ts) = &message.timestamp {
                 let score = ts.seconds as f64 + (ts.nanos as f64 / 1_000_000_000.0);
-                pipe.cmd("ZADD").arg(&index_key).arg(score).arg(&message.id);
+                pipe.cmd("ZADD").arg(&index_key).arg(score).arg(&message.server_id);
             }
         }
 

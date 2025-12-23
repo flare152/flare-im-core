@@ -115,7 +115,7 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                     .and_then(|msg| {
                         msg.extra
                             .get("seq")
-                            .map(|seq_str| format!("seq:{}:{}", seq_str, msg.id))
+                            .map(|seq_str| format!("seq:{}:{}", seq_str, msg.server_id))
                     })
                     .unwrap_or_default();
                 let has_more = message_count >= req.limit;

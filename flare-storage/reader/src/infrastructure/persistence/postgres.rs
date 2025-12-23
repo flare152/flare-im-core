@@ -124,7 +124,7 @@ impl PostgresMessageStorage {
             ),
             (
                 "idx_messages_id_unique",
-                "CREATE INDEX IF NOT EXISTS idx_messages_id_unique ON messages(id)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_server_id_unique ON messages(server_id)",
             ),
             (
                 "idx_messages_business_type",
@@ -186,10 +186,10 @@ impl PostgresMessageStorage {
 
     /// 从数据库行转换为 Message protobuf
     fn row_to_message(&self, row: &sqlx::postgres::PgRow) -> Result<Message> {
-        let id: String = row.get("id");
+        let server_id: String = row.get("server_id");
         let conversation_id: String = row.get("conversation_id");
+        let client_msg_id: Option<String> = row.get("client_msg_id");
         let sender_id: String = row.get("sender_id");
-        let receiver_ids: Option<Value> = row.get("receiver_ids");
         let content: Option<Vec<u8>> = row.get("content");
         let timestamp: DateTime<Utc> = row.get("timestamp");
         let extra: Option<Value> = row.get("extra");
@@ -207,11 +207,6 @@ impl PostgresMessageStorage {
         let visibility: Option<Value> = row.get("visibility");
         let read_by: Option<Value> = row.get("read_by");
         let operations: Option<Value> = row.get("operations");
-
-        // 解析 receiver_ids
-        let receiver_ids_vec: Vec<String> = receiver_ids
-            .and_then(|v| from_value::<Vec<String>>(v).ok())
-            .unwrap_or_default();
 
         // 解析 content (MessageContent protobuf)
         let content_proto = content.and_then(|bytes| ProstMessage::decode(&bytes[..]).ok());
@@ -478,8 +473,9 @@ impl PostgresMessageStorage {
 
         // 构建 Message
         Ok(Message {
-            id,
+            server_id,
             conversation_id,
+            client_msg_id: client_msg_id.unwrap_or_default(),
             sender_id,
             receiver_id: String::new(), // 从数据库读取：receiver_id 可能为空（旧数据）
             channel_id: String::new(),  // 从数据库读取：channel_id 可能为空（旧数据）
@@ -511,7 +507,7 @@ impl MessageStorage for PostgresMessageStorage {
         // 读侧存储通常不需要实现 store_message
         // 但为了兼容性，可以提供一个空实现或委托给 Writer
         tracing::warn!(
-            message_id = %_message.id,
+            message_id = %_message.server_id,
             "store_message called on read-only storage, this should be handled by Storage Writer"
         );
         Ok(())
@@ -550,7 +546,7 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
@@ -625,7 +621,7 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
@@ -675,12 +671,12 @@ impl MessageStorage for PostgresMessageStorage {
         let row = sqlx::query(
             r#"
             SELECT 
-                id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
             FROM messages
-            WHERE id = $1
+            WHERE server_id = $1
             LIMIT 1
             "#,
         )
@@ -1004,7 +1000,7 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations

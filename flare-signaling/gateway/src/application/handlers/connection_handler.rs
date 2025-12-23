@@ -1,4 +1,4 @@
-//! 连接管理应用服务
+//! 连接管理处理器
 //!
 //! 处理连接生命周期的业务流程编排
 
@@ -9,19 +9,19 @@ use tracing::{info, instrument, warn};
 use crate::domain::repository::ConnectionQuery;
 use crate::domain::service::ConversationDomainService;
 
-/// 连接管理应用服务
+/// 连接管理处理器
 ///
 /// 职责：
 /// - 编排连接建立流程
 /// - 编排连接断开流程
 /// - 协调会话管理和连接管理
-pub struct ConnectionApplicationService {
+pub struct ConnectionHandler {
     session_domain_service: Arc<ConversationDomainService>,
     connection_query: Arc<dyn ConnectionQuery>,
     metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
 }
 
-impl ConnectionApplicationService {
+impl ConnectionHandler {
     pub fn new(
         session_domain_service: Arc<ConversationDomainService>,
         connection_query: Arc<dyn ConnectionQuery>,
@@ -155,3 +155,4 @@ impl ConnectionApplicationService {
             .await
     }
 }
+

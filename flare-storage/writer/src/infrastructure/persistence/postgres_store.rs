@@ -69,8 +69,8 @@ impl PostgresMessageStore {
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
+                client_msg_id TEXT,
                 sender_id TEXT NOT NULL,
-                receiver_ids JSONB,
                 content BYTEA,
                 timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 extra JSONB DEFAULT '{}',
@@ -129,6 +129,24 @@ impl PostgresMessageStore {
             r#"
             CREATE INDEX IF NOT EXISTS idx_messages_id_unique 
             ON messages(id)
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_client_msg_id 
+            ON messages(client_msg_id) WHERE client_msg_id IS NOT NULL
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_messages_sender_client_msg_id 
+            ON messages(sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL
             "#,
         )
         .execute(&self.pool)
@@ -423,16 +441,16 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         sqlx::query(
             r#"
             INSERT INTO messages (
-                id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $8)
-            ON CONFLICT (timestamp, id) DO UPDATE
+            ON CONFLICT (timestamp, server_id) DO UPDATE
             SET conversation_id = EXCLUDED.conversation_id,
+                client_msg_id = EXCLUDED.client_msg_id,
                 sender_id = EXCLUDED.sender_id,
-                -- receiver_ids 已废弃
                 content = EXCLUDED.content,
                 content_type = EXCLUDED.content_type,
                 status = EXCLUDED.status,
@@ -443,10 +461,10 @@ impl ArchiveStoreRepository for PostgresMessageStore {
                 updated_at = EXCLUDED.updated_at
             "#,
         )
-        .bind(&message.id)
+        .bind(&message.server_id)
         .bind(&message.conversation_id)
+        .bind(if message.client_msg_id.is_empty() { None::<String> } else { Some(message.client_msg_id.clone()) })
         .bind(&message.sender_id)
-        .bind(serde_json::Value::Array(Vec::new())) // receiver_ids 已废弃，使用空数组
         .bind(content_bytes)
         .bind(timestamp)
         .bind(to_value(&extra_value)?)
@@ -795,10 +813,10 @@ impl PostgresMessageStore {
                     .unwrap_or("unknown");
 
                 (
-                    message.id.clone(),
+                    message.server_id.clone(),
                     message.conversation_id.clone(),
+                    if message.client_msg_id.is_empty() { None } else { Some(message.client_msg_id.clone()) },
                     message.sender_id.clone(),
-                    to_value(&Vec::<String>::new()).unwrap_or_default(), // receiver_ids 已废弃
                     content_bytes,
                     timestamp,
                     to_value(&extra_value).unwrap_or_default(),
@@ -847,7 +865,7 @@ impl PostgresMessageStore {
             let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
                 r#"
                 INSERT INTO messages (
-                    id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                    server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
                     status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
@@ -856,10 +874,10 @@ impl PostgresMessageStore {
             );
 
             query_builder.push_values(&prepared_data, |mut b, row| {
-                b.push_bind(&row.0); // id
+                b.push_bind(&row.0); // server_id
                 b.push_bind(&row.1); // conversation_id
-                b.push_bind(&row.2); // sender_id
-                b.push_bind(&row.3); // receiver_ids
+                b.push_bind(&row.2); // client_msg_id (Option<String>)
+                b.push_bind(&row.3); // sender_id
                 b.push_bind(&row.4); // content_bytes
                 b.push_bind(row.5); // timestamp
                 b.push_bind(&row.6); // extra
@@ -878,10 +896,10 @@ impl PostgresMessageStore {
 
             query_builder.push(
                 r#"
-                ON CONFLICT (timestamp, id) DO UPDATE
+                ON CONFLICT (timestamp, server_id) DO UPDATE
                 SET conversation_id = EXCLUDED.conversation_id,
+                    client_msg_id = EXCLUDED.client_msg_id,
                     sender_id = EXCLUDED.sender_id,
-                    receiver_ids = EXCLUDED.receiver_ids,
                     content = EXCLUDED.content,
                     content_type = EXCLUDED.content_type,
                     status = EXCLUDED.status,
@@ -1134,16 +1152,15 @@ impl PostgresMessageStore {
             sqlx::query(
                 r#"
                 INSERT INTO messages (
-                    id, conversation_id, sender_id, receiver_ids, content, timestamp,
+                    server_id, conversation_id, sender_id, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
                     status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-                ON CONFLICT (timestamp, id) DO UPDATE
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                ON CONFLICT (timestamp, server_id) DO UPDATE
                 SET conversation_id = EXCLUDED.conversation_id,
                     sender_id = EXCLUDED.sender_id,
-                    receiver_ids = EXCLUDED.receiver_ids,
                     content = EXCLUDED.content,
                     content_type = EXCLUDED.content_type,
                     status = EXCLUDED.status,
@@ -1154,10 +1171,9 @@ impl PostgresMessageStore {
                     updated_at = EXCLUDED.updated_at
                 "#,
             )
-            .bind(&message.id)
+            .bind(&message.server_id)
             .bind(&message.conversation_id)
             .bind(&message.sender_id)
-            .bind(serde_json::Value::Array(Vec::new())) // receiver_ids 已废弃
             .bind(&content_bytes)
             .bind(timestamp)
             .bind(to_value(&extra_value)?)
@@ -1225,7 +1241,7 @@ impl PostgresMessageStore {
             }
         }
 
-        query.push(" WHERE id = ");
+        query.push(" WHERE server_id = ");
         query.push_bind(message_id);
 
         query.build().execute(&self.pool).await?;
@@ -1253,7 +1269,7 @@ impl PostgresMessageStore {
             r#"
             SELECT content, sender_id, timestamp, edit_history
             FROM messages
-            WHERE id = $1
+            WHERE server_id = $1
             "#,
         )
         .bind(message_id)

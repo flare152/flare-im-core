@@ -119,7 +119,7 @@ impl KafkaMessagePublisher {
                     payload_size = encoded.len(),
                     max_size = MAX_MESSAGE_SIZE,
                     conversation_id = %payload.conversation_id,
-                    message_id = payload.message.as_ref().map(|m| m.id.as_str()).unwrap_or("unknown"),
+                    message_id = payload.message.as_ref().map(|m| m.server_id.as_str()).unwrap_or("unknown"),
                     "Storage message size exceeds maximum allowed size"
                 );
                 continue; // 跳过过大的消息

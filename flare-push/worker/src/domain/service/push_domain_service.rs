@@ -346,7 +346,7 @@ impl PushDomainService {
         Ok(flare_proto::access_gateway::PushMessageRequest {
             target_user_ids: vec![task.user_id.clone()],
             message: Some(flare_proto::common::Message {
-                id: task.message_id.clone(),
+                server_id: task.message_id.clone(),
                 conversation_id: String::new(),
                 client_msg_id: String::new(),
                 sender_id: String::new(),

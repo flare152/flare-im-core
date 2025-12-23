@@ -23,7 +23,7 @@ impl LongConnectionHandler {
         // 获取连接信息并处理
         if let Some((user_id, device_id)) = self.get_connection_info(connection_id).await {
             if let Err(err) = self
-                .connection_app_service
+                .connection_handler
                 .handle_connect(connection_id, &user_id, &device_id, active_count)
                 .await
             {
@@ -67,7 +67,7 @@ impl LongConnectionHandler {
 
             // 委托给应用层服务处理
             if let Err(err) = self
-                .connection_app_service
+                .connection_handler
                 .handle_disconnect(connection_id, &user_id, active_count, has_other_connections)
                 .await
             {

@@ -175,10 +175,10 @@ CREATE INDEX IF NOT EXISTS idx_media_references_created_at ON media_references(c
 -- 注意：TimescaleDB要求分区列（timestamp）必须包含在主键中
 DROP TABLE IF EXISTS messages CASCADE;
 CREATE TABLE messages (
-    id TEXT NOT NULL,
+    server_id TEXT NOT NULL,                -- 服务端消息ID（服务端生成，全局唯一）
     conversation_id TEXT NOT NULL,
+    client_msg_id TEXT,                    -- 客户端消息ID（用于去重和客户端标识）
     sender_id TEXT NOT NULL,
-    receiver_ids JSONB,                    -- 接收者ID列表
     content BYTEA,                         -- 消息内容（二进制）
     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -224,15 +224,15 @@ CREATE TABLE messages (
     offline_push_info JSONB,               -- 离线推送信息
     
     -- 复合主键：TimescaleDB要求分区列必须包含在主键中
-    -- 使用 (timestamp, id) 顺序以优化时序查询性能
-    PRIMARY KEY (timestamp, id)
+    -- 使用 (timestamp, server_id) 顺序以优化时序查询性能
+    PRIMARY KEY (timestamp, server_id)
 );
 
 COMMENT ON TABLE messages IS '消息存储表（TimescaleDB Hypertable）';
-COMMENT ON COLUMN messages.id IS '消息唯一标识符';
+COMMENT ON COLUMN messages.server_id IS '服务端消息ID（服务端生成，全局唯一）';
 COMMENT ON COLUMN messages.conversation_id IS '会话ID';
+COMMENT ON COLUMN messages.client_msg_id IS '客户端消息ID（客户端生成，用于去重和客户端标识）';
 COMMENT ON COLUMN messages.sender_id IS '发送者ID';
-COMMENT ON COLUMN messages.receiver_ids IS '接收者ID列表（JSON数组）';
 COMMENT ON COLUMN messages.content IS '消息内容（二进制）';
 COMMENT ON COLUMN messages.timestamp IS '消息时间戳（分区键）';
 COMMENT ON COLUMN messages.extra IS '扩展字段（JSON格式）';
@@ -268,11 +268,13 @@ COMMENT ON COLUMN messages.tags IS '标签列表';
 COMMENT ON COLUMN messages.offline_push_info IS '离线推送信息';
 
 -- 消息表索引
--- 注意：主键已包含 (timestamp, id)，无需单独创建 timestamp 和 id 索引
+-- 注意：主键已包含 (timestamp, server_id)，无需单独创建 timestamp 和 server_id 索引
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversation_id, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_id_unique ON messages(id); -- 唯一索引，保证id全局唯一
+CREATE INDEX IF NOT EXISTS idx_messages_server_id_unique ON messages(server_id); -- 唯一索引，保证server_id全局唯一
+CREATE INDEX IF NOT EXISTS idx_messages_client_msg_id ON messages(client_msg_id) WHERE client_msg_id IS NOT NULL; -- 客户端消息ID索引（用于去重查询）
+CREATE INDEX IF NOT EXISTS idx_messages_sender_client_msg_id ON messages(sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL; -- 发送者+客户端消息ID复合索引（用于幂等性检查）
 CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type);
 CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
@@ -305,11 +307,11 @@ SELECT create_hypertable('messages', 'timestamp',
 -- 配置说明：
 -- - enable_columnstore: 启用列式存储
 -- - segmentby: 按 conversation_id 分段，同一会话的消息存储在一起，提高压缩效率
--- - orderby: 按 timestamp DESC, id 排序，优化时序查询性能
+-- - orderby: 按 timestamp DESC, server_id 排序，优化时序查询性能
 ALTER TABLE messages SET (
     timescaledb.enable_columnstore = true,
     timescaledb.segmentby = 'conversation_id',
-    timescaledb.orderby = 'timestamp DESC, id'
+    timescaledb.orderby = 'timestamp DESC, server_id'
 );
 
 -- 配置消息表列式存储策略（30天后移动到列式存储）

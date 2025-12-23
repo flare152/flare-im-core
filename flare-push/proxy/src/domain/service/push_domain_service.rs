@@ -123,7 +123,7 @@ impl PushDomainService {
                             message_id: request
                                 .message
                                 .as_ref()
-                                .map(|m| m.id.clone())
+                                .map(|m| m.server_id.clone())
                                 .unwrap_or_default(),
                             client_message_id: request
                                 .message

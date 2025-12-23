@@ -36,4 +36,28 @@ impl MessageIdempotencyRepository for RedisIdempotencyRepository {
 
         Ok(is_new)
     }
+    
+    async fn is_new_by_client_msg_id(&self, client_msg_id: &str, sender_id: Option<&str>) -> Result<bool> {
+        if client_msg_id.is_empty() {
+            return Ok(true);
+        }
+        
+        let mut conn = ConnectionManager::new(self.client.as_ref().clone()).await?;
+        
+        // 使用 sender_id + client_msg_id 作为key，提高去重精度
+        // 这样可以避免不同用户使用相同client_msg_id时的冲突
+        let key = if let Some(sender) = sender_id {
+            format!("storage:idempotency:client:{}:{}", sender, client_msg_id)
+        } else {
+            format!("storage:idempotency:client:{}", client_msg_id)
+        };
+        
+        let is_new: bool = conn.set_nx(&key, 1).await?;
+        if is_new && self.ttl_seconds > 0 {
+            let ttl: i64 = self.ttl_seconds.try_into()?;
+            let _: () = conn.expire(&key, ttl).await?;
+        }
+
+        Ok(is_new)
+    }
 }

@@ -1,17 +1,18 @@
 //! 会话服务客户端
 //!
-//! 为消息应用服务提供对会话服务的访问能力
+//! 基础设施层：封装对会话服务的调用
 
 use flare_core::common::error::{FlareError, Result};
 use flare_conversation::application::ConversationCommandHandler;
 use flare_conversation::application::commands::UpdateCursorCommand;
 use std::sync::Arc;
 
-/// 会话服务客户端
+/// 会话服务客户端（基础设施层）
 ///
 /// 职责：
 /// - 提供对会话服务的访问接口
 /// - 封装会话服务调用的细节
+/// - 处理错误转换
 pub struct ConversationServiceClient {
     conversation_command_handler: Arc<ConversationCommandHandler>,
 }
@@ -46,3 +47,4 @@ impl ConversationServiceClient {
             })
     }
 }
+

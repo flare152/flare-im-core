@@ -10,7 +10,26 @@ use crate::domain::model::MediaAttachmentMetadata;
 // Rust 2024: trait 中直接使用 async fn（原生支持，包括 trait 对象）
 #[async_trait]
 pub trait MessageIdempotencyRepository: Send + Sync {
+    /// 检查消息ID是否为新消息（基于服务端消息ID）
     async fn is_new(&self, message_id: &str) -> Result<bool>;
+    
+    /// 检查客户端消息ID是否为新消息（基于客户端消息ID，用于去重）
+    /// 
+    /// # 参数
+    /// * `client_msg_id` - 客户端消息ID
+    /// * `sender_id` - 发送者ID（可选，用于更精确的去重检查）
+    /// 
+    /// # 返回
+    /// * `Ok(true)` - 是新消息
+    /// * `Ok(false)` - 是重复消息
+    async fn is_new_by_client_msg_id(&self, client_msg_id: &str, _sender_id: Option<&str>) -> Result<bool> {
+        // 默认实现：如果client_msg_id为空，返回true（允许通过）
+        if client_msg_id.is_empty() {
+            return Ok(true);
+        }
+        // 默认实现：委托给is_new（子类可以覆盖以优化）
+        self.is_new(client_msg_id).await
+    }
 }
 
 #[async_trait]

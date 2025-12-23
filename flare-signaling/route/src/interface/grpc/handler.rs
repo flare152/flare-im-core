@@ -7,7 +7,9 @@ use flare_server_core::error::ErrorCode;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 
-use crate::infrastructure::{OnlineServiceClient, forwarder::MessageForwarder};
+use crate::application::handlers::{
+    DeviceRouteHandler, MessageRoutingHandler,
+};
 use crate::util;
 
 /// Router 服务 gRPC 处理器
@@ -17,91 +19,39 @@ use crate::util;
 /// - 提供设备路由查询能力
 /// - 路由消息到业务系统（根据 SVID）
 /// - 无状态服务，所有数据实时从 Online 服务查询
+///
+/// # DDD + CQRS 架构
+/// Interface 层通过 Application 层调用，不直接访问 Infrastructure 层
 #[derive(Clone)]
 pub struct RouteHandler {
-    online_client: Arc<OnlineServiceClient>,
-    message_forwarder: Arc<MessageForwarder>,
+    device_route_handler: Arc<DeviceRouteHandler>,
+    message_routing_handler: Arc<MessageRoutingHandler>,
 }
 
 impl RouteHandler {
-    pub fn new(online_client: Arc<OnlineServiceClient>, message_forwarder: Arc<MessageForwarder>) -> Self {
-        Self { 
-            online_client,
-            message_forwarder,
+    pub fn new(
+        device_route_handler: Arc<DeviceRouteHandler>,
+        message_routing_handler: Arc<MessageRoutingHandler>,
+    ) -> Self {
+        Self {
+            device_route_handler,
+            message_routing_handler,
         }
     }
 
-    /// 根据策略选择推送目标设备
-    fn select_targets_by_strategy(
-        &self,
-        devices: Vec<flare_proto::signaling::online::DeviceInfo>,
-        strategy: PushStrategy,
-        user_id: &str,
-    ) -> Vec<RouteTarget> {
-        if devices.is_empty() {
-            return vec![];
+    /// 将 DeviceRoute 转换为 RouteTarget（protobuf 类型）
+    fn device_route_to_target(route: &crate::domain::entities::device_route::DeviceRoute) -> RouteTarget {
+        // 注意：DeviceRoute 中没有 device_platform 字段，需要从 Online 服务获取
+        // 这里简化处理，使用默认值
+        RouteTarget {
+            user_id: route.user_id.clone(),
+            device_id: route.device_id.clone(),
+            device_platform: String::new(), // TODO: 从 Online 服务获取 platform 信息
+            gateway_id: route.gateway_id.clone(),
+            server_id: route.server_id.clone(),
+            priority: route.device_priority,
+            quality_score: route.quality_score,
         }
-
-        let mut targets: Vec<RouteTarget> = devices
-            .into_iter()
-            .map(|d| RouteTarget {
-                user_id: user_id.to_string(),
-                device_id: d.device_id,
-                device_platform: d.platform,
-                gateway_id: d.gateway_id,
-                server_id: d.server_id,
-                priority: d.priority,
-                quality_score: calculate_quality_score(&d.connection_quality),
-            })
-            .collect();
-
-        match strategy {
-            PushStrategy::AllDevices => targets,
-            PushStrategy::BestDevice => {
-                // 选择单个最优设备（优先级最高 + 质量最好）
-                targets.sort_by(|a, b| {
-                    b.priority.cmp(&a.priority).then_with(|| {
-                        b.quality_score
-                            .partial_cmp(&a.quality_score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                });
-                targets.into_iter().take(1).collect()
-            }
-            PushStrategy::ActiveDevices => {
-                // 排除 Low 优先级设备 (priority = 0)
-                targets.retain(|t| t.priority > 0);
-                targets
-            }
-            PushStrategy::PrimaryDevice => {
-                // 只选择优先级最高的设备
-                if let Some(max_priority) = targets.iter().map(|t| t.priority).max() {
-                    targets.retain(|t| t.priority == max_priority);
-                }
-                targets.into_iter().take(1).collect()
-            }
-            _ => targets, // 默认返回所有设备
-        }
-    }
-}
-
-/// 计算链接质量评分 (0-100)
-fn calculate_quality_score(quality: &Option<flare_proto::ConnectionQuality>) -> f64 {
-    match quality {
-        Some(q) => {
-            // 综合考虑 RTT 和丢包率
-            let rtt_score = if q.rtt_ms > 0 {
-                (1000.0_f64 / q.rtt_ms as f64).min(100.0_f64)
-            } else {
-                100.0
-            };
-
-            let loss_score = (1.0 - q.packet_loss_rate) * 100.0;
-
-            // RTT 权重 60%，丢包率权重 40%
-            rtt_score * 0.6 + loss_score * 0.4
-        }
-        None => 50.0, // 默认中等质量
     }
 }
 
@@ -115,25 +65,30 @@ impl RouterService for RouteHandler {
         let user_id = &req.user_id;
         let strategy = PushStrategy::try_from(req.strategy).unwrap_or(PushStrategy::AllDevices);
 
-        info!(user_id = %user_id, strategy = ?strategy, "Selecting push targets");
-
-        // 从 Online 服务查询用户的所有在线设备
-        let devices_resp = match self.online_client.list_user_devices(user_id).await {
-            Ok(resp) => resp,
+        // 通过 Application 层调用
+        let routes = match self
+            .device_route_handler
+            .select_push_targets(user_id, strategy)
+            .await
+        {
+            Ok(routes) => routes,
             Err(e) => {
-                error!(error = %e, user_id = %user_id, "Failed to query user devices from Online service");
+                error!(error = %e, user_id = %user_id, "Failed to select push targets");
                 return Ok(Response::new(SelectPushTargetsResponse {
                     targets: vec![],
                     status: util::rpc_status_error(
                         ErrorCode::InternalError,
-                        &format!("Failed to query devices: {}", e),
+                        &format!("Failed to select push targets: {}", e),
                     ),
                 }));
             }
         };
 
-        // 根据策略选择目标设备
-        let targets = self.select_targets_by_strategy(devices_resp.devices, strategy, user_id);
+        // 转换为 protobuf 类型
+        let targets: Vec<RouteTarget> = routes
+            .iter()
+            .map(|r| Self::device_route_to_target(r))
+            .collect();
 
         info!(
             user_id = %user_id,
@@ -156,53 +111,35 @@ impl RouterService for RouteHandler {
         let user_id = &req.user_id;
         let device_id = &req.device_id;
 
-        info!(user_id = %user_id, device_id = %device_id, "Getting device route");
-
-        // 从 Online 服务查询设备信息
-        let devices_resp = match self.online_client.list_user_devices(user_id).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!(error = %e, user_id = %user_id, "Failed to query user devices");
-                return Ok(Response::new(GetDeviceRouteResponse {
-                    route: None,
-                    status: util::rpc_status_error(
-                        ErrorCode::InternalError,
-                        &format!("Failed to query devices: {}", e),
-                    ),
-                }));
-            }
-        };
-
-        // 查找指定设备
-        let device = devices_resp
-            .devices
-            .into_iter()
-            .find(|d| d.device_id == *device_id);
-
-        match device {
-            Some(d) => {
-                let route = RouteTarget {
-                    user_id: user_id.to_string(),
-                    device_id: d.device_id,
-                    device_platform: d.platform,
-                    gateway_id: d.gateway_id,
-                    server_id: d.server_id,
-                    priority: d.priority,
-                    quality_score: calculate_quality_score(&d.connection_quality),
-                };
-
+        // 通过 Application 层调用
+        match self
+            .device_route_handler
+            .get_device_route(user_id, device_id)
+            .await
+        {
+            Ok(Some(route)) => {
                 Ok(Response::new(GetDeviceRouteResponse {
-                    route: Some(route),
+                    route: Some(Self::device_route_to_target(&route)),
                     status: util::rpc_status_ok(),
                 }))
             }
-            None => {
+            Ok(None) => {
                 warn!(user_id = %user_id, device_id = %device_id, "Device not found");
                 Ok(Response::new(GetDeviceRouteResponse {
                     route: None,
                     status: util::rpc_status_error(
                         ErrorCode::UserNotFound,
                         "Device not found or offline",
+                    ),
+                }))
+            }
+            Err(e) => {
+                error!(error = %e, user_id = %user_id, "Failed to get device route");
+                Ok(Response::new(GetDeviceRouteResponse {
+                    route: None,
+                    status: util::rpc_status_error(
+                        ErrorCode::InternalError,
+                        &format!("Failed to get device route: {}", e),
                     ),
                 }))
             }
@@ -216,47 +153,36 @@ impl RouterService for RouteHandler {
         let req = request.into_inner();
         let device_count = req.devices.len();
 
-        info!(device_count = device_count, "Batch getting device routes");
+        // 通过 Application 层调用
+        let devices: Vec<(String, String)> = req
+            .devices
+            .into_iter()
+            .map(|d| (d.user_id, d.device_id))
+            .collect();
 
-        let mut routes = HashMap::new();
-
-        // 按用户分组查询（减少 RPC 调用次数）
-        let mut user_devices: HashMap<String, Vec<String>> = HashMap::new();
-        for dev in req.devices {
-            user_devices
-                .entry(dev.user_id)
-                .or_insert_with(Vec::new)
-                .push(dev.device_id);
-        }
-
-        // 为每个用户查询设备
-        for (user_id, device_ids) in user_devices {
-            match self.online_client.list_user_devices(&user_id).await {
-                Ok(devices_resp) => {
-                    for device in devices_resp.devices {
-                        if device_ids.contains(&device.device_id) {
-                            let key = format!("{}:{}", user_id, device.device_id);
-                            let route = RouteTarget {
-                                user_id: user_id.clone(),
-                                device_id: device.device_id,
-                                device_platform: device.platform,
-                                gateway_id: device.gateway_id,
-                                server_id: device.server_id,
-                                priority: device.priority,
-                                quality_score: calculate_quality_score(&device.connection_quality),
-                            };
-                            routes.insert(key, route);
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, user_id = %user_id, "Failed to query devices for user");
-                    continue;
-                }
+        let device_routes = match self
+            .device_route_handler
+            .batch_get_device_routes(devices)
+            .await
+        {
+            Ok(routes) => routes,
+            Err(e) => {
+                error!(error = %e, "Failed to batch get device routes");
+                return Ok(Response::new(BatchGetDeviceRoutesResponse {
+                    routes: HashMap::new(),
+                    status: util::rpc_status_error(
+                        ErrorCode::InternalError,
+                        &format!("Failed to batch get device routes: {}", e),
+                    ),
+                }));
             }
-        }
+        };
 
-        info!(found_routes = routes.len(), "Batch device routes retrieved");
+        // 转换为 protobuf 类型
+        let routes: HashMap<String, RouteTarget> = device_routes
+            .into_iter()
+            .map(|(k, v)| (k, Self::device_route_to_target(&v)))
+            .collect();
 
         Ok(Response::new(BatchGetDeviceRoutesResponse {
             routes,
@@ -305,17 +231,11 @@ impl RouterService for RouteHandler {
         // 记录路由决策耗时
         let decision_duration = decision_start.elapsed();
 
-        // 使用 MessageForwarder 转发消息
+        // 通过 Application 层调用
         let business_start = Instant::now();
-        let forward_result: Result<(String, Vec<u8>), anyhow::Error> = self
-            .message_forwarder
-            .forward_message(
-                svid,
-                req.payload,
-                req.context,
-                req.tenant,
-                None, // route_repository 暂时为 None，后续可以注入
-            )
+        let forward_result = self
+            .message_routing_handler
+            .route_message(svid, req.payload, req.context, req.tenant)
             .await;
 
         let business_duration = business_start.elapsed();

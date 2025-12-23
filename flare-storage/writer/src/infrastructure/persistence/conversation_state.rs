@@ -90,7 +90,7 @@ impl ConversationStateRepository for RedisConversationStateRepository {
             })
             .unwrap_or("application/unknown");
 
-        let last_message_id = message.id.clone();
+        let last_message_id = message.server_id.clone();
         let last_sender_id = message.sender_id.clone();
         let last_type = message.message_type.to_string();
         let last_content_type = content_type.to_string();

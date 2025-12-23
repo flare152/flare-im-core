@@ -75,7 +75,7 @@ impl PushDomainService {
     /// 分发推送消息（业务逻辑）- 从 Kafka 消费
     #[instrument(skip(self), fields(
         user_count = request.user_ids.len(),
-        message_id = %request.message.as_ref().map(|m| m.id.as_str()).unwrap_or(""),
+        message_id = %request.message.as_ref().map(|m| m.server_id.as_str()).unwrap_or(""),
         sender_id = %request.message.as_ref().map(|m| m.sender_id.as_str()).unwrap_or(""),
         receiver_id = %request.message.as_ref().map(|m| m.receiver_id.as_str()).unwrap_or(""),
     ))]
@@ -86,7 +86,7 @@ impl PushDomainService {
             if message.conversation_type == 1 {
                 if message.receiver_id.is_empty() {
                     error!(
-                        message_id = %message.id,
+                        message_id = %message.server_id,
                         conversation_id = %message.conversation_id,
                         sender_id = %message.sender_id,
                         user_ids = ?request.user_ids,
@@ -95,21 +95,21 @@ impl PushDomainService {
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,
                         format!("Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}", 
-                            message.id, message.conversation_id, message.sender_id)
+                            message.server_id, message.conversation_id, message.sender_id)
                     ).build_error());
                 }
 
                 // 如果 user_ids 为空，说明消息编排服务没有正确设置，这是错误
                 if request.user_ids.is_empty() {
                     error!(
-                        message_id = %message.id,
+                        message_id = %message.server_id,
                         receiver_id = %message.receiver_id,
                         "user_ids is empty in PushMessageRequest, message orchestrator should set it"
                     );
                     return Err(flare_server_core::error::ErrorBuilder::new(
                         flare_server_core::error::ErrorCode::InvalidParameter,
                         format!("user_ids cannot be empty for single chat message. message_id={}, receiver_id={}", 
-                            message.id, message.receiver_id)
+                            message.server_id, message.receiver_id)
                     ).build_error());
                 }
             }

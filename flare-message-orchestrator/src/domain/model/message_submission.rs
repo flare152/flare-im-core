@@ -40,8 +40,30 @@ impl MessageSubmission {
             message.conversation_id = request.conversation_id.clone();
         }
 
-        if message.id.is_empty() {
-            message.id = Uuid::new_v4().to_string();
+        // 🔹 核心逻辑：服务端始终生成新的 server_id
+        // 设计原则：
+        // 1. 服务端必须生成自己的 server_id（不依赖客户端提供的ID）
+        // 2. 客户端的ID保存在 client_msg_id 中（用于去重和ID映射）
+        // 3. 如果客户端提供了 server_id（旧消息或重试），保存到 extra 中但不使用
+        let client_provided_server_id = if !message.server_id.is_empty() {
+            Some(message.server_id.clone())
+        } else {
+            None
+        };
+        
+        // 始终生成新的服务端消息ID
+        message.server_id = Uuid::new_v4().to_string();
+        
+        // 如果客户端提供了 server_id，保存到 extra 中（用于审计和追踪）
+        if let Some(old_server_id) = client_provided_server_id {
+            message.extra.insert("original_server_id".to_string(), old_server_id);
+        }
+        
+        // 确保 client_msg_id 存在（如果客户端没有提供，使用 server_id 作为 fallback）
+        if message.client_msg_id.is_empty() {
+            // 如果客户端没有提供 client_msg_id，使用 server_id 作为 client_msg_id
+            // 这样可以保证 ID 映射的一致性
+            message.client_msg_id = message.server_id.clone();
         }
 
         if message.sender_id.is_empty() {
@@ -167,7 +189,8 @@ impl MessageSubmission {
             }
         }
 
-        let message_id = message.id.clone();
+        // 使用 server_id 作为 message_id（服务端生成的消息ID）
+        let message_id = message.server_id.clone();
 
         let kafka_payload = StoreMessageRequest {
             conversation_id: request.conversation_id,

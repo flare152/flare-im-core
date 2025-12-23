@@ -20,7 +20,7 @@ conversation_store_ttl_seconds = 3600
 
 # 压缩和加密配置
 compression_algorithm = "gzip"  # 可选值: none, gzip, zstd（默认: none）
-enable_encryption = true  # 是否启用加密（默认: false）
+enable_encryption = false  # 是否启用加密（默认: false）
 encryption_key = "01234567890123456789012345678901"  # 32字节密钥或64字符hex字符串（请在生产环境中修改为安全的密钥）
 
 [services.access_gateway.server]

@@ -50,7 +50,8 @@ pub struct MessageForwarder {
     business_clients: Arc<Mutex<HashMap<String, MessageServiceClient<Channel>>>>,
     /// 服务发现客户端
     service_client: Arc<Mutex<Option<ServiceClient>>>,
-    /// Router（可选，存在时用于分片/流控/跨机房决策）
+    /// Router（已废弃，建议使用 MessageRoutingDomainService）
+    #[deprecated(note = "Use MessageRoutingDomainService instead")]
     router: Arc<Mutex<Option<Arc<crate::service::router::Router>>>>,
     /// 默认租户ID
     default_tenant_id: String,
@@ -79,7 +80,8 @@ impl MessageForwarder {
         }
     }
 
-    /// 注入 Router（可选）
+    /// 注入 Router（已废弃，建议使用 MessageRoutingDomainService）
+    #[deprecated(note = "Use MessageRoutingDomainService instead")]
     pub async fn set_router(&self, router: Arc<crate::service::router::Router>) {
         let mut guard = self.router.lock().await;
         *guard = Some(router);
@@ -257,7 +259,7 @@ impl MessageForwarder {
         debug!(svid = %normalized_svid, "Forwarding message to business system");
 
         // 构造路由上下文（从 RequestContext.attributes 提取）
-        let route_ctx = crate::service::router::RouteContext {
+        let route_ctx = crate::domain::service::RouteContext {
             svid: normalized_svid.clone(),
             conversation_id: context
                 .as_ref()
@@ -281,29 +283,27 @@ impl MessageForwarder {
                 self.forward_to_im(payload, context, tenant).await
             }
             _ => {
-                // 其他业务系统：使用 Router 解析端点并转发
+                // 其他业务系统：使用路由仓储解析端点并转发
                 if let Some(repo) = route_repository {
-                    // 优先使用 Router 解析端点；无 Router 时回退到仓库查找
-                    let endpoint = if let Some(router_arc) = self.router.lock().await.clone() {
-                        router_arc
-                            .resolve_endpoint(&route_ctx, repo.clone())
-                            .await?
-                    } else {
-                        match repo.find_by_svid(&normalized_svid).await {
-                            Ok(Some(route)) => route.endpoint,
-                            Ok(None) => {
-                                return Err(anyhow::anyhow!(
-                                    "Business service not found for SVID {}",
-                                    normalized_svid
-                                ));
-                            }
-                            Err(e) => {
-                                return Err(anyhow::anyhow!(
-                                    "Failed to resolve route for SVID {}: {}",
-                                    normalized_svid,
-                                    e
-                                ));
-                            }
+                    // 从路由仓储查找端点
+                    use crate::domain::model::Svid;
+                    let svid = Svid::new(normalized_svid.clone())
+                        .map_err(|e| anyhow::anyhow!("Invalid SVID: {}", e))?;
+                    
+                    let endpoint = match repo.find_by_svid(svid.as_str()).await {
+                        Ok(Some(route)) => route.endpoint().as_str().to_string(),
+                        Ok(None) => {
+                            return Err(anyhow::anyhow!(
+                                "Business service not found for SVID {}",
+                                normalized_svid
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Failed to resolve route for SVID {}: {}",
+                                normalized_svid,
+                                e
+                            ));
                         }
                     };
 

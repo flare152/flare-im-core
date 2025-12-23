@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::domain::model::Route;
+use crate::domain::model::route::Route;
 
 /// 路由仓储接口（需要作为 trait 对象使用，保留 async-trait）
 #[async_trait]

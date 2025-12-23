@@ -1,26 +1,28 @@
-//! 消息处理应用服务
+//! 消息处理处理器
 //!
 //! 处理消息收发的业务流程编排
 
 use flare_core::common::error::{FlareError, Result};
 use flare_core::common::protocol::MessageCommand;
-use prost::Message as ProstMessage;
 use std::sync::Arc;
-use tracing::{error, info, instrument, warn};
-
-use crate::application::services::conversation_service_client::ConversationServiceClient;
-use crate::domain::service::ConversationDomainService;
+use tracing::{debug, error, info, instrument, warn};
+use crate::infrastructure::ConversationServiceClient;
+use crate::domain::service::{ConversationDomainService, MessageDomainService};
 use crate::infrastructure::AckPublisher;
 use crate::infrastructure::messaging::ack_sender::AckSender;
 use crate::infrastructure::messaging::message_router::MessageRouter;
 
-/// 消息处理应用服务
+/// 消息处理处理器（应用层 - 编排层）
 ///
 /// 职责：
-/// - 编排消息接收流程
-/// - 编排消息发送流程
-/// - 编排 ACK 处理流程
-pub struct MessageApplicationService {
+/// - 编排消息接收流程（调用领域服务）
+/// - 编排消息发送流程（调用基础设施）
+/// - 编排 ACK 处理流程（调用基础设施）
+/// 
+/// # 注意
+/// 此处理器不包含业务逻辑，业务逻辑在 MessageDomainService 中
+pub struct MessageHandler {
+    message_domain_service: Arc<MessageDomainService>,
     message_router: Option<Arc<MessageRouter>>,
     ack_sender: Arc<AckSender>,
     ack_publisher: Option<Arc<dyn AckPublisher>>,
@@ -29,8 +31,9 @@ pub struct MessageApplicationService {
     gateway_id: String,
 }
 
-impl MessageApplicationService {
+impl MessageHandler {
     pub fn new(
+        message_domain_service: Arc<MessageDomainService>,
         message_router: Option<Arc<MessageRouter>>,
         ack_sender: Arc<AckSender>,
         ack_publisher: Option<Arc<dyn AckPublisher>>,
@@ -39,6 +42,7 @@ impl MessageApplicationService {
         gateway_id: String,
     ) -> Self {
         Self {
+            message_domain_service,
             message_router,
             ack_sender,
             ack_publisher,
@@ -54,6 +58,9 @@ impl MessageApplicationService {
     /// 1. 从 payload 中提取 conversation_id
     /// 2. 路由消息到 Message Orchestrator
     /// 3. 发送 ACK 到客户端
+    ///
+    /// # 返回值
+    /// 返回服务端生成的消息 ID（server_id），用于在 ACK 中返回给 SDK
     #[instrument(skip(self, msg_cmd), fields(connection_id, user_id, message_id = %msg_cmd.message_id))]
     pub async fn handle_message_send(
         &self,
@@ -61,38 +68,42 @@ impl MessageApplicationService {
         user_id: &str,
         msg_cmd: &MessageCommand,
         tenant_id: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let start_time = std::time::Instant::now();
-        info!(
-            user_id = %user_id,
+        debug!(
+            user_id,
             connection_id = %connection_id,
             message_id = %msg_cmd.message_id,
             message_len = msg_cmd.payload.len(),
             "Message received from client"
         );
-
-        // 尝试解析消息内容以便日志追踪
-        if let Ok(message) = flare_proto::common::Message::decode(msg_cmd.payload.as_slice()) {
-            tracing::debug!(
-                    user_id = %user_id,
-                    message_id = %msg_cmd.message_id,
-                    sender_id = %message.sender_id,
-                    receiver_id = %message.receiver_id,
-                    "Parsed message content for logging"
+        // 检查消息路由器
+        let router = self.message_router.as_ref().ok_or_else(|| {
+            let error_msg = "Message Router not configured";
+            error!(
+                user_id = %user_id,
+                connection_id = %connection_id,
+                message_id = %msg_cmd.message_id,
+                "Message Router not configured"
             );
+            FlareError::system(error_msg)
+        })?;
+
+        // 验证消息格式（领域层业务规则）
+        if let Err(e) = self.message_domain_service.validate_message(&msg_cmd) {
+            let error_msg = format!("无效的消息格式: {}", e);
+            error!(
+                ?e,
+                user_id = %user_id,
+                connection_id = %connection_id,
+                message_id = %msg_cmd.message_id,
+                "Failed to validate message"
+            );
+            return Err(e);
         }
 
-        // 检查消息路由器
-        let router = match &self.message_router {
-            Some(router) => router,
-            None => {
-                warn!("Message Router not configured, message will not be routed");
-                return Ok(());
-            }
-        };
-
-        // 从 payload 中提取 conversation_id
-        let conversation_id = match self.extract_conversation_id_from_payload(&msg_cmd.payload) {
+        // 提取 conversation_id（领域层业务逻辑）
+        let conversation_id = match self.message_domain_service.extract_conversation_id(&msg_cmd) {
             Ok(sid) => sid,
             Err(e) => {
                 let error_msg = format!("无效的消息格式: {}", e);
@@ -100,23 +111,11 @@ impl MessageApplicationService {
                     ?e,
                     user_id = %user_id,
                     connection_id = %connection_id,
-                    "Failed to extract conversation_id from message payload"
+                    message_id = %msg_cmd.message_id,
+                    "Failed to extract conversation_id from message"
                 );
-                // 发送错误通知
-                if let Err(e) = self
-                    .ack_sender
-                    .send_error_notification(connection_id, &msg_cmd.message_id, &error_msg)
-                    .await
-                {
-                    warn!(
-                        ?e,
-                        user_id = %user_id,
-                        connection_id = %connection_id,
-                        message_id = %msg_cmd.message_id,
-                        "Failed to send error notification to client"
-                    );
-                }
-                return Ok(());
+                // 返回错误，不再继续处理
+                return Err(e);
             }
         };
 
@@ -129,29 +128,7 @@ impl MessageApplicationService {
         let route_duration = start_time.elapsed();
         match route_res {
             Ok(response) => {
-                info!(
-                    user_id = %user_id,
-                    connection_id = %connection_id,
-                    conversation_id = %conversation_id,
-                    message_id = %response.message_id,
-                    duration_ms = route_duration.as_millis(),
-                    "Message routed successfully"
-                );
-                // 发送 ACK 到客户端
-                if let Err(e) = self
-                    .ack_sender
-                    .send_message_ack(connection_id, &response.message_id, &conversation_id)
-                    .await
-                {
-                    // ACK 发送失败不影响消息路由，只记录警告
-                    warn!(
-                        ?e,
-                        user_id = %user_id,
-                        connection_id = %connection_id,
-                        message_id = %response.message_id,
-                        "Failed to send ACK to client (message was routed successfully)"
-                    );
-                }
+                Ok(response.message_id.clone())
             }
             Err(err) => {
                 let error_msg = format!("消息发送失败: {}", err);
@@ -164,25 +141,10 @@ impl MessageApplicationService {
                     duration_ms = route_duration.as_millis(),
                     "Failed to route message to Message Orchestrator"
                 );
-                // 发送错误通知
-                if let Err(e) = self
-                    .ack_sender
-                    .send_error_notification(connection_id, &original_message_id, &error_msg)
-                    .await
-                {
-                    // 错误通知发送失败不影响错误处理流程，只记录警告
-                    warn!(
-                        ?e,
-                        user_id = %user_id,
-                        connection_id = %connection_id,
-                        message_id = %original_message_id,
-                        "Failed to send error notification to client"
-                    );
-                }
+                // 返回错误，不再继续处理
+                Err(FlareError::message_send_failed(error_msg))
             }
         }
-
-        Ok(())
     }
 
     /// 处理客户端 ACK
@@ -284,23 +246,5 @@ impl MessageApplicationService {
         Ok(())
     }
 
-    /// 从 payload 中提取 conversation_id
-    fn extract_conversation_id_from_payload(&self, payload: &[u8]) -> Result<String> {
-        use flare_proto::Message as ProtoMessage;
-
-        let message = ProtoMessage::decode(payload).map_err(|e| {
-            FlareError::deserialization_error(format!(
-                "Failed to decode Message from payload: {}",
-                e
-            ))
-        })?;
-
-        if message.conversation_id.is_empty() {
-            return Err(FlareError::message_format_error(
-                "Message.conversation_id is required but empty".to_string(),
-            ));
-        }
-
-        Ok(message.conversation_id)
-    }
 }
+

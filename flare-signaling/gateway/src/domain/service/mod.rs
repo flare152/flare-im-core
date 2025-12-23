@@ -4,6 +4,7 @@ pub mod multi_device_push_service;
 pub mod push_domain_service;
 pub mod conversation_domain_service;
 pub mod subscription_service;
+pub mod message_domain_service;
 
 // 添加Online服务客户端的导入
 mod online_client;
@@ -17,6 +18,7 @@ pub use multi_device_push_service::MultiDevicePushService;
 pub use push_domain_service::{DomainPushResult, PushDomainService};
 pub use conversation_domain_service::ConversationDomainService;
 pub use subscription_service::SubscriptionService;
+pub use message_domain_service::MessageDomainService;
 
 #[cfg(test)]
 mod push_domain_service_test;

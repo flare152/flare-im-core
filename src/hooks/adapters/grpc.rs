@@ -541,7 +541,7 @@ fn build_record(record: &MessageRecord) -> ProtoHookMessageRecord {
     let persisted_ts = system_time_to_timestamp(record.persisted_at);
 
     let mut message = ProtoStorageMessage::default();
-    message.id = record.message_id.clone();
+    message.server_id = record.message_id.clone();
     message.conversation_id = record.conversation_id.clone();
     message.sender_id = record.sender_id.clone();
     message.conversation_type = record

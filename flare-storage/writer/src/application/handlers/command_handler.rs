@@ -82,7 +82,7 @@ impl MessagePersistenceCommandHandler {
         let request = command.request;
 
         // 在移动 request 之前，先保存需要的信息用于错误日志
-        let message_id_for_error = request.message.as_ref().map(|m| m.id.clone());
+        let message_id_for_error = request.message.as_ref().map(|m| m.server_id.clone());
 
         // 提取租户ID用于指标
         let tenant_id = request
@@ -98,9 +98,9 @@ impl MessagePersistenceCommandHandler {
             let span = tracing::Span::current();
             set_tenant_id(&span, &tenant_id);
             if let Some(message) = &request.message {
-                if !message.id.is_empty() {
-                    set_message_id(&span, &message.id);
-                    span.record("message_id", &message.id);
+                if !message.server_id.is_empty() {
+                    set_message_id(&span, &message.server_id);
+                    span.record("message_id", &message.server_id);
                 }
             }
         }

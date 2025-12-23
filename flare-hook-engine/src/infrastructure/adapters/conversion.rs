@@ -80,7 +80,7 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
     // 将 MessageRecord 转换为 protobuf Message
     let ts = system_time_to_timestamp(record.persisted_at);
     let proto_message = flare_proto::common::Message {
-        id: record.message_id.clone(),
+        server_id: record.message_id.clone(),
         conversation_id: record.conversation_id.clone(),
         client_msg_id: record.client_message_id.clone().unwrap_or_default(),
         sender_id: record.sender_id.clone(),

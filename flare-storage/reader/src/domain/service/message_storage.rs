@@ -161,7 +161,7 @@ impl MessageStorageDomainService {
         let next_cursor = if messages.len() == limit {
             aggregated
                 .last()
-                .map(|last| format!("{}:{}", last.timeline.ingestion_ts, last.message.id))
+                .map(|last| format!("{}:{}", last.timeline.ingestion_ts, last.message.server_id))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -214,7 +214,7 @@ impl MessageStorageDomainService {
                 .last()
                 .and_then(|msg| {
                     // 从 extra 字段提取 seq（使用工具函数）
-                    extract_seq_from_message(msg).map(|seq| format!("seq:{}:{}", seq, msg.id))
+                    extract_seq_from_message(msg).map(|seq| format!("seq:{}:{}", seq, msg.server_id))
                 })
                 .unwrap_or_default()
         } else {
@@ -272,7 +272,7 @@ impl MessageStorageDomainService {
 
         let mut results = Vec::new();
         for message in messages {
-            if !seen.insert(message.id.clone()) {
+            if !seen.insert(message.server_id.clone()) {
                 continue;
             }
 
@@ -735,7 +735,7 @@ impl MessageStorageDomainService {
         let cleared_count = messages.len();
 
         // 批量更新 visibility 为 DELETED
-        let message_ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
+        let message_ids: Vec<String> = messages.iter().map(|m| m.server_id.clone()).collect();
         if !message_ids.is_empty() {
             self.storage
                 .batch_update_visibility(&message_ids, user_id, VisibilityStatus::VisibilityDeleted)

@@ -9,7 +9,7 @@ use flare_server_core::discovery::ServiceClient;
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::application::services::{ConnectionApplicationService, MessageApplicationService};
+use crate::application::handlers::{ConnectionHandler, MessageHandler};
 use crate::domain::repository::SignalingGateway;
 use crate::infrastructure::AckPublisher;
 use crate::infrastructure::messaging::ack_sender::AckSender;
@@ -43,9 +43,9 @@ pub struct LongConnectionHandler {
         >,
     >,
     pub(crate) conversation_service_discover: Arc<Mutex<Option<ServiceClient>>>,
-    // 应用层服务
-    pub connection_app_service: Arc<ConnectionApplicationService>,
-    pub message_app_service: Arc<MessageApplicationService>,
+    // 应用层处理器
+    pub connection_handler: Arc<ConnectionHandler>,
+    pub message_handler: Arc<MessageHandler>,
 }
 
 impl LongConnectionHandler {
@@ -55,8 +55,8 @@ impl LongConnectionHandler {
         ack_publisher: Option<Arc<dyn AckPublisher>>,
         message_router: Option<Arc<MessageRouter>>,
         metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
-        connection_app_service: Arc<ConnectionApplicationService>,
-        message_app_service: Arc<MessageApplicationService>,
+        connection_handler: Arc<ConnectionHandler>,
+        message_handler: Arc<MessageHandler>,
     ) -> Self {
         let server_handle = Arc::new(Mutex::new(None));
         let ack_sender = Arc::new(AckSender::new(server_handle.clone()));
@@ -72,8 +72,8 @@ impl LongConnectionHandler {
             metrics,
             conversation_service_client: Arc::new(Mutex::new(None)),
             conversation_service_discover: Arc::new(Mutex::new(None)),
-            connection_app_service,
-            message_app_service,
+            connection_handler,
+            message_handler,
         }
     }
 
@@ -95,7 +95,7 @@ impl LongConnectionHandler {
             gateway_id.clone(),
         ));
 
-        let connection_app_service = Arc::new(ConnectionApplicationService::new(
+        let connection_handler = Arc::new(ConnectionHandler::new(
             conversation_domain_service.clone(),
             Arc::new(
                 crate::infrastructure::connection_query::ManagerConnectionQuery::new(Arc::new(
@@ -105,7 +105,9 @@ impl LongConnectionHandler {
             metrics.clone(),
         ));
 
-        let message_app_service = Arc::new(MessageApplicationService::new(
+        let message_domain_service = Arc::new(crate::domain::service::MessageDomainService::new());
+        let message_handler = Arc::new(MessageHandler::new(
+            message_domain_service,
             message_router.clone(),
             ack_sender.clone(),
             ack_publisher.clone(),
@@ -125,8 +127,8 @@ impl LongConnectionHandler {
             metrics,
             conversation_service_client: Arc::new(Mutex::new(None)),
             conversation_service_discover: Arc::new(Mutex::new(None)),
-            connection_app_service,
-            message_app_service,
+            connection_handler,
+            message_handler,
         }
     }
 
@@ -242,7 +244,7 @@ impl LongConnectionHandler {
         };
 
         // 调用应用层服务刷新心跳，将 flare_server_core::error::Result 转换为 flare_core::common::error::Result
-        self.connection_app_service
+        self.connection_handler
             .refresh_session(connection_id, &user_id, &conversation_id)
             .await
             .map_err(|e| CoreFlareError::system(format!("Failed to refresh session: {}", e)))

@@ -34,14 +34,19 @@ impl AckSender {
     ///
     /// # 参数
     /// * `connection_id` - 连接 ID
-    /// * `message_id` - 消息 ID
+    /// * `message_id` - 服务端生成的消息ID（server_id），来自 SendMessageResponse.message_id
     /// * `conversation_id` - 会话 ID
     ///
     /// # ACK 类型
     /// 根据 MessageCommand 规范和 transport.proto 定义：
     /// - Type::Ack (1)：确认回执
     /// - payload：序列化的 SendEnvelopeAck（来自 transport.proto）
+    ///   - SendEnvelopeAck.message_id 字段包含服务端生成的消息ID（server_id）
     /// - metadata 包含：conversation_id（用于路由）
+    ///
+    /// # 说明
+    /// SDK 会从 ACK 的 SendEnvelopeAck.message_id 字段获取服务端消息ID，
+    /// 并更新本地消息的 server_id 字段，完成 client_msg_id 到 server_id 的映射
     pub async fn send_message_ack(
         &self,
         connection_id: &str,
@@ -49,8 +54,9 @@ impl AckSender {
         conversation_id: &str,
     ) -> Result<()> {
         // 构建 SendEnvelopeAck（使用 transport.proto 定义）
+        // message_id 字段包含服务端生成的消息ID（server_id），SDK 会使用此ID更新本地消息
         let send_ack = flare_proto::common::SendEnvelopeAck {
-            message_id: message_id.to_string(),
+            message_id: message_id.to_string(), // 服务端生成的消息ID（server_id）
             status: flare_proto::common::AckStatus::Success as i32,
             error_code: 0,
             error_message: String::new(),

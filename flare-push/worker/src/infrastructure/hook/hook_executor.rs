@@ -146,7 +146,7 @@ impl HookExecutor {
     ///
     /// 注意：这是同步 Hook，可能修改推送内容或拒绝推送
     /// 需要等待 Hook 执行完成才能继续推送
-    #[instrument(skip(self, ctx, push_request), fields(message_id = ?push_request.message.as_ref().map(|m| &m.id)))]
+    #[instrument(skip(self, ctx, push_request), fields(message_id = ?push_request.message.as_ref().map(|m| &m.server_id)))]
     pub async fn push_pre_send(
         &self,
         ctx: &HookContext,
@@ -170,7 +170,7 @@ impl HookExecutor {
                 message_id: push_request
                     .message
                     .as_ref()
-                    .map(|m| m.id.clone())
+                    .map(|m| m.server_id.clone())
                     .unwrap_or_default(),
                 metadata: std::collections::HashMap::new(), // 暂时没有元数据
             };

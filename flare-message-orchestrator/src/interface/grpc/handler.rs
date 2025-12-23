@@ -99,7 +99,7 @@ impl MessageGrpcHandler {
         // 检查是否是操作消息（根据架构优化方案，操作消息通过 NotificationContent 传递）
         if message.message_type == flare_proto::MessageType::Notification as i32 {
             tracing::debug!(
-                message_id = %message.id,
+                message_id = %message.server_id,
                 message_type = message.message_type,
                 "Received notification message, attempting to extract operation"
             );
@@ -116,7 +116,7 @@ impl MessageGrpcHandler {
                     .await;
             } else {
                 tracing::warn!(
-                    message_id = %message.id,
+                    message_id = %message.server_id,
                     "Notification message but failed to extract operation"
                 );
             }
@@ -185,14 +185,14 @@ impl MessageGrpcHandler {
         if message.conversation_type == flare_proto::common::ConversationType::Single as i32 {
             if message.receiver_id.is_empty() {
                 error!(
-                    message_id = %message.id,
+                    message_id = %message.server_id,
                     conversation_id = %message.conversation_id,
                     sender_id = %message.sender_id,
                     "Single chat message missing receiver_id in gRPC handler"
                 );
                 return Err(Status::invalid_argument(format!(
                     "Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}",
-                    message.id, message.conversation_id, message.sender_id
+                    message.server_id, message.conversation_id, message.sender_id
                 )));
             }
         }
@@ -290,33 +290,53 @@ impl MessageGrpcHandler {
         match OperationType::try_from(operation.operation_type) {
             Ok(OperationType::Read) => {
                 // 标记已读：直接委托给 Storage Reader
-                // 验证操作数据存在（虽然当前不需要使用具体数据）
-                if !matches!(operation.operation_data, Some(OperationData::Read(_))) {
-                    return Err(Status::invalid_argument(
-                        "Read operation requires ReadOperationData",
-                    ));
-                }
-
-                let read_req = MarkMessageReadRequest {
-                    message_id: operation.target_message_id.clone(),
-                    user_id: operation.operator_id.clone(),
-                    context: request.context.clone(),
-                    tenant: request.tenant.clone(),
+                // 支持批量已读（ReadOperationData 包含 message_ids 列表）
+                let read_data = match &operation.operation_data {
+                    Some(OperationData::Read(data)) => data,
+                    _ => {
+                        return Err(Status::invalid_argument(
+                            "Read operation requires ReadOperationData",
+                        ));
+                    }
                 };
 
-                let resp = client
-                    .clone()
-                    .mark_message_read(Request::new(read_req))
-                    .await?;
-                let inner = resp.into_inner();
+                // 批量标记已读（逐个处理，因为 Storage Reader 只支持单个消息）
+                let mut success_count = 0;
+                let mut failed_count = 0;
+                
+                for message_id in &read_data.message_ids {
+                    let read_req = MarkMessageReadRequest {
+                        message_id: message_id.clone(),
+                        user_id: operation.operator_id.clone(),
+                        context: request.context.clone(),
+                        tenant: request.tenant.clone(),
+                    };
 
-                // 转换为 SendMessageResponse
+                    match client.clone().mark_message_read(Request::new(read_req)).await {
+                        Ok(resp) => {
+                            if resp.into_inner().success {
+                                success_count += 1;
+                            } else {
+                                failed_count += 1;
+                            }
+                        }
+                        Err(_) => {
+                            failed_count += 1;
+                        }
+                    }
+                }
+
+                // 转换为 SendMessageResponse（使用第一条消息ID作为目标）
                 Ok(Response::new(SendMessageResponse {
-                    success: inner.success,
-                    message_id: operation.target_message_id,
+                    success: success_count > 0,
+                    message_id: if !read_data.message_ids.is_empty() {
+                        read_data.message_ids[0].clone()
+                    } else {
+                        operation.target_message_id.clone()
+                    },
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
-                    status: inner.status,
+                    status: Some(ok_status()),
                 }))
             }
             Ok(OperationType::ReactionAdd) | Ok(OperationType::ReactionRemove) => {
@@ -636,7 +656,7 @@ impl MessageGrpcHandler {
                     Status::invalid_argument("Reply operation requires reply_content")
                 })?;
                 let reply_message = flare_proto::Message {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    server_id: uuid::Uuid::new_v4().to_string(),
                     conversation_id: request.conversation_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 回复消息：receiver_id 由原消息决定
@@ -716,7 +736,7 @@ impl MessageGrpcHandler {
                     Status::invalid_argument("ThreadReply operation requires reply_content")
                 })?;
                 let thread_message = flare_proto::Message {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    server_id: uuid::Uuid::new_v4().to_string(),
                     conversation_id: request.conversation_id.clone(),
                     sender_id: operation.operator_id.clone(),
                     receiver_id: String::new(), // 话题回复：receiver_id 由话题决定
@@ -1285,17 +1305,30 @@ impl MessageGrpcHandler {
             attrs.insert("edit_reason".to_string(), req.reason);
         }
 
-        // 更新消息内容（通过attributes存储新内容，实际应该更新content字段）
-        // 注意：这里使用attributes作为临时方案，理想情况下应该直接更新Message.content
-        // 但由于Storage Reader的限制，暂时使用attributes存储编辑后的内容引用
+        // 更新消息内容
+        // 注意：由于 Storage Reader 的限制，编辑后的内容通过推送通知同步
+        // attributes 中记录编辑元数据，实际内容更新通过推送通知传递
         let new_content_clone = req.new_content.clone();
         if let Some(new_content) = &req.new_content {
-            // 将新内容序列化存储到attributes中（临时方案）
-            // 实际应该通过Storage Writer直接更新content字段
-            attrs.insert(
-                "edited_content_type".to_string(),
-                format!("{:?}", new_content),
-            );
+            // 记录编辑后的内容类型（用于客户端识别）
+            let content_type = match &new_content.content {
+                Some(flare_proto::common::message_content::Content::Text(_)) => "text",
+                Some(flare_proto::common::message_content::Content::Image(_)) => "image",
+                Some(flare_proto::common::message_content::Content::Video(_)) => "video",
+                Some(flare_proto::common::message_content::Content::Audio(_)) => "audio",
+                Some(flare_proto::common::message_content::Content::File(_)) => "file",
+                Some(flare_proto::common::message_content::Content::Location(_)) => "location",
+                Some(flare_proto::common::message_content::Content::Card(_)) => "card",
+                Some(flare_proto::common::message_content::Content::Notification(_)) => "notification",
+                Some(flare_proto::common::message_content::Content::Custom(_)) => "custom",
+                Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
+                Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
+                Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
+                Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
+                Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
+                None => "unknown",
+            };
+            attrs.insert("edited_content_type".to_string(), content_type.to_string());
         }
 
         let storage_req = SetMessageAttributesRequest {
@@ -1813,7 +1846,7 @@ impl MessageGrpcHandler {
 
                 // 设置转发信息（注意：forward_info 字段在新版 Message 中已移除）
                 // forward_message.forward_info = Some(flare_proto::common::ForwardContent {
-                //     message_ids: vec![msg.id.clone()],
+                //     message_ids: vec![msg.server_id.clone()],
                 //     forward_reason: req.reason.clone(),
                 //     metadata: std::collections::HashMap::new(),
                 // });

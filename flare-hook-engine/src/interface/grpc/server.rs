@@ -86,7 +86,7 @@ impl HookExtensionServer {
             .unwrap_or_else(std::time::SystemTime::now);
 
         Ok(MessageRecord {
-            message_id: message.id.clone(),
+            message_id: message.server_id.clone(),
             client_message_id: None,
             conversation_id: message.conversation_id.clone(),
             sender_id: message.sender_id.clone(),

@@ -108,11 +108,6 @@ pub fn build_hook_context(
         ctx.attributes
             .entry("receiver_id".into())
             .or_insert(message.receiver_id.clone());
-        if !message.receiver_ids.is_empty() {
-            ctx.attributes
-                .entry("receiver_ids".into())
-                .or_insert(message.receiver_ids.join(","));
-        }
         if let Some(client_msg_id) = extract_client_message_id(message) {
             ctx.attributes
                 .entry("client_message_id".into())
@@ -149,7 +144,7 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     let mut draft = MessageDraft::new(content_bytes);
     let message_type_label = detect_message_type(message);
 
-    if let Some(id) = non_empty(message.id.clone()) {
+    if let Some(id) = non_empty(message.server_id.clone()) {
         draft.set_message_id(id);
     }
 
@@ -200,18 +195,10 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
     metadata
         .entry("receiver_id".into())
         .or_insert(message.receiver_id.clone());
-    metadata
-        .entry("receiver_ids".into())
-        .or_insert(if message.receiver_ids.is_empty() {
-            String::new()
-        } else {
-            message.receiver_ids.join(",")
-        });
     draft.metadata = metadata;
 
     draft.extra("conversation_id", json!(request.conversation_id));
     draft.extra("sync", json!(request.sync));
-    draft.extra("receiver_ids", json!(message.receiver_ids));
 
     // request.context 是 RequestContext，我们需要从中提取信息构建 JSON
     if let Some(request_ctx) = request.context.as_ref() {
@@ -260,7 +247,7 @@ pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &Message
 
     if let Some(message) = request.message.as_mut() {
         if let Some(id) = draft.message_id.as_ref() {
-            message.id = id.clone();
+            message.server_id = id.clone();
         }
 
         if let Some(conv) = draft.conversation_id.as_ref() {
@@ -349,8 +336,8 @@ pub fn build_message_record(
     }
 
     MessageRecord {
-        message_id: message.id.clone(),
-        client_message_id: None,
+        message_id: message.server_id.clone(),
+        client_message_id: Some(message.client_msg_id.clone()),
         conversation_id: message.conversation_id.clone(),
         sender_id: message.sender_id.clone(),
         conversation_type: Some(message.conversation_type.clone()),

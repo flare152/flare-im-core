@@ -78,9 +78,9 @@ impl MessageDomainService {
             // 由于缺少相应的追踪函数，暂时注释掉这些调用
             // set_tenant_id(&_span, &tenant_id);
             if let Some(message) = &request.message {
-                if !message.id.is_empty() {
-                    // set_message_id(&_span, &message.id);
-                    _span.record("message_id", &message.id);
+                if !message.server_id.is_empty() {
+                    // set_message_id(&_span, &message.server_id);
+                    _span.record("message_id", &message.server_id);
                 }
                 if !message.sender_id.is_empty() {
                     // set_user_id(&_span, &message.sender_id);
@@ -353,14 +353,14 @@ impl MessageDomainService {
         if message_for_push.conversation_type == 1 {
             if message_for_push.receiver_id.is_empty() {
                 tracing::error!(
-                    message_id = %message_for_push.id,
+                    message_id = %message_for_push.server_id,
                     conversation_id = %message_for_push.conversation_id,
                     sender_id = %message_for_push.sender_id,
                     "Single chat message missing receiver_id after clone"
                 );
                 anyhow::bail!(
                     "Single chat message must provide receiver_id. message_id={}, conversation_id={}, sender_id={}",
-                    message_for_push.id,
+                    message_for_push.server_id,
                     message_for_push.conversation_id,
                     message_for_push.sender_id
                 );
