@@ -150,7 +150,8 @@ impl AckPublisher for GrpcAckPublisher {
                     tenant: None,
                     target_user_ids: vec![event.user_id.clone()],
                     ack: Some(flare_proto::common::SendEnvelopeAck {
-                        message_id: event.ack.message_id.clone(),
+                        server_msg_id: "".to_string(),
+                        seq: 0,
                         status: match event.ack.status {
                             AckStatusValue::Success => {
                                 flare_proto::common::AckStatus::Success as i32

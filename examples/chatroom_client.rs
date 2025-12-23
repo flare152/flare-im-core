@@ -584,7 +584,7 @@ fn parse_received_message(data: &[u8]) -> Option<MessageDisplayInfo> {
                 Some(flare_proto::common::server_packet::Payload::SendAck(ack)) => {
                     debug!(
                         "收到 SendAck: message_id={}, status={}",
-                        ack.message_id, ack.status
+                        ack.server_msg_id, ack.status
                     );
                     // SendAck 不是我们要处理的消息类型，返回 None
                     return None;
@@ -921,7 +921,7 @@ impl ChatListener {
         // 解析SendEnvelopeAck
         match flare_proto::common::SendEnvelopeAck::decode(&msg_cmd.payload[..]) {
             Ok(ack) => {
-                let message_id = &ack.message_id;
+                let message_id = &ack.server_msg_id;
                 let status = ack.status;
 
                 // 检查是否是我们发送的消息的ACK
@@ -958,54 +958,55 @@ impl ChatListener {
     /// 发送客户端ACK给服务器（确认收到消息）
     async fn send_client_ack(&self, message_id: &str, sender_id: &str) -> Result<()> {
         // 构建SendEnvelopeAck
-        let send_ack = flare_proto::common::SendEnvelopeAck {
-            message_id: message_id.to_string(),
-            status: flare_proto::common::AckStatus::Success as i32,
-            error_code: 0,
-            error_message: String::new(),
-        };
+        // let send_ack = flare_proto::common::SendEnvelopeAck {
+        //     message_id: message_id.to_string(),
+        //     status: flare_proto::common::AckStatus::Success as i32,
+        //     seq:0,
+        //     error_code: 0,
+        //     error_message: String::new(),
+        // };
 
-        // 序列化
-        let mut payload = Vec::new();
-        send_ack.encode(&mut payload).map_err(|e| {
-            flare_core::common::error::FlareError::serialization_error(format!(
-                "Failed to encode SendEnvelopeAck: {}",
-                e
-            ))
-        })?;
+        // // 序列化
+        // let mut payload = Vec::new();
+        // send_ack.encode(&mut payload).map_err(|e| {
+        //     flare_core::common::error::FlareError::serialization_error(format!(
+        //         "Failed to encode SendEnvelopeAck: {}",
+        //         e
+        //     ))
+        // })?;
 
-        // 构建ACK metadata
-        let mut metadata = std::collections::HashMap::new();
-        // 可以添加conversation_id等元数据
-        if let Some(conversation_id) = self.get_conversation_id_for_sender(sender_id) {
-            metadata.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
-        }
+        // // 构建ACK metadata
+        // let mut metadata = std::collections::HashMap::new();
+        // // 可以添加conversation_id等元数据
+        // if let Some(conversation_id) = self.get_conversation_id_for_sender(sender_id) {
+        //     metadata.insert("conversation_id".to_string(), conversation_id.as_bytes().to_vec());
+        // }
 
-        // 创建ACK命令
-        let ack_cmd = flare_core::common::protocol::MessageCommand {
-            r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack
-                as i32,
-            message_id: message_id.to_string(),
-            payload,
-            metadata,
-            seq: 0,
-        };
+        // // 创建ACK命令
+        // let ack_cmd = flare_core::common::protocol::MessageCommand {
+        //     r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack
+        //         as i32,
+        //     message_id: message_id.to_string(),
+        //     payload,
+        //     metadata,
+        //     seq: 0,
+        // };
 
-        let ack_frame = flare_core::common::protocol::frame_with_message_command(
-            ack_cmd,
-            flare_core::common::protocol::Reliability::AtLeastOnce,
-        );
+        // let ack_frame = flare_core::common::protocol::frame_with_message_command(
+        //     ack_cmd,
+        //     flare_core::common::protocol::Reliability::AtLeastOnce,
+        // );
 
-        // 发送ACK
-        let client_guard = self.client.lock().await;
-        if let Some(client) = client_guard.as_ref() {
-            client.send_frame(&ack_frame).await?;
-            debug!(message_id = %message_id, "客户端ACK已发送");
-        } else {
-            return Err(flare_core::common::error::FlareError::system(
-                "Client not initialized".to_string(),
-            ));
-        }
+        // // 发送ACK
+        // let client_guard = self.client.lock().await;
+        // if let Some(client) = client_guard.as_ref() {
+        //     client.send_frame(&ack_frame).await?;
+        //     debug!(message_id = %message_id, "客户端ACK已发送");
+        // } else {
+        //     return Err(flare_core::common::error::FlareError::system(
+        //         "Client not initialized".to_string(),
+        //     ));
+        // }
 
         Ok(())
     }

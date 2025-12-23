@@ -147,7 +147,7 @@ impl PushDomainService {
     }
 
     /// 处理客户端 ACK（从 Gateway 接收）
-    #[instrument(skip(self), fields(message_id = %ack.message_id))]
+    #[instrument(skip(self), fields(message_id = %ack.server_msg_id))]
     pub async fn handle_client_ack(
         &self,
         user_id: &str,
@@ -155,25 +155,25 @@ impl PushDomainService {
     ) -> Result<()> {
         let start_time = Instant::now();
         info!(
-            message_id = %ack.message_id,
+            message_id = %ack.server_msg_id,
             user_id = %user_id,
             timestamp_ms = start_time.elapsed().as_millis(),
             "Received client ACK from Gateway"
         );
 
         // 确认 ACK，停止重试
-        if let Ok(confirmed) = self.ack_tracker.confirm_ack(&ack.message_id, user_id).await {
+        if let Ok(confirmed) = self.ack_tracker.confirm_ack(&ack.server_msg_id, user_id).await {
             let duration_ms = start_time.elapsed().as_millis();
             if confirmed {
                 info!(
-                    message_id = %ack.message_id,
+                    message_id = %ack.server_msg_id,
                     user_id = %user_id,
                     duration_ms = duration_ms,
                     "Client ACK confirmed, stopping retry"
                 );
             } else {
                 warn!(
-                    message_id = %ack.message_id,
+                    message_id = %ack.server_msg_id,
                     user_id = %user_id,
                     duration_ms = duration_ms,
                     "ACK not found or already confirmed"
@@ -182,7 +182,7 @@ impl PushDomainService {
         } else {
             let duration_ms = start_time.elapsed().as_millis();
             warn!(
-                message_id = %ack.message_id,
+                message_id = %ack.server_msg_id,
                 user_id = %user_id,
                 duration_ms = duration_ms,
                 "Failed to confirm ACK"

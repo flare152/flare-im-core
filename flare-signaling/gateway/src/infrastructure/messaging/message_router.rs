@@ -271,7 +271,7 @@ impl MessageRouter {
             info!(
                 user_id = %user_id,
                 conversation_id = %conversation_id,
-                message_id = %send_response.message_id,
+                message_id = %send_response.server_msg_id,
                 svid = %self.default_svid,
                 routed_endpoint = %response.routed_endpoint,
                 route_duration_ms = metadata.route_duration_ms,
@@ -285,7 +285,7 @@ impl MessageRouter {
             info!(
                 user_id = %user_id,
                 conversation_id = %conversation_id,
-                message_id = %send_response.message_id,
+                message_id = %send_response.server_msg_id,
                 svid = %self.default_svid,
                 routed_endpoint = %response.routed_endpoint,
                 total_duration_ms = start_time.elapsed().as_millis(),

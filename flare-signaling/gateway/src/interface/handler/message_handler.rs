@@ -1,3 +1,4 @@
+
 //! 消息处理模块
 //!
 //! 实现 Flare 模式的 ServerEventHandler trait，处理客户端消息和连接事件
@@ -26,7 +27,7 @@ impl ServerEventHandler for LongConnectionHandler {
     ) -> CoreResult<Option<Frame>> {
         let client_message_id = command.message_id.clone();
         // 处理消息发送，获取服务端生成的消息ID
-        let server_message_id = self.handle_message_send(command, connection_id).await?;
+        let (server_message_id,seq) = self.handle_message_send(command, connection_id).await?;
         
         // 记录服务端消息ID（用于追踪和日志）
         debug!(
@@ -43,7 +44,13 @@ impl ServerEventHandler for LongConnectionHandler {
         // 创建ack
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("server_message_id".to_string(), server_message_id.as_bytes().to_vec());
-
+        let send_ack = flare_proto::common::SendEnvelopeAck {
+            server_msg_id: server_message_id.to_string(), // 服务端生成的消息ID（server_id）
+            status: flare_proto::common::AckStatus::Success as i32,
+            seq, // 消息序列号（可选）
+            error_code: 0,
+            error_message: String::new(),
+        };
         let ack =ack_message(client_message_id, Some(metadata));
         let frame  = frame_with_message_command(ack, Reliability::AtLeastOnce);
         Ok(Some(frame))
@@ -152,7 +159,7 @@ impl LongConnectionHandler {
         &self,
         msg_cmd: &MessageCommand,
         connection_id: &str,
-    ) -> CoreResult<String> {
+    ) -> CoreResult<(String,u64)> {
         let user_id = self
             .user_id_for_connection(connection_id)
             .await

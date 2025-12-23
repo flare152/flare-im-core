@@ -29,7 +29,7 @@ impl MessageCommandHandler {
 
     /// 处理存储消息命令
     #[instrument(skip(self))]
-    pub async fn handle_store_message(&self, command: StoreMessageCommand) -> Result<String> {
+    pub async fn handle_store_message(&self, command: StoreMessageCommand) -> Result<(String, u64)> {
         let start = Instant::now();
 
         // 提取租户ID和消息类型用于指标标签（在移动之前）
@@ -78,7 +78,7 @@ impl MessageCommandHandler {
     pub async fn handle_store_message_without_pre_hook(
         &self,
         command: StoreMessageCommand,
-    ) -> Result<String> {
+    ) -> Result<(String, u64)> {
         let start = Instant::now();
 
         // 提取租户ID和消息类型用于指标标签（在移动之前）
@@ -135,7 +135,7 @@ impl MessageCommandHandler {
                 .orchestrate_message_storage(request, true)
                 .await
             {
-                Ok(message_id) => message_ids.push(message_id),
+                Ok((message_id, _seq)) => message_ids.push(message_id),
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to store message in batch");
                     // 继续处理其他消息

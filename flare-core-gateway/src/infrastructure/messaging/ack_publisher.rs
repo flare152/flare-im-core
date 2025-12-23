@@ -19,7 +19,8 @@ pub enum AckStatusValue {
 /// ACK 核心数据
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AckData {
-    pub message_id: String,
+    pub server_msg_id: String,
+    pub seq: Option<u64>,
     pub status: AckStatusValue,
     pub error_code: Option<i32>,
     pub error_message: Option<String>,
@@ -157,11 +158,12 @@ impl AckPublisher for GrpcAckPublisher {
     async fn publish_ack(&self, event: &AckAuditEvent) -> Result<()> {
         // 构造 PushAckRequest
         let ack = flare_proto::common::SendEnvelopeAck {
-            message_id: event.ack.message_id.clone(),
+            server_msg_id: event.ack.server_msg_id.clone(),
             status: match event.ack.status {
                 AckStatusValue::Success => flare_proto::common::AckStatus::Success as i32,
                 AckStatusValue::Failed => flare_proto::common::AckStatus::Failed as i32,
             },
+            seq: event.ack.seq.unwrap_or(0),
             error_code: event.ack.error_code.unwrap_or(0),
             error_message: event.ack.error_message.clone().unwrap_or_default(),
         };
@@ -182,7 +184,7 @@ impl AckPublisher for GrpcAckPublisher {
                 match client_clone.push_ack(tonic::Request::new(request)).await {
                     Ok(response) => {
                         info!(
-                            message_id = %event.ack.message_id,
+                            message_id = %event.ack.server_msg_id,
                             user_id = %event.user_id,
                             ack_type = %event.ack_type(),
                             status = ?event.ack.status,
@@ -193,7 +195,7 @@ impl AckPublisher for GrpcAckPublisher {
                     }
                     Err(status) => {
                         warn!(
-                            message_id = %event.ack.message_id,
+                            message_id = %event.ack.server_msg_id,
                             user_id = %event.user_id,
                             error = %status,
                             "Failed to report ACK to AccessGateway Service"
@@ -209,7 +211,7 @@ impl AckPublisher for GrpcAckPublisher {
             }
             Err(e) => {
                 warn!(
-                    message_id = %event.ack.message_id,
+                    message_id = %event.ack.server_msg_id,
                     user_id = %event.user_id,
                     error = %e,
                     "Failed to initialize AccessGateway Service client"

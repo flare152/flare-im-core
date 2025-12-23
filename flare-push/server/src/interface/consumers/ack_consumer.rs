@@ -175,7 +175,7 @@ impl AckKafkaConsumer {
                                 // 处理 ACK
                                 if let Some(ack) = &request.ack {
                                     info!(
-                                        message_id = %ack.message_id,
+                                        message_id = %ack.server_msg_id,
                                         user_count = request.target_user_ids.len(),
                                         "Processing ACK from Kafka"
                                     );
@@ -189,7 +189,7 @@ impl AckKafkaConsumer {
                                         {
                                             Ok(_) => {
                                                 debug!(
-                                                    message_id = %ack.message_id,
+                                                    message_id = %ack.server_msg_id,
                                                     user_id = %user_id,
                                                     "ACK processed successfully"
                                                 );
@@ -197,7 +197,7 @@ impl AckKafkaConsumer {
                                             Err(e) => {
                                                 error!(
                                                     error = %e,
-                                                    message_id = %ack.message_id,
+                                                    message_id = %ack.server_msg_id,
                                                     user_id = %user_id,
                                                     "Failed to process ACK"
                                                 );

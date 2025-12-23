@@ -68,7 +68,7 @@ impl MessageHandler {
         user_id: &str,
         msg_cmd: &MessageCommand,
         tenant_id: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<(String,u64)> {
         let start_time = std::time::Instant::now();
         debug!(
             user_id,
@@ -128,7 +128,7 @@ impl MessageHandler {
         let route_duration = start_time.elapsed();
         match route_res {
             Ok(response) => {
-                Ok(response.message_id.clone())
+                Ok((response.server_msg_id.clone(),response.seq))
             }
             Err(err) => {
                 let error_msg = format!("消息发送失败: {}", err);

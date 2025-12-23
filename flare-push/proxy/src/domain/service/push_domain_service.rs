@@ -365,7 +365,7 @@ impl PushDomainService {
     }
 
     /// 入队 ACK（业务逻辑）
-    #[instrument(skip(self), fields(message_id = %request.ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or("")))]
+    #[instrument(skip(self), fields(message_id = %request.ack.as_ref().map(|a| a.server_msg_id.as_str()).unwrap_or("")))]
     pub async fn enqueue_ack(&self, request: PushAckRequest) -> Result<PushAckResponse> {
         // 1. 入参校验
         if request.ack.is_none() {
@@ -380,7 +380,7 @@ impl PushDomainService {
         let message_id = request
             .ack
             .as_ref()
-            .map(|a| a.message_id.clone())
+            .map(|a| a.server_msg_id.clone())
             .unwrap_or_default();
 
         // 2. 发布到 Kafka（幂等性由 Kafka 保证）

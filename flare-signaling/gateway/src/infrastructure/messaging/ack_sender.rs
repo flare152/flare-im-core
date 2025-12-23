@@ -56,8 +56,9 @@ impl AckSender {
         // 构建 SendEnvelopeAck（使用 transport.proto 定义）
         // message_id 字段包含服务端生成的消息ID（server_id），SDK 会使用此ID更新本地消息
         let send_ack = flare_proto::common::SendEnvelopeAck {
-            message_id: message_id.to_string(), // 服务端生成的消息ID（server_id）
+            server_msg_id: message_id.to_string(), // 服务端生成的消息ID（server_id）
             status: flare_proto::common::AckStatus::Success as i32,
+            seq: 0, // 消息序列号（可选）
             error_code: 0,
             error_message: String::new(),
         };
@@ -126,8 +127,9 @@ impl AckSender {
     ) -> Result<()> {
         // 构建失败的 SendEnvelopeAck
         let send_ack = flare_proto::common::SendEnvelopeAck {
-            message_id: message_id.to_string(),
+            server_msg_id: message_id.to_string(),
             status: flare_proto::common::AckStatus::Failed as i32,
+            seq: 0,
             error_code,
             error_message,
         };

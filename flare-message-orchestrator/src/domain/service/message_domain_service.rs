@@ -60,7 +60,7 @@ impl MessageDomainService {
         &self,
         mut request: StoreMessageRequest,
         execute_pre_send: bool,
-    ) -> Result<String> {
+    ) -> Result<(String, u64)> {
         let _start = Instant::now(); // 添加下划线前缀表示故意未使用
         let _span = Span::current(); // 添加下划线前缀表示故意未使用
 
@@ -283,7 +283,7 @@ impl MessageDomainService {
             .await
             .context("PostSend hook failed")?;
 
-        Ok(submission.message_id)
+        Ok((submission.message_id, submission.message.seq))
     }
 
     /// 构建推送请求

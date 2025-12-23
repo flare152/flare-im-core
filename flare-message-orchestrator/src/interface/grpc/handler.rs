@@ -214,7 +214,7 @@ impl MessageGrpcHandler {
             })
             .await
         {
-            Ok(message_id) => {
+            Ok((message_id, seq)) => {
                 // 构建时间线信息
                 let now = chrono::Utc::now();
                 let timeline = Some(flare_proto::common::MessageTimeline {
@@ -229,7 +229,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: true,
-                    message_id,
+                    server_msg_id: message_id,
+                    seq: seq,
                     sent_at: Some(prost_types::Timestamp {
                         seconds: now.timestamp(),
                         nanos: now.timestamp_subsec_nanos() as i32,
@@ -329,11 +330,12 @@ impl MessageGrpcHandler {
                 // 转换为 SendMessageResponse（使用第一条消息ID作为目标）
                 Ok(Response::new(SendMessageResponse {
                     success: success_count > 0,
-                    message_id: if !read_data.message_ids.is_empty() {
+                    server_msg_id: if !read_data.message_ids.is_empty() {
                         read_data.message_ids[0].clone()
                     } else {
                         operation.target_message_id.clone()
                     },
+                    seq: 0, // 批量已读操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: Some(ok_status()),
@@ -369,7 +371,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.as_ref().map(|s| s.code == 0).unwrap_or(false),
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 反应操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -403,7 +406,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 置顶操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -437,7 +441,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 置顶操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -485,7 +490,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.status.is_some() && inner.status.as_ref().unwrap().code == 0,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 置顶操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -517,7 +523,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 删除操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -563,7 +570,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 删除操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -596,7 +604,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: operation.target_message_id,
+                    server_msg_id: operation.target_message_id,
+                    seq: 0, // 删除操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -634,7 +643,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id,
+                    server_msg_id: message_id,
+                    seq: 0, // 转发操作不返回 seq
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -680,7 +690,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: inner.message_id,
+                    server_msg_id: inner.message_id,
+                    seq: 0, // 回复操作不返回 seq（回复消息的 seq 在回复消息本身中）
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -714,7 +725,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: inner.message_id,
+                    server_msg_id: inner.message_id,
+                    seq: 0, // 引用操作不返回 seq（引用消息的 seq 在引用消息本身中）
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -760,7 +772,8 @@ impl MessageGrpcHandler {
 
                 Ok(Response::new(SendMessageResponse {
                     success: inner.success,
-                    message_id: inner.message_id,
+                    server_msg_id: inner.message_id,
+                    seq: 0, // 线程回复操作不返回 seq（线程回复消息的 seq 在回复消息本身中）
                     sent_at: operation.timestamp.clone(),
                     timeline: None,
                     status: inner.status,
@@ -805,7 +818,7 @@ impl MessageGrpcHandler {
                 })
                 .await
             {
-                Ok(message_id) => {
+                Ok((message_id, _seq)) => {
                     success_count += 1;
                     message_ids.push(message_id);
                 }
@@ -883,8 +896,8 @@ impl MessageGrpcHandler {
                 request: store_request,
             })
             .await
-        {
-            Ok(message_id) => {
+            {
+            Ok((message_id, _seq)) => {
                 info!(
                     message_id = %message_id,
                     conversation_id = %req.conversation_id,
@@ -1646,7 +1659,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageReplyMessageResponse {
             success: send_resp.success,
-            message_id: send_resp.message_id,
+            message_id: send_resp.server_msg_id,
             error_message: String::new(),
             status: Some(ok_status()),
         }))
@@ -1733,7 +1746,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageAddThreadReplyResponse {
             success: send_resp.success,
-            message_id: send_resp.message_id,
+            message_id: send_resp.server_msg_id,
             error_message: String::new(),
             status: Some(ok_status()),
         }))
@@ -1835,7 +1848,7 @@ impl MessageGrpcHandler {
                 .into_inner();
 
             if send_resp.success {
-                forwarded_message_ids.push(send_resp.message_id);
+                forwarded_message_ids.push(send_resp.server_msg_id);
             }
         } else {
             // 分别转发：每条消息单独转发
@@ -1866,7 +1879,7 @@ impl MessageGrpcHandler {
                     .into_inner();
 
                 if send_resp.success {
-                    forwarded_message_ids.push(send_resp.message_id);
+                    forwarded_message_ids.push(send_resp.server_msg_id);
                 }
             }
         }
@@ -1960,7 +1973,7 @@ impl MessageGrpcHandler {
 
         Ok(Response::new(MessageQuoteMessageResponse {
             success: send_resp.success,
-            message_id: send_resp.message_id,
+            message_id: send_resp.server_msg_id,
             error_message: String::new(),
             status: Some(ok_status()),
         }))

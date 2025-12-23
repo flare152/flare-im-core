@@ -170,7 +170,7 @@ impl PushService for PushGrpcHandler {
                 .get_ref()
                 .ack
                 .as_ref()
-                .map(|a| a.message_id.as_str())
+                .map(|a| a.server_msg_id.as_str())
                 .unwrap_or("")
         );
         self.push_ack(request).await

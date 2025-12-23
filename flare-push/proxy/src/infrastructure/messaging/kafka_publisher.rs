@@ -67,11 +67,11 @@ impl PushEventPublisher for KafkaPushEventPublisher {
 
     async fn publish_ack(&self, request: &PushAckRequest) -> Result<()> {
         let payload = request.encode_to_vec();
-        // 使用 message_id 作为 key，确保同一消息的 ACK 进入同一分区
+        // 使用 server_msg_id 作为 key，确保同一消息的 ACK 进入同一分区
         let key = request
             .ack
             .as_ref()
-            .map(|ack| ack.message_id.as_str())
+            .map(|ack| ack.server_msg_id.as_str())
             .unwrap_or("");
         let record = FutureRecord::to(&self.config.ack_topic)
             .payload(&payload)
@@ -83,7 +83,7 @@ impl PushEventPublisher for KafkaPushEventPublisher {
             .map_err(|(err, _)| anyhow!("failed to enqueue push ACK: {err}"))?;
 
         info!(
-            message_id = %request.ack.as_ref().map(|a| a.message_id.as_str()).unwrap_or(""),
+            message_id = %request.ack.as_ref().map(|a| a.server_msg_id.as_str()).unwrap_or(""),
             user_count = request.target_user_ids.len(),
             "ACK published to Kafka"
         );

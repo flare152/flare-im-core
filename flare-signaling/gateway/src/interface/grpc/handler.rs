@@ -115,7 +115,7 @@ impl AccessGateway for AccessGatewayHandler {
         info!(
             "PushAck request: {} users, message_id: {}",
             req.target_user_ids.len(),
-            ack.message_id
+            ack.server_msg_id.clone()
         );
 
         // 实现 ACK 推送逻辑
@@ -128,7 +128,8 @@ impl AccessGateway for AccessGatewayHandler {
             let ack_packet = flare_proto::common::ServerPacket {
                 payload: Some(flare_proto::common::server_packet::Payload::SendAck(
                     flare_proto::common::SendEnvelopeAck {
-                        message_id: ack.message_id.clone(),
+                        server_msg_id: ack.server_msg_id.clone(),
+                        seq: ack.seq,
                         status: if ack.status == flare_proto::common::AckStatus::Success as i32 {
                             flare_proto::common::AckStatus::Success as i32
                         } else {
@@ -160,7 +161,7 @@ impl AccessGateway for AccessGatewayHandler {
                     });
 
                     tracing::debug!(
-                        message_id = %ack.message_id,
+                        message_id = %ack.server_msg_id,
                         user_id = %user_id,
                         "ACK pushed successfully"
                     );
@@ -180,7 +181,7 @@ impl AccessGateway for AccessGatewayHandler {
 
                     tracing::warn!(
                         error = %e,
-                        message_id = %ack.message_id,
+                        message_id = %ack.server_msg_id,
                         user_id = %user_id,
                         "Failed to push ACK"
                     );
