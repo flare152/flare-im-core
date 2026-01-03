@@ -232,7 +232,14 @@ async fn main() -> anyhow::Result<()> {
     let engine = HookEngine::new(config).await?;
     
     // 使用Hook引擎执行Hook
-    let ctx = HookContext::new("tenant-a");
+    use flare_server_core::context::Context;
+    use flare_im_core::hooks::hook_context_data::{HookContextData, set_hook_context_data};
+    
+    let mut ctx = Context::root()
+        .with_tenant_id("tenant-a");
+    let hook_data = HookContextData::new();
+    ctx = set_hook_context_data(ctx, hook_data);
+    
     let mut draft = MessageDraft::new(b"test message".to_vec());
     
     // 执行PreSend Hook
@@ -255,8 +262,6 @@ let repository = PostgresHookConfigRepository::new(
     "postgresql://user:pass@localhost:5432/flare"
 ).await?;
 
-// 初始化数据库表
-repository.init_schema().await?;
 
 // 创建Hook配置
 let hook_config = HookConfigItem {

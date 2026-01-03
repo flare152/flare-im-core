@@ -42,7 +42,7 @@ pub async fn initialize(
     let media_config = MediaConfig::from_app_config(app_config);
 
     // 2. 构建媒体服务
-    let (media_service, reference_store) = build_media_service(&media_config)
+    let media_service = build_media_service(&media_config)
         .await
         .context("Failed to build media service")?;
 
@@ -50,7 +50,7 @@ pub async fn initialize(
     let command_handler = Arc::new(MediaCommandHandler::new(media_service.clone()));
 
     // 4. 构建查询处理器
-    let query_handler = Arc::new(MediaQueryHandler::new(media_service, reference_store));
+    let query_handler = Arc::new(MediaQueryHandler::new(media_service));
 
     // 5. 构建 gRPC 处理器
     let handler = MediaGrpcHandler::new(command_handler, query_handler);
@@ -61,7 +61,7 @@ pub async fn initialize(
 /// 构建媒体服务
 async fn build_media_service(
     config: &MediaConfig,
-) -> Result<(Arc<MediaService>, Option<ReferenceStoreRef>)> {
+) -> Result<Arc<MediaService>> {
     let object_repo: Option<ObjectRepositoryRef> =
         build_object_store(config.object_store.as_ref()).await?;
 
@@ -116,17 +116,13 @@ async fn build_media_service(
         config.max_chunk_size_bytes,
     );
 
-    let reference_store_for_query = reference_store.clone();
-    Ok((
-        Arc::new(MediaService::new(
-            object_repo,
-            metadata_store,
-            reference_store,
-            metadata_cache,
-            upload_conversation_store,
-            local_store,
-            domain_config,
-        )),
-        reference_store_for_query,
-    ))
+    Ok(Arc::new(MediaService::new(
+        object_repo,
+        metadata_store,
+        reference_store,
+        metadata_cache,
+        upload_conversation_store,
+        local_store,
+        domain_config,
+    )))
 }

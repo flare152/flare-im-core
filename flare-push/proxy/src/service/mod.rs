@@ -58,8 +58,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("push-proxy", address)
             .add_spawn_with_shutdown("push-proxy-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let push_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(PushServiceServer::new(handler));
+                
                 Server::builder()
-                    .add_service(PushServiceServer::new(handler))
+                    .add_service(push_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

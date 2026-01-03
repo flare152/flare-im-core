@@ -73,16 +73,15 @@ pub trait ArchiveStoreRepository: Send + Sync {
         Ok(())
     }
 
-    /// 更新消息状态（用于撤回、编辑、删除等操作）
-    async fn update_message_status(
+    /// 更新消息 FSM 状态（用于撤回、编辑、删除等操作）
+    async fn update_message_fsm_state(
         &self,
         message_id: &str,
-        status: flare_proto::common::MessageStatus,
-        is_recalled: Option<bool>,
-        recalled_at: Option<prost_types::Timestamp>,
+        fsm_state: &str,
+        recall_reason: Option<&str>,
     ) -> Result<()> {
         // 默认实现：空操作（子类必须实现）
-        let _ = (message_id, status, is_recalled, recalled_at);
+        let _ = (message_id, fsm_state, recall_reason);
         Ok(())
     }
 
@@ -92,25 +91,81 @@ pub trait ArchiveStoreRepository: Send + Sync {
         message_id: &str,
         new_content: &flare_proto::common::MessageContent,
         edit_version: i32,
+        editor_id: &str,
+        reason: Option<&str>,
     ) -> Result<()> {
         // 默认实现：空操作（子类必须实现）
-        let _ = (message_id, new_content, edit_version);
+        let _ = (message_id, new_content, edit_version, editor_id, reason);
         Ok(())
     }
 
-    /// 更新消息可见性（用于删除操作）
+    /// 更新消息可见性（用于软删除操作）
     async fn update_message_visibility(
         &self,
         message_id: &str,
-        user_id: Option<&str>,
-        visibility: flare_proto::common::VisibilityStatus,
+        user_id: &str,
+        visibility_status: &str,
     ) -> Result<()> {
         // 默认实现：空操作（子类必须实现）
-        let _ = (message_id, user_id, visibility);
+        let _ = (message_id, user_id, visibility_status);
         Ok(())
     }
 
-    /// 追加操作记录到消息
+    /// 记录消息已读
+    async fn record_message_read(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, user_id);
+        Ok(())
+    }
+
+    /// 添加或更新消息反应
+    async fn upsert_message_reaction(
+        &self,
+        message_id: &str,
+        emoji: &str,
+        user_id: &str,
+        add: bool,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, emoji, user_id, add);
+        Ok(())
+    }
+
+    /// 置顶或取消置顶消息
+    async fn pin_message(
+        &self,
+        message_id: &str,
+        conversation_id: &str,
+        user_id: &str,
+        pin: bool,
+        expire_at: Option<chrono::DateTime<chrono::Utc>>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, conversation_id, user_id, pin, expire_at, reason);
+        Ok(())
+    }
+
+    /// 标记或取消标记消息
+    async fn mark_message(
+        &self,
+        message_id: &str,
+        conversation_id: &str,
+        user_id: &str,
+        mark_type: &str,
+        color: Option<&str>,
+        add: bool,
+    ) -> Result<()> {
+        // 默认实现：空操作（子类必须实现）
+        let _ = (message_id, conversation_id, user_id, mark_type, color, add);
+        Ok(())
+    }
+
+    /// 追加操作记录到消息操作历史表
     async fn append_operation(
         &self,
         message_id: &str,
@@ -119,6 +174,15 @@ pub trait ArchiveStoreRepository: Send + Sync {
         // 默认实现：空操作（子类必须实现）
         let _ = (message_id, operation);
         Ok(())
+    }
+
+    /// 获取消息（用于权限验证，写模型内部查询）
+    ///
+    /// 注意：这是写模型内部查询，符合 CQRS 原则（写操作可以在写模型内部查询）
+    async fn get_message(&self, message_id: &str) -> Result<Option<Message>> {
+        // 默认实现：返回 None（子类必须实现）
+        let _ = message_id;
+        Ok(None)
     }
 
     /// 获取 Any trait 引用（用于向下转型）
@@ -147,7 +211,7 @@ pub trait AckPublisher: Send + Sync {
 
 #[async_trait]
 pub trait MediaAttachmentVerifier: Send + Sync {
-    async fn fetch_metadata(&self, file_ids: &[String]) -> Result<Vec<MediaAttachmentMetadata>>;
+    async fn fetch_metadata(&self, ctx: &flare_server_core::context::Context, file_ids: &[String]) -> Result<Vec<MediaAttachmentMetadata>>;
 }
 
 /// Session 仓储接口 - 用于检查并创建 session
@@ -156,11 +220,11 @@ pub trait ConversationRepository: Send + Sync {
     /// 确保 conversation 存在，如果不存在则创建
     async fn ensure_conversation(
         &self,
+        ctx: &flare_server_core::context::Context,
         conversation_id: &str,
         conversation_type: &str,
         business_type: &str,
         participants: Vec<String>,
-        tenant_id: Option<&str>,
     ) -> Result<()>;
 }
 
@@ -180,38 +244,6 @@ pub trait ConversationUpdateRepository: Send + Sync {
     ) -> Result<()>;
 }
 
-/// Seq 生成器接口
-#[async_trait]
-pub trait SeqGenerator: Send + Sync {
-    /// 为指定会话生成下一个 seq
-    async fn generate_seq(&self, conversation_id: &str) -> Result<i64>;
-}
+// SeqGenerator 已移至编排服务（MessageOrchestrator）
+// seq 在消息编排时生成，Writer 服务只负责持久化
 
-/// 消息状态仓储接口 - 用于存储和查询用户对消息的私有行为
-#[async_trait]
-pub trait MessageStateRepository: Send + Sync {
-    /// 标记消息为已读
-    async fn mark_as_read(&self, message_id: &str, user_id: &str) -> Result<()>;
-
-    /// 标记消息为已删除（仅我删除）
-    async fn mark_as_deleted(&self, message_id: &str, user_id: &str) -> Result<()>;
-
-    /// 标记消息为已焚毁（阅后即焚）
-    async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> Result<()>;
-
-    /// 检查消息是否已读
-    async fn is_read(&self, message_id: &str, user_id: &str) -> Result<bool>;
-
-    /// 检查消息是否已删除
-    async fn is_deleted(&self, message_id: &str, user_id: &str) -> Result<bool>;
-
-    /// 检查消息是否已焚毁
-    async fn is_burned(&self, message_id: &str, user_id: &str) -> Result<bool>;
-
-    /// 批量检查消息是否已删除（用于消息查询时过滤）
-    async fn batch_check_deleted(
-        &self,
-        user_id: &str,
-        message_ids: &[String],
-    ) -> Result<Vec<String>>;
-}

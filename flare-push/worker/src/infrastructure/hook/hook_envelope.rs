@@ -3,14 +3,16 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flare_im_core::hooks::{DeliveryEvent, HookContext};
+use flare_im_core::hooks::DeliveryEvent;
+use flare_im_core::hooks::hook_context_data::{HookContextData, set_hook_context_data};
+use flare_server_core::context::Context;
 
 use crate::domain::model::{PushDispatchTask, RequestMetadata};
 
 const FALLBACK_MESSAGE_TYPE: &str = "push_dispatch";
 const SESSION_TYPE_PUSH: &str = "push";
 
-pub fn build_delivery_context(default_tenant_id: &str, task: &PushDispatchTask) -> HookContext {
+pub fn build_delivery_context(default_tenant_id: &str, task: &PushDispatchTask) -> Context {
     let tenant_id = task
         .tenant_id
         .clone()
@@ -46,18 +48,41 @@ pub fn build_delivery_context(default_tenant_id: &str, task: &PushDispatchTask) 
         );
     }
 
-    HookContext {
-        tenant_id,
-        conversation_id: Some(format!("{SESSION_TYPE_PUSH}:{}", task.user_id)),
-        conversation_type: Some(SESSION_TYPE_PUSH.to_string()),
-        message_type: Some(message_type),
-        sender_id: None,
-        trace_id: task.context.as_ref().and_then(|ctx| ctx.trace_id.clone()),
-        tags,
-        attributes,
-        request_metadata,
-        occurred_at: Some(SystemTime::now()),
+    // 创建 Context
+    let request_id = task
+        .context
+        .as_ref()
+        .map(|ctx| ctx.request_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    
+    let mut ctx = Context::with_request_id(request_id);
+    
+    // 设置租户ID
+    if !tenant_id.is_empty() {
+        ctx = ctx.with_tenant_id(tenant_id);
     }
+    
+    // 设置 trace_id
+    if let Some(trace_id) = task.context.as_ref().and_then(|ctx| ctx.trace_id.clone()) {
+        ctx = ctx.with_trace_id(trace_id);
+    }
+    
+    // 设置会话ID
+    let conversation_id = format!("{SESSION_TYPE_PUSH}:{}", task.user_id);
+    ctx = ctx.with_session_id(conversation_id.clone());
+    
+    // 创建 HookContextData
+    let hook_data = HookContextData::new()
+        .with_conversation_id(conversation_id)
+        .with_conversation_type(SESSION_TYPE_PUSH)
+        .with_message_type(message_type)
+        .with_tags(tags)
+        .with_attributes(attributes)
+        .with_request_metadata(request_metadata)
+        .occurred_now();
+    
+    // 将 HookContextData 存储到 Context
+    set_hook_context_data(ctx, hook_data)
 }
 
 pub fn build_delivery_event(task: &PushDispatchTask, channel: &str) -> DeliveryEvent {

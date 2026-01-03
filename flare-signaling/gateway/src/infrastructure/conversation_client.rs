@@ -29,18 +29,18 @@ impl ConversationServiceClient {
     /// 当收到客户端ACK时，更新用户的会话游标位置
     pub async fn update_session_cursor(
         &self,
+        ctx: &flare_server_core::context::Context,
         user_id: &str,
         conversation_id: &str,
         message_ts: i64,
     ) -> Result<()> {
         let command = UpdateCursorCommand {
-            user_id: user_id.to_string(),
             conversation_id: conversation_id.to_string(),
             message_ts,
         };
 
         self.conversation_command_handler
-            .handle_update_cursor(command)
+            .handle_update_cursor(ctx, command)
             .await
             .map_err(|e| {
                 FlareError::general_error(format!("Failed to update session cursor: {}", e))

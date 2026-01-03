@@ -57,9 +57,13 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         &self,
         user_ids: &[String],
     ) -> Result<HashMap<String, OnlineStatus>> {
+        // 从 default_tenant_id 创建 Context（向后兼容）
+        use flare_server_core::context::Context;
+        let ctx = Context::root().with_tenant_id(self.default_tenant_id.clone());
+        
         // 直接调用 Signaling Online 服务批量查询
         self.signaling_client
-            .batch_get_online_status(user_ids, Some(&self.default_tenant_id))
+            .batch_get_online_status(&ctx, user_ids)
             .await
     }
 
@@ -72,10 +76,13 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         // 后续可以在PushDomainService中调用Hook
 
         // 2. 通过 Session 服务获取会话的所有参与者（带超时，降级方案）
+        use flare_server_core::context::Context;
+        let ctx = Context::root().with_tenant_id(self.default_tenant_id.clone());
+        
         let participant_user_ids = if let Some(ref conversation_client) = self.conversation_client {
             match tokio::time::timeout(
                 timeout_duration,
-                conversation_client.get_conversation_participants(conversation_id, Some(&self.default_tenant_id)),
+                conversation_client.get_conversation_participants(&ctx, conversation_id),
             )
             .await
             {
@@ -113,10 +120,12 @@ impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
         };
 
         // 2. 批量查询这些参与者的在线状态（带超时）
+        let ctx = Context::root().with_tenant_id(self.default_tenant_id.clone());
+        
         let online_statuses = match tokio::time::timeout(
             timeout_duration,
             self.signaling_client
-                .batch_get_online_status(&participant_user_ids, Some(&self.default_tenant_id)),
+                .batch_get_online_status(&ctx, &participant_user_ids),
         )
         .await
         {

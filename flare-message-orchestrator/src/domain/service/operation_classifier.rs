@@ -26,10 +26,6 @@ impl OperationClassifier {
             OperationType::try_from(operation_type).ok(),
             Some(OperationType::Recall)
                 | Some(OperationType::Edit)
-                | Some(OperationType::Forward)
-                | Some(OperationType::Reply)
-                | Some(OperationType::Quote)
-                | Some(OperationType::ThreadReply)
         )
     }
 
@@ -50,8 +46,6 @@ impl OperationClassifier {
                 | Some(OperationType::ReactionRemove)
                 | Some(OperationType::Pin)
                 | Some(OperationType::Unpin)
-                | Some(OperationType::Favorite)
-                | Some(OperationType::Unfavorite)
                 | Some(OperationType::Mark)
                 | Some(OperationType::Delete) // 软删除可以委托
         )
@@ -61,13 +55,8 @@ impl OperationClassifier {
     ///
     /// 这些操作会创建新的消息，需要完整的存储编排流程
     pub fn requires_message_creation(operation_type: i32) -> bool {
-        matches!(
-            OperationType::try_from(operation_type).ok(),
-            Some(OperationType::Reply)
-                | Some(OperationType::Forward)
-                | Some(OperationType::Quote)
-                | Some(OperationType::ThreadReply)
-        )
+        // Reply 和 Quote 已废弃：现在通过 SendMessage + Message.quote 字段实现
+        false
     }
 
     /// 获取操作类别
@@ -98,10 +87,7 @@ impl OperationClassifier {
                 true
             }
             Ok(OperationType::Edit) => true,    // 编辑：必须全端同步
-            Ok(OperationType::Reply) => true,   // 回复：创建新消息
-            Ok(OperationType::Forward) => true, // 转发：创建新消息
-            Ok(OperationType::Quote) => true,   // 引用：创建新消息
-            Ok(OperationType::ThreadReply) => true, // 话题：创建新消息
+            // Reply 和 Quote 已废弃：现在通过 SendMessage + Message.quote 字段实现
 
             // 简单操作但需要 Kafka 推送
             Ok(OperationType::Delete) => {
@@ -117,7 +103,6 @@ impl OperationClassifier {
             Ok(OperationType::Pin) | Ok(OperationType::Unpin) => true, // 置顶：需要同步
 
             // 不需要 Kafka 的操作（仅用户维度）
-            Ok(OperationType::Favorite) | Ok(OperationType::Unfavorite) => false, // 收藏：仅个人偏好
             Ok(OperationType::Mark) => false, // 标记：仅个人偏好
 
             _ => false,
@@ -136,15 +121,11 @@ impl OperationClassifier {
             Ok(OperationType::Edit) => true,    // 编辑：需要通知
             Ok(OperationType::Delete) => true,  // 删除：需要通知（硬删除）
             Ok(OperationType::Read) => true,    // 已读：需要通知（单聊）
-            Ok(OperationType::Reply) => true,   // 回复：需要通知
-            Ok(OperationType::Forward) => true, // 转发：需要通知
+            // Reply 和 Quote 已废弃：现在通过 SendMessage + Message.quote 字段实现
             Ok(OperationType::ReactionAdd) | Ok(OperationType::ReactionRemove) => true, // 反应：需要通知
-            Ok(OperationType::Quote) => true, // 引用：需要通知
-            Ok(OperationType::ThreadReply) => true, // 话题：需要通知
             Ok(OperationType::Pin) | Ok(OperationType::Unpin) => true, // 置顶：需要通知
 
             // 不需要推送的操作
-            Ok(OperationType::Favorite) | Ok(OperationType::Unfavorite) => false, // 收藏：仅个人
             Ok(OperationType::Mark) => false,                                     // 标记：仅个人
 
             _ => false,

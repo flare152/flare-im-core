@@ -25,6 +25,7 @@ pub struct PresenceUpdate {
 pub trait ConversationRepository: Send + Sync {
     async fn load_bootstrap(
         &self,
+        tenant_id: &str,
         user_id: &str,
         client_cursor: &HashMap<String, i64>,
     ) -> Result<ConversationBootstrapResult>;
@@ -32,20 +33,22 @@ pub trait ConversationRepository: Send + Sync {
     async fn update_cursor(&self, user_id: &str, conversation_id: &str, ts: i64) -> Result<()>;
 
     // 会话管理方法
-    async fn create_conversation(&self, conversation: &Conversation) -> Result<()>;
-    async fn get_conversation(&self, conversation_id: &str) -> Result<Option<Conversation>>;
-    async fn update_conversation(&self, conversation: &Conversation) -> Result<()>;
-    async fn delete_conversation(&self, conversation_id: &str, hard_delete: bool) -> Result<()>;
+    async fn create_conversation(&self, tenant_id: &str, conversation: &Conversation) -> Result<()>;
+    async fn get_conversation(&self, tenant_id: &str, conversation_id: &str) -> Result<Option<Conversation>>;
+    async fn update_conversation(&self, tenant_id: &str, conversation: &Conversation) -> Result<()>;
+    async fn delete_conversation(&self, tenant_id: &str, conversation_id: &str, hard_delete: bool) -> Result<()>;
     async fn manage_participants(
         &self,
+        tenant_id: &str,
         conversation_id: &str,
         to_add: &[ConversationParticipant],
         to_remove: &[String],
         role_updates: &[(String, Vec<String>)],
     ) -> Result<Vec<ConversationParticipant>>;
-    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()>;
+    async fn batch_acknowledge(&self, tenant_id: &str, user_id: &str, cursors: &[(String, i64)]) -> Result<()>;
     async fn search_conversations(
         &self,
+        tenant_id: &str,
         user_id: Option<&str>,
         filters: &[crate::domain::model::ConversationFilter],
         sort: &[crate::domain::model::ConversationSort],
@@ -54,10 +57,10 @@ pub trait ConversationRepository: Send + Sync {
     ) -> Result<(Vec<ConversationSummary>, usize)>;
 
     /// 标记消息为已读（更新 last_read_msg_seq）
-    async fn mark_as_read(&self, user_id: &str, conversation_id: &str, seq: i64) -> Result<()>;
+    async fn mark_as_read(&self, tenant_id: &str, user_id: &str, conversation_id: &str, seq: i64) -> Result<()>;
 
     /// 获取未读数（基于 last_message_seq - last_read_msg_seq）
-    async fn get_unread_count(&self, user_id: &str, conversation_id: &str) -> Result<i32>;
+    async fn get_unread_count(&self, tenant_id: &str, user_id: &str, conversation_id: &str) -> Result<i32>;
 }
 
 /// Presence 仓储接口（需要作为 trait 对象使用，保留 async-trait）
@@ -71,6 +74,7 @@ pub trait PresenceRepository: Send + Sync {
 pub trait MessageProvider: Send + Sync {
     async fn sync_messages(
         &self,
+        ctx: &flare_server_core::context::Context,
         conversation_id: &str,
         since_ts: i64,
         cursor: Option<&str>,
@@ -79,6 +83,7 @@ pub trait MessageProvider: Send + Sync {
 
     async fn recent_messages(
         &self,
+        ctx: &flare_server_core::context::Context,
         conversation_ids: &[String],
         limit_per_session: i32,
         client_cursor: &HashMap<String, i64>,
@@ -87,6 +92,7 @@ pub trait MessageProvider: Send + Sync {
     /// 基于 seq 的消息同步（可选，用于优化性能）
     ///
     /// # 参数
+    /// * `ctx` - Context 上下文
     /// * `conversation_id` - 会话ID
     /// * `after_seq` - 起始 seq（不包含）
     /// * `before_seq` - 结束 seq（可选，不包含）
@@ -99,6 +105,7 @@ pub trait MessageProvider: Send + Sync {
     /// 如果实现不支持基于 seq 的同步，可以返回 `Err` 或降级到基于时间戳的同步
     async fn sync_messages_by_seq(
         &self,
+        _ctx: &flare_server_core::context::Context,
         _conversation_id: &str,
         _after_seq: i64,
         _before_seq: Option<i64>,

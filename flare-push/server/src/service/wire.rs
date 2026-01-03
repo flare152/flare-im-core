@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 
 use crate::application::handlers::PushCommandHandler;
 use crate::config::PushServerConfig;
@@ -124,7 +124,7 @@ pub async fn initialize(
     // 5. 构建任务发布器
     let task_publisher = Arc::new(
         KafkaPushTaskPublisher::new(server_config.clone())
-            .context("Failed to create Kafka push task publisher")?,
+            .with_context(|| "Failed to create Kafka push task publisher")?,
     );
 
     // 6. 创建 Access Gateway 服务发现（从 service_names 获取，支持环境变量覆盖）
@@ -189,7 +189,7 @@ pub async fn initialize(
     // 8. 构建 Redis 客户端（用于消息状态跟踪）
     let redis_client = Arc::new(
         redis::Client::open(server_config.redis_url.as_str())
-            .context("Failed to create Redis client")?,
+            .with_context(|| "Failed to create Redis client")?,
     );
 
     // 9. 构建消息状态跟踪器
@@ -198,7 +198,7 @@ pub async fn initialize(
     // 10. 创建 Redis 连接池（用于 ACK 重试计数）
     let redis_pool = deadpool_redis::Config::from_url(server_config.redis_url.clone())
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-        .context("Failed to create Redis pool")?;
+        .with_context(|| "Failed to create Redis pool")?;
 
     // 11. 初始化统一的 ACK 模块（从业务模块配置中读取）
     let ack_config = AckServiceConfig {
@@ -257,14 +257,14 @@ pub async fn initialize(
             metrics.clone(),
         )
         .await
-        .context("Failed to create Push Kafka consumer")?,
+        .with_context(|| "Failed to create Push Kafka consumer")?,
     );
 
     // 17. 构建 ACK 消费者
     let ack_consumer = Arc::new(
         AckKafkaConsumer::new(server_config.clone(), domain_service.clone())
             .await
-            .context("Failed to create ACK Kafka consumer")?,
+            .with_context(|| "Failed to create ACK Kafka consumer")?,
     );
 
     tracing::info!(

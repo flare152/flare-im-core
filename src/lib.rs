@@ -13,6 +13,14 @@ pub mod service_names;
 pub mod tracing;
 pub mod utils;
 
+// Re-export context utilities for convenience
+pub use utils::context::{
+    require_context, extract_context_opt,
+    require_tenant_id_from_context, require_user_id_from_context,
+    extract_session_id_from_context, require_request_id_from_context,
+    require_tenant_id, require_user_id, extract_session_id, require_request_id,
+};
+
 // 重新导出 ACK 相关类型（AckServiceConfig 通过 ack::AckServiceConfig 访问）
 pub use ack::{
     AckEvent, AckManager, AckModule, AckStatus, AckTimeoutEvent, AckType, ImportanceLevel,

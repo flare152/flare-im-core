@@ -7,6 +7,7 @@ use std::env;
 pub struct StorageWriterConfig {
     pub kafka_bootstrap: String,
     pub kafka_topic: String,
+    pub kafka_operation_topic: String,
     pub kafka_group: String,
     pub kafka_ack_topic: Option<String>,
     pub kafka_timeout_ms: u64,
@@ -50,6 +51,9 @@ impl StorageWriterConfig {
             .ok()
             .or_else(|| service_config.kafka_topic.clone())
             .unwrap_or_else(|| "storage-messages".to_string());
+
+        let kafka_operation_topic = env::var("STORAGE_KAFKA_OPERATION_TOPIC")
+            .unwrap_or_else(|_| "storage-message-operations".to_string());
 
         let kafka_group = env::var("STORAGE_KAFKA_STORAGE_GROUP")
             .ok()
@@ -152,6 +156,7 @@ impl StorageWriterConfig {
         Ok(Self {
             kafka_bootstrap,
             kafka_topic,
+            kafka_operation_topic,
             kafka_group,
             kafka_ack_topic,
             kafka_timeout_ms,
@@ -179,6 +184,8 @@ impl StorageWriterConfig {
             .unwrap_or_else(|_| "localhost:9092".to_string());
         let kafka_topic = env::var("STORAGE_KAFKA_STORAGE_TOPIC")
             .unwrap_or_else(|_| "storage-messages".to_string());
+        let kafka_operation_topic = env::var("STORAGE_KAFKA_OPERATION_TOPIC")
+            .unwrap_or_else(|_| "storage-message-operations".to_string());
         let kafka_group = env::var("STORAGE_KAFKA_STORAGE_GROUP")
             .unwrap_or_else(|_| "storage-writer".to_string());
         let kafka_ack_topic = env::var("STORAGE_KAFKA_ACK_TOPIC").ok();
@@ -245,6 +252,7 @@ impl StorageWriterConfig {
         Self {
             kafka_bootstrap,
             kafka_topic,
+            kafka_operation_topic,
             kafka_group,
             kafka_ack_topic,
             kafka_timeout_ms,
@@ -298,9 +306,9 @@ impl KafkaConsumerConfig for StorageWriterConfig {
     }
 
     fn auto_offset_reset(&self) -> &str {
-        // 开发阶段：从最新位置开始消费，跳过旧的有问题的消息
-        // 生产环境应该改为 "earliest" 以确保不丢失消息
-        "latest"
+        // 从最早位置开始消费，确保不丢失消息
+        // 如果 consumer group 已经存在，会从上次提交的 offset 继续消费
+        "earliest"
     }
 }
 

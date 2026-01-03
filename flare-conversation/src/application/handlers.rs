@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use flare_server_core::context::Context;
 use tracing::{debug, info};
 
 use crate::application::commands::{
@@ -25,26 +26,34 @@ impl ConversationCommandHandler {
     }
 
     /// 处理批量确认命令
-    pub async fn handle_batch_acknowledge(&self, command: BatchAcknowledgeCommand) -> Result<()> {
+    pub async fn handle_batch_acknowledge(
+        &self,
+        ctx: &Context,
+        command: BatchAcknowledgeCommand,
+    ) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %command.user_id,
+            user_id = %user_id,
             count = command.cursors.len(),
             "Handling batch acknowledge command"
         );
 
         self.domain_service
-            .batch_acknowledge(&command.user_id, command.cursors)
+            .batch_acknowledge(ctx, command.cursors)
             .await?;
 
-        info!(user_id = %command.user_id, "Batch acknowledge completed");
+        info!(user_id = %user_id, "Batch acknowledge completed");
         Ok(())
     }
 
     /// 处理创建会话命令
     pub async fn handle_create_conversation(
         &self,
+        ctx: &Context,
         command: CreateConversationCommand,
     ) -> Result<crate::domain::model::Conversation> {
+        
         debug!(
             conversation_type = %command.conversation_type,
             business_type = %command.business_type,
@@ -54,6 +63,7 @@ impl ConversationCommandHandler {
         let session = self
             .domain_service
             .create_conversation(
+                ctx,
                 command.conversation_type,
                 command.business_type,
                 command.participants,
@@ -67,7 +77,12 @@ impl ConversationCommandHandler {
     }
 
     /// 处理删除会话命令
-    pub async fn handle_delete_conversation(&self, command: DeleteConversationCommand) -> Result<()> {
+    pub async fn handle_delete_conversation(
+        &self,
+        ctx: &Context,
+        command: DeleteConversationCommand,
+    ) -> Result<()> {
+        
         debug!(
             conversation_id = %command.conversation_id,
             hard_delete = command.hard_delete,
@@ -75,7 +90,7 @@ impl ConversationCommandHandler {
         );
 
         self.domain_service
-            .delete_conversation(&command.conversation_id, command.hard_delete)
+            .delete_conversation(ctx, &command.conversation_id, command.hard_delete)
             .await?;
 
         info!(conversation_id = %command.conversation_id, "Conversation deleted");
@@ -85,10 +100,13 @@ impl ConversationCommandHandler {
     /// 处理强制会话同步命令
     pub async fn handle_force_conversation_sync(
         &self,
+        ctx: &Context,
         command: ForceConversationSyncCommand,
     ) -> Result<Vec<String>> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %command.user_id,
+            user_id = %user_id,
             session_count = command.conversation_ids.len(),
             "Handling force session sync command"
         );
@@ -96,7 +114,7 @@ impl ConversationCommandHandler {
         let missing = self
             .domain_service
             .force_conversation_sync(
-                &command.user_id,
+                ctx,
                 &command.conversation_ids,
                 command.reason.as_deref(),
             )
@@ -108,8 +126,10 @@ impl ConversationCommandHandler {
     /// 处理管理参与者命令
     pub async fn handle_manage_participants(
         &self,
+        ctx: &Context,
         command: ManageParticipantsCommand,
     ) -> Result<Vec<crate::domain::model::ConversationParticipant>> {
+        
         debug!(
             conversation_id = %command.conversation_id,
             to_add = command.to_add.len(),
@@ -120,6 +140,7 @@ impl ConversationCommandHandler {
         let participants = self
             .domain_service
             .manage_participants(
+                ctx,
                 &command.conversation_id,
                 command.to_add,
                 command.to_remove,
@@ -132,25 +153,37 @@ impl ConversationCommandHandler {
     }
 
     /// 处理更新游标命令
-    pub async fn handle_update_cursor(&self, command: UpdateCursorCommand) -> Result<()> {
+    pub async fn handle_update_cursor(
+        &self,
+        ctx: &Context,
+        command: UpdateCursorCommand,
+    ) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %command.user_id,
+            user_id = %user_id,
             conversation_id = %command.conversation_id,
             message_ts = command.message_ts,
             "Handling update cursor command"
         );
 
         self.domain_service
-            .update_cursor(&command.user_id, &command.conversation_id, command.message_ts)
+            .update_cursor(ctx, &command.conversation_id, command.message_ts)
             .await?;
 
         Ok(())
     }
 
     /// 处理更新设备状态命令
-    pub async fn handle_update_presence(&self, command: UpdatePresenceCommand) -> Result<()> {
+    pub async fn handle_update_presence(
+        &self,
+        ctx: &Context,
+        command: UpdatePresenceCommand,
+    ) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %command.user_id,
+            user_id = %user_id,
             device_id = %command.device_id,
             state = ?command.state,
             "Handling update presence command"
@@ -158,7 +191,7 @@ impl ConversationCommandHandler {
 
         self.domain_service
             .update_presence(
-                &command.user_id,
+                ctx,
                 &command.device_id,
                 command.device_platform,
                 command.state,
@@ -174,8 +207,10 @@ impl ConversationCommandHandler {
     /// 处理更新会话命令
     pub async fn handle_update_conversation(
         &self,
+        ctx: &Context,
         command: UpdateConversationCommand,
     ) -> Result<crate::domain::model::Conversation> {
+        
         debug!(
             conversation_id = %command.conversation_id,
             "Handling update conversation command"
@@ -184,6 +219,7 @@ impl ConversationCommandHandler {
         let conversation = self
             .domain_service
             .update_conversation(
+                ctx,
                 &command.conversation_id,
                 command.display_name,
                 command.attributes,
@@ -216,14 +252,17 @@ impl ConversationQueryHandler {
     /// 处理列出会话查询
     pub async fn handle_list_conversations(
         &self,
+        ctx: &Context,
         query: ListConversationsQuery,
     ) -> Result<(
         Vec<crate::domain::model::ConversationSummary>,
         Option<String>,
         bool,
     )> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %query.user_id,
+            user_id = %user_id,
             cursor = ?query.cursor,
             limit = query.limit,
             "Handling list sessions query"
@@ -231,7 +270,7 @@ impl ConversationQueryHandler {
 
         let result = self
             .domain_service
-            .list_conversations(&query.user_id, query.cursor.as_deref(), query.limit)
+            .list_conversations(ctx, query.cursor.as_deref(), query.limit)
             .await?;
 
         Ok(result)
@@ -240,20 +279,21 @@ impl ConversationQueryHandler {
     /// 处理搜索会话查询
     pub async fn handle_search_conversations(
         &self,
+        ctx: &Context,
         query: SearchConversationsQuery,
     ) -> Result<(Vec<crate::domain::model::ConversationSummary>, usize)> {
+        
         debug!(
-            user_id = ?query.user_id,
             filter_count = query.filters.len(),
             sort_count = query.sort.len(),
             limit = query.limit,
-            "Handling search sessions query"
+            "Handling search conversations query"
         );
 
         let result = self
             .domain_service
             .search_conversations(
-                query.user_id.as_deref(),
+                ctx,
                 query.filters,
                 query.sort,
                 query.limit,
@@ -267,10 +307,13 @@ impl ConversationQueryHandler {
     /// 处理会话引导查询
     pub async fn handle_conversation_bootstrap(
         &self,
+        ctx: &Context,
         query: ConversationBootstrapQuery,
     ) -> Result<ConversationBootstrapOutput> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required"))?.to_string();
+        
         debug!(
-            user_id = %query.user_id,
+            user_id = %user_id,
             include_recent = query.include_recent,
             "Handling session bootstrap query"
         );
@@ -278,7 +321,7 @@ impl ConversationQueryHandler {
         let result = self
             .domain_service
             .bootstrap_conversation(
-                &query.user_id,
+                ctx,
                 query.client_cursor,
                 query.include_recent,
                 query.recent_limit,
@@ -291,8 +334,10 @@ impl ConversationQueryHandler {
     /// 处理同步消息查询
     pub async fn handle_sync_messages(
         &self,
+        ctx: &Context,
         query: SyncMessagesQuery,
     ) -> Result<crate::domain::model::MessageSyncResult> {
+        
         debug!(
             conversation_id = %query.conversation_id,
             since_ts = query.since_ts,
@@ -304,6 +349,7 @@ impl ConversationQueryHandler {
         let result = self
             .domain_service
             .sync_messages(
+                ctx,
                 &query.conversation_id,
                 query.since_ts,
                 query.cursor.as_deref(),

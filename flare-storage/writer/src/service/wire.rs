@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use tracing::warn;
 
 use crate::application::handlers::MessagePersistenceCommandHandler;
@@ -14,7 +14,7 @@ use crate::domain::repository::{
     MessageIdempotencyRepository, ConversationStateRepository, UserSyncCursorRepository,
     WalCleanupRepository,
 };
-use crate::domain::repository::{SeqGenerator, ConversationUpdateRepository};
+use crate::domain::repository::ConversationUpdateRepository;
 use crate::domain::service::{MessageOperationDomainService, MessagePersistenceDomainService};
 use crate::infrastructure::external::media::MediaAttachmentClient;
 use crate::infrastructure::messaging::ack_publisher::KafkaAckPublisher;
@@ -25,15 +25,16 @@ use crate::infrastructure::persistence::redis_wal_cleanup::RedisWalCleanupReposi
 use crate::infrastructure::persistence::conversation_repo::PostgresConversationRepository;
 use crate::infrastructure::persistence::conversation_state::RedisConversationStateRepository;
 use crate::infrastructure::persistence::user_cursor::RedisUserCursorRepository;
-use crate::infrastructure::seq_generator::{DatabaseSeqGenerator, RedisSeqGenerator};
-use crate::interface::messaging::consumer::StorageWriterConsumer;
+use crate::interface::messaging::normal_consumer::NormalMessageConsumer;
+use crate::interface::messaging::operation_consumer::OperationMessageConsumer;
 use flare_im_core::metrics::StorageWriterMetrics;
 use flare_server_core::ServiceClient;
 use flare_server_core::kafka::build_kafka_producer; // 添加ServiceClient导入
 
 /// 应用上下文 - 包含所有已初始化的服务
 pub struct ApplicationContext {
-    pub consumer: StorageWriterConsumer,
+    pub normal_consumer: NormalMessageConsumer,
+    pub operation_consumer: OperationMessageConsumer,
 }
 
 /// 构建应用上下文
@@ -51,7 +52,7 @@ pub async fn initialize(
     // 1. 加载存储写入器配置
     let config = Arc::new(
         StorageWriterConfig::from_app_config(app_config)
-            .context("Failed to load storage writer service configuration")?,
+            .with_context(|| "Failed to load storage writer service configuration")?,
     );
 
     // 2. 创建 ACK 发布者（可选）
@@ -113,35 +114,6 @@ pub async fn initialize(
         .map(|client| Arc::new(RedisUserCursorRepository::new(client.clone())) as Arc<_>);
 
     // 13. 创建 Seq 生成器（可选）
-    let seq_generator: Option<Arc<dyn SeqGenerator + Send + Sync>> =
-        match (&redis_client, &archive_repo) {
-            (Some(redis), Some(archive)) => {
-                // 尝试从 PostgresMessageStore 获取 pool
-                if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                    Some(Arc::new(RedisSeqGenerator::new(
-                        redis.clone(),
-                        Some(Arc::new(pg_store.pool().clone())),
-                    ))
-                        as Arc<dyn SeqGenerator + Send + Sync>)
-                } else {
-                    // 只有 Redis，没有 PostgreSQL
-                    Some(Arc::new(RedisSeqGenerator::new(redis.clone(), None))
-                        as Arc<dyn SeqGenerator + Send + Sync>)
-                }
-            }
-            (None, Some(archive)) => {
-                // 只有 PostgreSQL，使用 DatabaseSeqGenerator
-                if let Some(pg_store) = archive.as_any().downcast_ref::<PostgresMessageStore>() {
-                    Some(
-                        Arc::new(DatabaseSeqGenerator::new(Arc::new(pg_store.pool().clone())))
-                            as Arc<dyn SeqGenerator + Send + Sync>,
-                    )
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
 
     // 14. 创建 Session 更新仓储（可选，需要 PostgreSQL）
     let session_update_repo: Option<Arc<dyn ConversationUpdateRepository + Send + Sync>> =
@@ -203,7 +175,6 @@ pub async fn initialize(
         media_verifier,
         conversation_state_repo.clone(), // 先传入原始的conversation_state_repo
         user_cursor_repo,
-        seq_generator,
         session_update_repo,
         conversation_client, // 添加conversation_client参数
     ));
@@ -229,13 +200,27 @@ pub async fn initialize(
         metrics.clone(),
     ));
 
-    // 16. 构建 Kafka 消费者（使用统一的构建器，与 push-server 完全一致）
-    let consumer =
-        StorageWriterConsumer::new(config.clone(), command_handler.clone(), metrics.clone())
-            .await
-            .context("Failed to create StorageWriterConsumer")?;
+    // 16. 构建 Kafka 消费者（普通消息和操作消息分离）
+    let normal_consumer = NormalMessageConsumer::new(
+        config.clone(),
+        command_handler.clone(),
+        metrics.clone(),
+    )
+    .await
+    .with_context(|| "Failed to create NormalMessageConsumer")?;
 
-    Ok(ApplicationContext { consumer })
+    let operation_consumer = OperationMessageConsumer::new(
+        config.clone(),
+        command_handler.clone(),
+        metrics.clone(),
+    )
+    .await
+    .with_context(|| "Failed to create OperationMessageConsumer")?;
+
+    Ok(ApplicationContext {
+        normal_consumer,
+        operation_consumer,
+    })
 }
 
 /// 构建 ACK 发布者
@@ -247,7 +232,7 @@ fn build_ack_publisher(
         let producer = build_kafka_producer(
             config.as_ref() as &dyn flare_server_core::kafka::KafkaProducerConfig
         )
-        .context("Failed to create Kafka producer for ACK")?;
+        .with_context(|| "Failed to create Kafka producer for ACK")?;
 
         let producer = Arc::new(producer);
         let publisher: Arc<dyn AckPublisher + Send + Sync> = Arc::new(KafkaAckPublisher::new(

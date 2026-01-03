@@ -73,8 +73,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("message-orchestrator", address)
             .add_spawn_with_shutdown("message-orchestrator-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let message_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(MessageServiceServer::new(handler));
+                
                 Server::builder()
-                    .add_service(MessageServiceServer::new(handler))
+                    .add_service(message_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

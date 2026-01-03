@@ -146,6 +146,7 @@ pub struct ConversationPolicy {
 
 #[derive(Clone, Debug)]
 pub struct Conversation {
+    pub tenant_id: String,
     pub conversation_id: String,
     pub conversation_type: String,
     pub business_type: String,

@@ -108,11 +108,8 @@ impl LongConnectionHandler {
         let message_domain_service = Arc::new(crate::domain::service::MessageDomainService::new());
         let message_handler = Arc::new(MessageHandler::new(
             message_domain_service,
-            message_router.clone(),
-            ack_sender.clone(),
+            message_router.clone().expect("MessageRouter must be available"),
             ack_publisher.clone(),
-            conversation_domain_service,
-            None, // conversation_service_client
             gateway_id.clone(),
         ));
 
@@ -204,9 +201,24 @@ impl LongConnectionHandler {
     }
 
     /// 获取连接对应的租户ID
-    pub(crate) async fn get_tenant_id_for_connection(&self, _connection_id: &str) -> Option<String> {
-        // 从连接信息中提取租户ID（如果连接信息中有）
-        // 目前先返回 None，使用默认租户
+    pub(crate) async fn get_tenant_id_for_connection(&self, connection_id: &str) -> Option<String> {
+        // 从连接信息的 metadata 中提取租户ID
+        if let Some(metadata) = self.get_connection_metadata(connection_id).await {
+            return crate::infrastructure::connection_context::extract_tenant_id_from_metadata(&metadata);
+        }
+        None
+    }
+    
+    /// 获取连接的 metadata（内部辅助函数）
+    pub(crate) async fn get_connection_metadata(
+        &self,
+        connection_id: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        if let Some(ref manager) = *self.manager_trait.lock().await {
+            if let Some((_, conn_info)) = manager.get_connection(connection_id).await {
+                return Some(conn_info.metadata.clone());
+            }
+        }
         None
     }
 

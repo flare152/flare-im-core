@@ -65,14 +65,21 @@ impl ConversationStateRepository for RedisConversationStateRepository {
                     "application/location"
                 }
                 Some(flare_proto::common::message_content::Content::Card(_)) => "application/card",
-                Some(flare_proto::common::message_content::Content::Notification(_)) => {
-                    "application/notification"
+                // Quote 不在 Content oneof 中，而是作为 Message.quote 字段
+                Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
+                    "application/link_card"
+                }
+                Some(flare_proto::common::message_content::Content::Forward(_)) => {
+                    "application/forward"
+                }
+                Some(flare_proto::common::message_content::Content::Thread(_)) => {
+                    "application/thread"
                 }
                 Some(flare_proto::common::message_content::Content::Custom(_)) => {
                     "application/custom"
                 }
-                Some(flare_proto::common::message_content::Content::Forward(_)) => {
-                    "application/forward"
+                Some(flare_proto::common::message_content::Content::Notification(_)) => {
+                    "application/notification"
                 }
                 Some(flare_proto::common::message_content::Content::Typing(_)) => {
                     "application/typing"
@@ -80,11 +87,8 @@ impl ConversationStateRepository for RedisConversationStateRepository {
                 Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
                     "application/system_event"
                 }
-                Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                    "application/quote"
-                }
-                Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
-                    "application/link_card"
+                Some(flare_proto::common::message_content::Content::Operation(_)) => {
+                    "application/operation"
                 }
                 None => "application/unknown",
             })

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::error::{ErrorBuilder, ErrorCode, FlareError, Result};
+use flare_server_core::context::Context;
 
 /// Hook 类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,68 +64,7 @@ impl Default for HookGroup {
     }
 }
 
-/// Hook 调用上下文
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HookContext {
-    pub tenant_id: String,
-    pub conversation_id: Option<String>,
-    pub conversation_type: Option<String>,
-    pub message_type: Option<String>,
-    pub sender_id: Option<String>,
-    pub trace_id: Option<String>,
-    #[serde(default)]
-    pub tags: HashMap<String, String>,
-    #[serde(default)]
-    pub attributes: HashMap<String, String>,
-    #[serde(default)]
-    pub request_metadata: HashMap<String, String>,
-    #[serde(default)]
-    pub occurred_at: Option<SystemTime>,
-}
-
-impl HookContext {
-    pub fn new<T: Into<String>>(tenant_id: T) -> Self {
-        Self {
-            tenant_id: tenant_id.into(),
-            ..Default::default()
-        }
-    }
-
-    pub fn with_session<T: Into<String>>(mut self, conversation_id: T) -> Self {
-        self.conversation_id = Some(conversation_id.into());
-        self
-    }
-
-    pub fn with_conversation_type<T: Into<String>>(mut self, ty: T) -> Self {
-        self.conversation_type = Some(ty.into());
-        self
-    }
-
-    pub fn with_message_type<T: Into<String>>(mut self, ty: T) -> Self {
-        self.message_type = Some(ty.into());
-        self
-    }
-
-    pub fn with_sender<T: Into<String>>(mut self, sender: T) -> Self {
-        self.sender_id = Some(sender.into());
-        self
-    }
-
-    pub fn with_trace<T: Into<String>>(mut self, trace_id: T) -> Self {
-        self.trace_id = Some(trace_id.into());
-        self
-    }
-
-    pub fn with_tags(mut self, tags: HashMap<String, String>) -> Self {
-        self.tags = tags;
-        self
-    }
-
-    pub fn occurred_now(mut self) -> Self {
-        self.occurred_at = Some(SystemTime::now());
-        self
-    }
-}
+// Hook 特定的数据通过 Context 的自定义数据存储（见 HookContextData）
 
 /// 消息草稿（Pre-Send 阶段可修改）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,7 +201,7 @@ impl HookOutcome {
 /// Pre-Send Hook Trait
 #[async_trait]
 pub trait PreSendHook: Send + Sync {
-    async fn handle(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision;
+    async fn handle(&self, ctx: &Context, draft: &mut MessageDraft) -> PreSendDecision;
 }
 
 /// Post-Send Hook Trait
@@ -269,7 +209,7 @@ pub trait PreSendHook: Send + Sync {
 pub trait PostSendHook: Send + Sync {
     async fn handle(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> HookOutcome;
@@ -278,13 +218,13 @@ pub trait PostSendHook: Send + Sync {
 /// Delivery Hook Trait
 #[async_trait]
 pub trait DeliveryHook: Send + Sync {
-    async fn handle(&self, ctx: &HookContext, event: &DeliveryEvent) -> HookOutcome;
+    async fn handle(&self, ctx: &Context, event: &DeliveryEvent) -> HookOutcome;
 }
 
 /// Recall Hook Trait
 #[async_trait]
 pub trait RecallHook: Send + Sync {
-    async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome;
+    async fn handle(&self, ctx: &Context, event: &RecallEvent) -> HookOutcome;
 }
 
 /// GetConversationParticipants Hook Trait
@@ -305,7 +245,7 @@ pub trait GetConversationParticipantsHook: Send + Sync {
     /// * `Err(e)` - Hook执行失败，降级到数据库查询
     async fn get_participants(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         conversation_id: &str,
     ) -> anyhow::Result<Option<Vec<String>>>;
 }
@@ -315,7 +255,7 @@ impl<T> PreSendHook for Arc<T>
 where
     T: PreSendHook + ?Sized,
 {
-    async fn handle(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision {
+    async fn handle(&self, ctx: &Context, draft: &mut MessageDraft) -> PreSendDecision {
         (**self).handle(ctx, draft).await
     }
 }
@@ -327,7 +267,7 @@ where
 {
     async fn handle(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> HookOutcome {
@@ -340,7 +280,7 @@ impl<T> DeliveryHook for Arc<T>
 where
     T: DeliveryHook + ?Sized,
 {
-    async fn handle(&self, ctx: &HookContext, event: &DeliveryEvent) -> HookOutcome {
+    async fn handle(&self, ctx: &Context, event: &DeliveryEvent) -> HookOutcome {
         (**self).handle(ctx, event).await
     }
 }
@@ -350,7 +290,7 @@ impl<T> RecallHook for Arc<T>
 where
     T: RecallHook + ?Sized,
 {
-    async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome {
+    async fn handle(&self, ctx: &Context, event: &RecallEvent) -> HookOutcome {
         (**self).handle(ctx, event).await
     }
 }

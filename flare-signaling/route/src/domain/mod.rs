@@ -11,7 +11,3 @@ pub use model::*;
 pub use repository::*;
 pub use service::*;
 pub use value_objects::*;
-
-// 重新导出旧的 model（用于向后兼容）
-#[deprecated(note = "Use domain::model::route::Route instead")]
-pub use model::RouteLegacy as Route;

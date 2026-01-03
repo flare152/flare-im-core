@@ -79,7 +79,7 @@ impl MessagePersistenceCommandHandler {
     #[instrument(skip(self), fields(tenant_id, message_id))]
     pub async fn handle(&self, command: ProcessStoreMessageCommand) -> Result<PersistenceResult> {
         let start = Instant::now();
-        let request = command.request;
+        let request = command.request.clone();
 
         // 在移动 request 之前，先保存需要的信息用于错误日志
         let message_id_for_error = request.message.as_ref().map(|m| m.server_id.clone());
@@ -105,8 +105,9 @@ impl MessagePersistenceCommandHandler {
             }
         }
 
-        // 准备消息
-        let mut prepared = match self.domain_service.prepare_message(request) {
+        // 准备消息（克隆 request 以避免移动）
+        let request_clone = request.clone();
+        let mut prepared = match self.domain_service.prepare_message(request_clone) {
             Ok(p) => p,
             Err(e) => {
                 tracing::error!(
@@ -123,10 +124,19 @@ impl MessagePersistenceCommandHandler {
         let conversation_id = prepared.conversation_id.clone();
         let timeline = prepared.timeline.clone();
 
+        // 从 request 构建 Context（在移动 request 之前先保存 tenant 信息）
+        use flare_server_core::context::Context;
+        let tenant_id = request.tenant.as_ref().map(|t| t.tenant_id.clone());
+        let ctx = if let Some(ref tenant_id) = tenant_id {
+            Context::root().with_tenant_id(tenant_id.clone())
+        } else {
+            Context::root()
+        };
+
         // 验证并补全媒资附件
         if let Err(e) = self
             .domain_service
-            .verify_and_enrich_media(&mut prepared.message)
+            .verify_and_enrich_media(&ctx, &mut prepared.message)
             .await
         {
             tracing::error!(error = %e, message_id = %message_id, "Failed to verify and enrich media");
@@ -174,7 +184,7 @@ impl MessagePersistenceCommandHandler {
                         .observe(total_duration.as_secs_f64());
                     self.metrics
                         .messages_persisted_total
-                        .with_label_values(&[&tenant_id])
+                        .with_label_values(&[tenant_id.as_deref().unwrap_or("default")])
                         .inc();
 
                     tracing::info!(
@@ -226,14 +236,23 @@ impl MessagePersistenceCommandHandler {
         let start = Instant::now();
 
         // 1. 批量准备消息
+        use flare_server_core::context::Context;
         let mut prepared_messages = Vec::with_capacity(commands.len());
-        for command in commands {
-            match self.domain_service.prepare_message(command.request) {
+        for command in &commands {
+            // 从 request 构建 Context
+            let ctx = if let Some(tenant) = &command.request.tenant {
+                Context::root()
+                    .with_tenant_id(tenant.tenant_id.clone())
+            } else {
+                Context::root()
+            };
+
+            match self.domain_service.prepare_message(command.request.clone()) {
                 Ok(mut prepared) => {
                     // 验证并补全媒资附件
                     if let Err(e) = self
                         .domain_service
-                        .verify_and_enrich_media(&mut prepared.message)
+                        .verify_and_enrich_media(&ctx, &mut prepared.message)
                         .await
                     {
                         tracing::warn!(error = %e, message_id = %prepared.message_id, "Failed to verify media, continuing");

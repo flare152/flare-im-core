@@ -9,9 +9,10 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use flare_im_core::{
-    DeliveryEvent, HookContext, HookErrorPolicy, HookGroup, HookMetadata, MessageDraft,
+    DeliveryEvent, HookErrorPolicy, HookGroup, HookMetadata, MessageDraft,
     MessageRecord, PreSendDecision, PreSendHook, RecallEvent,
 };
+use flare_server_core::context::Context;
 
 /// Hook执行模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,7 +383,7 @@ impl HookExecutionPlan {
     /// 执行PreSend Hook
     pub async fn execute(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
     ) -> anyhow::Result<PreSendDecision> {
         // 优先使用适配器（gRPC/WebHook）
@@ -402,7 +403,7 @@ impl HookExecutionPlan {
     /// 执行PostSend Hook
     pub async fn execute_post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> anyhow::Result<()> {
@@ -418,7 +419,7 @@ impl HookExecutionPlan {
     /// 执行Delivery Hook
     pub async fn execute_delivery(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &DeliveryEvent,
     ) -> anyhow::Result<()> {
         // 优先使用适配器（gRPC/WebHook）
@@ -433,7 +434,7 @@ impl HookExecutionPlan {
     /// 执行Recall Hook
     pub async fn execute_recall(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &RecallEvent,
     ) -> anyhow::Result<PreSendDecision> {
         // 优先使用适配器（gRPC/WebHook）

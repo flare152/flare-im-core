@@ -6,10 +6,9 @@ use flare_core::common::error::{FlareError, Result};
 use flare_core::common::protocol::MessageCommand;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
-use crate::infrastructure::ConversationServiceClient;
-use crate::domain::service::{ConversationDomainService, MessageDomainService};
+use crate::domain::service::MessageDomainService;
 use crate::infrastructure::AckPublisher;
-use crate::infrastructure::messaging::ack_sender::AckSender;
+use crate::infrastructure::messaging::ack_publisher::NoopAckPublisher;
 use crate::infrastructure::messaging::message_router::MessageRouter;
 
 /// 消息处理处理器（应用层 - 编排层）
@@ -23,31 +22,22 @@ use crate::infrastructure::messaging::message_router::MessageRouter;
 /// 此处理器不包含业务逻辑，业务逻辑在 MessageDomainService 中
 pub struct MessageHandler {
     message_domain_service: Arc<MessageDomainService>,
-    message_router: Option<Arc<MessageRouter>>,
-    ack_sender: Arc<AckSender>,
-    ack_publisher: Option<Arc<dyn AckPublisher>>,
-    session_domain_service: Arc<ConversationDomainService>,
-    conversation_service_client: Option<Arc<ConversationServiceClient>>,
+    message_router: Arc<MessageRouter>,
+    ack_publisher: Arc<dyn AckPublisher>,
     gateway_id: String,
 }
 
 impl MessageHandler {
     pub fn new(
         message_domain_service: Arc<MessageDomainService>,
-        message_router: Option<Arc<MessageRouter>>,
-        ack_sender: Arc<AckSender>,
+        message_router: Arc<MessageRouter>,
         ack_publisher: Option<Arc<dyn AckPublisher>>,
-        session_domain_service: Arc<ConversationDomainService>,
-        conversation_service_client: Option<Arc<ConversationServiceClient>>,
         gateway_id: String,
     ) -> Self {
         Self {
             message_domain_service,
             message_router,
-            ack_sender,
-            ack_publisher,
-            session_domain_service,
-            conversation_service_client,
+            ack_publisher: ack_publisher.unwrap_or_else(|| NoopAckPublisher::new()),
             gateway_id,
         }
     }
@@ -77,21 +67,8 @@ impl MessageHandler {
             message_len = msg_cmd.payload.len(),
             "Message received from client"
         );
-        // 检查消息路由器
-        let router = self.message_router.as_ref().ok_or_else(|| {
-            let error_msg = "Message Router not configured";
-            error!(
-                user_id = %user_id,
-                connection_id = %connection_id,
-                message_id = %msg_cmd.message_id,
-                "Message Router not configured"
-            );
-            FlareError::system(error_msg)
-        })?;
-
         // 验证消息格式（领域层业务规则）
         if let Err(e) = self.message_domain_service.validate_message(&msg_cmd) {
-            let error_msg = format!("无效的消息格式: {}", e);
             error!(
                 ?e,
                 user_id = %user_id,
@@ -106,7 +83,6 @@ impl MessageHandler {
         let conversation_id = match self.message_domain_service.extract_conversation_id(&msg_cmd) {
             Ok(sid) => sid,
             Err(e) => {
-                let error_msg = format!("无效的消息格式: {}", e);
                 error!(
                     ?e,
                     user_id = %user_id,
@@ -119,10 +95,10 @@ impl MessageHandler {
             }
         };
 
-        // 路由消息
+        // 路由消息（传递 connection_id 以获取连接上下文）
         let original_message_id = msg_cmd.message_id.clone();
-        let route_res = router
-            .route_message(user_id, &conversation_id, msg_cmd.payload.clone(), tenant_id)
+        let route_res = self.message_router
+            .route_message(user_id, &conversation_id, msg_cmd.payload.clone(), Some(connection_id))
             .await;
 
         let route_duration = start_time.elapsed();
@@ -168,79 +144,39 @@ impl MessageHandler {
         );
 
         // 上报 ACK 到 Push Server
-        if let Some(ref ack_publisher) = self.ack_publisher {
-            let window_id = msg_cmd
-                .metadata
-                .get("window_id")
-                .and_then(|v| String::from_utf8(v.clone()).ok());
-            let ack_seq = msg_cmd
-                .metadata
-                .get("ack_seq")
-                .and_then(|v| std::str::from_utf8(v.as_slice()).ok())
-                .and_then(|s| s.parse::<i64>().ok());
+        let window_id = msg_cmd
+            .metadata
+            .get("window_id")
+            .and_then(|v| String::from_utf8(v.clone()).ok());
+        let ack_seq = msg_cmd
+            .metadata
+            .get("ack_seq")
+            .and_then(|v| std::str::from_utf8(v.as_slice()).ok())
+            .and_then(|s| s.parse::<i64>().ok());
 
-            // 创建审计事件
-            let ack_event = crate::infrastructure::AckAuditEvent {
-                ack: crate::infrastructure::AckData {
-                    message_id: message_id.clone(),
-                    status: crate::infrastructure::AckStatusValue::Success,
-                    error_code: None,
-                    error_message: None,
-                },
-                user_id: user_id.to_string(),
-                connection_id: connection_id.to_string(),
-                gateway_id: self.gateway_id.clone(),
-                timestamp: chrono::Utc::now().timestamp(),
-                window_id,
-                ack_seq,
-            };
+        // 创建审计事件
+        let ack_event = crate::infrastructure::AckAuditEvent {
+            ack: crate::infrastructure::AckData {
+                message_id: message_id.clone(),
+                status: crate::infrastructure::AckStatusValue::Success,
+                error_code: None,
+                error_message: None,
+            },
+            user_id: user_id.to_string(),
+            connection_id: connection_id.to_string(),
+            gateway_id: self.gateway_id.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+            window_id,
+            ack_seq,
+        };
 
-            if let Err(e) = ack_publisher.publish_ack(&ack_event).await {
-                warn!(
-                    ?e,
-                    message_id = %message_id,
-                    user_id = %user_id,
-                    "Failed to publish client ACK"
-                );
-            }
-        }
-
-        // 推送窗口 ACK 更新会话游标（如果提供）
-        if let Some(ref conversation_client) = self.conversation_service_client {
-            // 从元数据中提取会话信息
-            if let Some(conversation_id) = msg_cmd
-                .metadata
-                .get("conversation_id")
-                .and_then(|v| String::from_utf8(v.clone()).ok())
-            {
-                // 提取时间戳（如果有）
-                let message_ts = msg_cmd
-                    .metadata
-                    .get("timestamp")
-                    .and_then(|v| std::str::from_utf8(v.as_slice()).ok())
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-
-                // 调用会话服务更新游标
-                if let Err(e) = conversation_client
-                    .update_session_cursor(user_id, &conversation_id, message_ts)
-                    .await
-                {
-                    warn!(
-                        ?e,
-                        user_id = %user_id,
-                        conversation_id = %conversation_id,
-                        "Failed to update session cursor"
-                    );
-                } else {
-                    info!(
-                        user_id = %user_id,
-                        conversation_id = %conversation_id,
-                        message_ts = message_ts,
-                        "Session cursor updated successfully"
-                    );
-                }
-            }
+        if let Err(e) = self.ack_publisher.publish_ack(&ack_event).await {
+            warn!(
+                ?e,
+                message_id = %message_id,
+                user_id = %user_id,
+                "Failed to publish client ACK"
+            );
         }
 
         Ok(())

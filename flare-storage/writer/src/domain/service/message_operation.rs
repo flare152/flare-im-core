@@ -5,9 +5,9 @@
 //! - 提取 MessageOperation
 //! - 根据操作类型更新数据库
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use flare_proto::common::{
-    Message, MessageOperation, MessageStatus, OperationType, VisibilityStatus,
+    Message, MessageOperation, OperationType,
     message_operation::OperationData,
 };
 use prost::Message as ProstMessage;
@@ -68,7 +68,7 @@ impl MessageOperationDomainService {
                             .map_err(|e| anyhow!("Failed to decode base64: {}", e))?;
 
                         // 反序列化 MessageOperation
-                        let operation = MessageOperation::decode(&decoded[..])
+                        let operation = ProstMessage::decode(&decoded[..])
                             .map_err(|e| anyhow!("Failed to decode MessageOperation: {}", e))?;
 
                         return Ok(Some(operation));
@@ -85,7 +85,7 @@ impl MessageOperationDomainService {
     pub async fn process_operation(
         &self,
         operation: MessageOperation,
-        _message: &Message,
+        message: &Message,
     ) -> Result<()> {
         let archive_repo = self
             .archive_repo
@@ -99,6 +99,18 @@ impl MessageOperationDomainService {
             Ok(OperationType::Edit) => self.handle_edit_operation(&operation, archive_repo).await,
             Ok(OperationType::Delete) => {
                 self.handle_delete_operation(&operation, archive_repo).await
+            }
+            Ok(OperationType::Read) => {
+                self.handle_read_operation(&operation, archive_repo).await
+            }
+            Ok(OperationType::ReactionAdd) | Ok(OperationType::ReactionRemove) => {
+                self.handle_reaction_operation(&operation, archive_repo).await
+            }
+            Ok(OperationType::Pin) | Ok(OperationType::Unpin) => {
+                self.handle_pin_operation(&operation, message, archive_repo).await
+            }
+            Ok(OperationType::Mark) => {
+                self.handle_mark_operation(&operation, message, archive_repo).await
             }
             _ => {
                 warn!(
@@ -119,17 +131,21 @@ impl MessageOperationDomainService {
     ) -> Result<()> {
         let message_id = &operation.target_message_id;
 
-        // 更新消息状态为 Recalled
+        let recall_reason = match &operation.operation_data {
+            Some(OperationData::Recall(recall_data)) => {
+                if recall_data.reason.is_empty() {
+                    None
+                } else {
+                    Some(recall_data.reason.as_str())
+                }
+            }
+            _ => None,
+        };
+
         archive_repo
-            .update_message_status(
-                message_id,
-                MessageStatus::Recalled,
-                Some(true),                  // is_recalled
-                operation.timestamp.clone(), // recalled_at
-            )
+            .update_message_fsm_state(message_id, "RECALLED", recall_reason)
             .await?;
 
-        // 追加操作记录
         archive_repo.append_operation(message_id, operation).await?;
 
         Ok(())
@@ -138,22 +154,17 @@ impl MessageOperationDomainService {
     /// 处理编辑操作
     ///
     /// 功能：
-    /// 1. 验证编辑权限（只有发送者可以编辑）
-    /// 2. 检查编辑时间限制（默认 48 小时，参考 Telegram）
-    /// 3. 验证编辑版本号（必须递增）
-    /// 4. 更新消息内容并保存编辑历史
-    /// 5. 追加操作记录
+    /// 1. 更新消息内容并保存编辑历史（权限验证已在 Orchestrator 完成）
+    /// 2. 追加操作记录
+    ///
+    /// 注意：Writer 只负责数据持久化，不包含业务逻辑（权限验证、时间限制等）
+    /// 所有业务逻辑应在 Orchestrator 层完成，以便快速失败并返回错误给客户端
     #[instrument(skip(self, archive_repo), fields(message_id = %operation.target_message_id))]
     async fn handle_edit_operation(
         &self,
         operation: &MessageOperation,
         archive_repo: &Arc<dyn ArchiveStoreRepository + Send + Sync>,
     ) -> Result<()> {
-        use chrono::Utc;
-        use prost::Message as _;
-
-        const MAX_EDIT_TIME_SECONDS: i64 = 48 * 3600; // 48 小时（参考 Telegram）
-
         let message_id = &operation.target_message_id;
 
         // 从 operation_data 中提取编辑后的内容
@@ -162,41 +173,30 @@ impl MessageOperationDomainService {
             _ => return Err(anyhow!("Edit operation requires EditOperationData")),
         };
 
-        let new_content = edit_data
-            .new_content
-            .as_ref()
-            .ok_or_else(|| anyhow!("Edit operation requires new_content"))?;
+        let new_content_bytes = &edit_data.new_content;
 
-        // 1. 获取当前消息（用于验证权限和时间限制）
-        // 注意：这里需要通过 Reader 服务获取消息，或者扩展 ArchiveStoreRepository 接口
-        // 为了简化，我们假设消息信息已经在 operation 中，或者通过其他方式获取
-        // 实际实现中，应该通过 Reader 服务获取消息详情
+        // 解码 new_content 从 &[u8] 到 MessageContent
+        let new_content = flare_proto::common::MessageContent::decode(new_content_bytes.as_slice())
+            .context("Failed to decode new_content as MessageContent")?;
 
-        // 2. 检查编辑时间限制（如果消息时间戳可用）
-        if let Some(message_timestamp) = &operation.timestamp {
-            let now = Utc::now();
-            let message_time = chrono::DateTime::<chrono::Utc>::from_timestamp(
-                message_timestamp.seconds,
-                message_timestamp.nanos as u32,
-            )
-            .ok_or_else(|| anyhow!("Invalid message timestamp"))?;
+        // 1. 更新消息内容（内部会验证版本号并保存编辑历史）
+        let reason = if edit_data.reason.is_empty() {
+            None
+        } else {
+            Some(edit_data.reason.as_str())
+        };
 
-            let elapsed_seconds = (now - message_time).num_seconds();
-            if elapsed_seconds > MAX_EDIT_TIME_SECONDS {
-                return Err(anyhow!(
-                    "Message cannot be edited after {} hours. Elapsed: {} seconds",
-                    MAX_EDIT_TIME_SECONDS / 3600,
-                    elapsed_seconds
-                ));
-            }
-        }
-
-        // 3. 更新消息内容（内部会验证版本号并保存编辑历史）
         archive_repo
-            .update_message_content(message_id, new_content, edit_data.edit_version)
+            .update_message_content(
+                message_id,
+                &new_content,
+                edit_data.edit_version,
+                &operation.operator_id,
+                reason,
+            )
             .await?;
 
-        // 4. 追加操作记录
+        // 2. 追加操作记录
         archive_repo.append_operation(message_id, operation).await?;
 
         Ok(())
@@ -211,22 +211,14 @@ impl MessageOperationDomainService {
     ) -> Result<()> {
         let message_id = &operation.target_message_id;
 
-        // 检查删除类型
         if let Some(OperationData::Delete(delete_data)) = &operation.operation_data {
-            // 硬删除：全局删除（user_id = None）
             if delete_data.delete_type == flare_proto::common::DeleteType::Hard as i32 {
                 archive_repo
-                    .update_message_visibility(
-                        message_id,
-                        None, // user_id = None 表示全局删除
-                        VisibilityStatus::VisibilityDeleted,
-                    )
+                    .update_message_fsm_state(message_id, "DELETED_HARD", None)
                     .await?;
 
-                // 追加操作记录
                 archive_repo.append_operation(message_id, operation).await?;
             } else {
-                // 软删除：应该通过 Reader 处理（不需要 Kafka）
                 warn!(
                     message_id = %message_id,
                     "Soft delete operation should be handled by Reader, not Writer"
@@ -235,6 +227,139 @@ impl MessageOperationDomainService {
         } else {
             return Err(anyhow!("Delete operation requires DeleteOperationData"));
         }
+
+        Ok(())
+    }
+
+    /// 处理已读操作
+    #[instrument(skip(self, archive_repo), fields(message_id = %operation.target_message_id))]
+    async fn handle_read_operation(
+        &self,
+        operation: &MessageOperation,
+        archive_repo: &Arc<dyn ArchiveStoreRepository + Send + Sync>,
+    ) -> Result<()> {
+        let message_id = &operation.target_message_id;
+        let user_id = &operation.operator_id;
+
+        archive_repo.record_message_read(message_id, user_id).await?;
+        archive_repo.append_operation(message_id, operation).await?;
+
+        Ok(())
+    }
+
+    /// 处理反应操作
+    #[instrument(skip(self, archive_repo), fields(message_id = %operation.target_message_id))]
+    async fn handle_reaction_operation(
+        &self,
+        operation: &MessageOperation,
+        archive_repo: &Arc<dyn ArchiveStoreRepository + Send + Sync>,
+    ) -> Result<()> {
+        let message_id = &operation.target_message_id;
+        let user_id = &operation.operator_id;
+
+        if let Some(OperationData::Reaction(reaction_data)) = &operation.operation_data {
+            let add = operation.operation_type == OperationType::ReactionAdd as i32;
+            archive_repo
+                .upsert_message_reaction(message_id, &reaction_data.emoji, user_id, add)
+                .await?;
+        } else {
+            return Err(anyhow!("Reaction operation requires ReactionOperationData"));
+        }
+
+        archive_repo.append_operation(message_id, operation).await?;
+
+        Ok(())
+    }
+
+    /// 处理置顶操作
+    #[instrument(skip(self, archive_repo), fields(message_id = %operation.target_message_id))]
+    async fn handle_pin_operation(
+        &self,
+        operation: &MessageOperation,
+        message: &Message,
+        archive_repo: &Arc<dyn ArchiveStoreRepository + Send + Sync>,
+    ) -> Result<()> {
+        let message_id = &operation.target_message_id;
+        let user_id = &operation.operator_id;
+        let conversation_id = &message.conversation_id;
+
+        let pin = operation.operation_type == OperationType::Pin as i32;
+
+        if let Some(OperationData::Pin(pin_data)) = &operation.operation_data {
+            let expire_at = pin_data
+                .expire_at
+                .as_ref()
+                .and_then(|ts| {
+                    flare_im_core::utils::timestamp_to_datetime(ts)
+                });
+
+            let reason = if pin_data.reason.is_empty() {
+                None
+            } else {
+                Some(pin_data.reason.as_str())
+            };
+
+            archive_repo
+                .pin_message(
+                    message_id,
+                    conversation_id,
+                    user_id,
+                    pin,
+                    expire_at,
+                    reason,
+                )
+                .await?;
+        } else {
+            return Err(anyhow!("Pin operation requires PinOperationData"));
+        }
+
+        archive_repo.append_operation(message_id, operation).await?;
+
+        Ok(())
+    }
+
+    /// 处理标记操作
+    #[instrument(skip(self, archive_repo), fields(message_id = %operation.target_message_id))]
+    async fn handle_mark_operation(
+        &self,
+        operation: &MessageOperation,
+        message: &Message,
+        archive_repo: &Arc<dyn ArchiveStoreRepository + Send + Sync>,
+    ) -> Result<()> {
+        let message_id = &operation.target_message_id;
+        let user_id = &operation.operator_id;
+        let conversation_id = &message.conversation_id;
+
+        if let Some(OperationData::Mark(mark_data)) = &operation.operation_data {
+            let mark_type = match mark_data.mark_type {
+                x if x == flare_proto::common::MarkType::Important as i32 => "IMPORTANT",
+                x if x == flare_proto::common::MarkType::Todo as i32 => "TODO",
+                x if x == flare_proto::common::MarkType::Done as i32 => "DONE",
+                x if x == flare_proto::common::MarkType::Custom as i32 => "CUSTOM",
+                _ => return Err(anyhow!("Invalid mark type")),
+            };
+
+            let color = if mark_data.color.is_empty() {
+                None
+            } else {
+                Some(mark_data.color.as_str())
+            };
+
+            archive_repo
+                .mark_message(
+                    message_id,
+                    conversation_id,
+                    user_id,
+                    mark_type,
+                    color,
+                    true,
+                )
+                .await?;
+        } else {
+            return Err(anyhow!("Mark operation requires MarkOperationData"));
+        }
+
+        archive_repo.append_operation(message_id, operation).await?;
 
         Ok(())
     }

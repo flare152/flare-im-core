@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
+use flare_im_core::hooks::{MessageDraft, MessageRecord};
+use flare_im_core::hooks::hook_context_data::{HookContextData, set_hook_context_data};
+use flare_server_core::context::Context;
 use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::common::Message;
 use flare_proto::storage::StoreMessageRequest;
@@ -36,93 +38,9 @@ fn extract_client_message_id(message: &Message) -> Option<String> {
 pub fn build_hook_context(
     request: &StoreMessageRequest,
     default_tenant: Option<&String>,
-) -> HookContext {
-    let mut ctx = HookContext::new(tenant_id(&request.tenant, default_tenant));
-
-    ctx.conversation_id = non_empty(request.conversation_id.clone());
-    ctx.tags = request.tags.clone();
-
-    if let Some(RequestContext {
-        request_id,
-        trace,
-        actor: _,
-        device,
-        channel: _,
-        user_agent,
-        attributes,
-    }) = request.context.as_ref()
-    {
-        ctx.request_metadata
-            .insert("request_id".into(), request_id.clone());
-        
-        if let Some(trace_ctx) = trace.as_ref() {
-            ctx.request_metadata
-                .insert("span_id".into(), trace_ctx.span_id.clone());
-            if !trace_ctx.trace_id.is_empty() {
-                ctx.trace_id = Some(trace_ctx.trace_id.clone());
-            }
-            // 将 trace tags 添加到 ctx.tags
-            for (k, v) in &trace_ctx.tags {
-                ctx.tags.insert(k.clone(), v.clone());
-            }
-        }
-        
-        if let Some(device_ctx) = device.as_ref() {
-            ctx.request_metadata
-                .insert("client_ip".into(), device_ctx.ip_address.clone());
-        }
-        
-        if !user_agent.is_empty() {
-            ctx.request_metadata
-                .insert("user_agent".into(), user_agent.clone());
-        }
-        
-        // 将 attributes 添加到 ctx.tags
-        for (k, v) in attributes {
-            ctx.tags.insert(k.clone(), v.clone());
-        }
-    }
-
-    if let Some(tenant) = request.tenant.as_ref() {
-        ctx.attributes
-            .entry("tenant_business_type".into())
-            .or_insert(tenant.business_type.clone());
-        ctx.attributes
-            .entry("tenant_environment".into())
-            .or_insert(tenant.environment.clone());
-        ctx.attributes.extend(tenant.attributes.clone());
-    }
-
-    if let Some(message) = request.message.as_ref() {
-        let message_type_label = detect_message_type(message);
-        ctx.sender_id = non_empty(message.sender_id.clone());
-        ctx.conversation_type = non_empty(message.conversation_type.clone());
-        ctx.message_type = Some(message_type_label.to_string());
-
-        ctx.attributes
-            .entry("business_type".into())
-            .or_insert(message.business_type.clone());
-        ctx.attributes
-            .entry("conversation_type".into())
-            .or_insert(message.conversation_type.clone());
-        ctx.attributes
-            .entry("receiver_id".into())
-            .or_insert(message.receiver_id.clone());
-        if let Some(client_msg_id) = extract_client_message_id(message) {
-            ctx.attributes
-                .entry("client_message_id".into())
-                .or_insert(client_msg_id);
-        }
-        ctx.attributes
-            .entry("message_type_label".into())
-            .or_insert(message_type_label.to_string());
-    }
-
-    ctx.attributes
-        .entry("sync".into())
-        .or_insert(request.sync.to_string());
-
-    ctx
+) -> Context {
+    // 使用 domain 层的实现
+    crate::domain::service::hook_builder::build_hook_context(request, default_tenant)
 }
 
 pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result<MessageDraft> {
@@ -270,9 +188,8 @@ pub fn apply_draft_to_request(request: &mut StoreMessageRequest, draft: &Message
                 "card" => MessageType::Card as i32,
                 "notification" => MessageType::Notification as i32,
                 "typing" => MessageType::Typing as i32,
-                "recall" => MessageType::Recall as i32,
-                "read" => MessageType::Read as i32,
-                "forward" => MessageType::Forward as i32,
+                "recall" | "read" | "operation" => MessageType::Operation as i32, // 统一操作类型
+                "forward" => MessageType::MergeForward as i32,
                 "vote" => MessageType::Vote as i32,
                 "task" => MessageType::Task as i32,
                 "schedule" => MessageType::Schedule as i32,
@@ -351,40 +268,9 @@ pub fn draft_from_submission(submission: &MessageSubmission) -> anyhow::Result<M
     build_draft_from_request(&submission.kafka_payload)
 }
 
-pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookContext {
-    if updated.trace_id.is_none() {
-        updated.trace_id = original.trace_id.clone();
-    }
-    if updated.sender_id.is_none() {
-        updated.sender_id = original.sender_id.clone();
-    }
-    if updated.conversation_type.is_none() {
-        updated.conversation_type = original.conversation_type.clone();
-    }
-    if updated.message_type.is_none() {
-        updated.message_type = original.message_type.clone();
-    }
-
-    if updated.tags.is_empty() {
-        updated.tags = original.tags.clone();
-    }
-
-    if updated.attributes.is_empty() {
-        updated.attributes = original.attributes.clone();
-    } else {
-        for (key, value) in &original.attributes {
-            updated
-                .attributes
-                .entry(key.clone())
-                .or_insert(value.clone());
-        }
-    }
-
-    if updated.request_metadata.is_empty() {
-        updated.request_metadata = original.request_metadata.clone();
-    }
-
-    updated
+pub fn merge_context(original: &Context, updated: Context) -> Context {
+    // 使用 domain 层的实现
+    crate::domain::service::hook_builder::merge_context(original, updated)
 }
 
 fn detect_message_type(message: &Message) -> &'static str {
@@ -425,8 +311,7 @@ fn detect_message_type(message: &Message) -> &'static str {
         Ok(MessageType::Notification) => "notification",
         // 功能消息类型（8种）
         Ok(MessageType::Typing) => "typing",
-        Ok(MessageType::Recall) => "recall",
-        Ok(MessageType::Read) => "read",
+        Ok(MessageType::Operation) => "operation", // 统一操作类型（包含 recall/read/edit 等）
         Ok(MessageType::Forward) => "forward",
         Ok(MessageType::Vote) => "vote",
         Ok(MessageType::Task) => "task",

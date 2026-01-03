@@ -5,7 +5,6 @@ use crate::domain::model::{ConversationFilter, ConversationSort};
 /// 列出会话查询
 #[derive(Debug, Clone)]
 pub struct ListConversationsQuery {
-    pub user_id: String,
     pub cursor: Option<String>,
     pub limit: i32,
 }
@@ -13,7 +12,6 @@ pub struct ListConversationsQuery {
 /// 搜索会话查询
 #[derive(Debug, Clone)]
 pub struct SearchConversationsQuery {
-    pub user_id: Option<String>,
     pub filters: Vec<ConversationFilter>,
     pub sort: Vec<ConversationSort>,
     pub limit: usize,
@@ -23,7 +21,6 @@ pub struct SearchConversationsQuery {
 /// 会话引导查询
 #[derive(Debug, Clone)]
 pub struct ConversationBootstrapQuery {
-    pub user_id: String,
     pub client_cursor: HashMap<String, i64>,
     pub include_recent: bool,
     pub recent_limit: Option<i32>,

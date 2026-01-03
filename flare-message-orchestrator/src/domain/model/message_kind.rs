@@ -1,5 +1,18 @@
 use flare_proto::common::{Message as StorageMessage, MessageType};
 
+/// 消息类别（用于决定处理策略）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageCategory {
+    /// 临时消息（TYPING、SYSTEM_EVENT）：只推送，不持久化，不经过 WAL
+    Temporary,
+    /// 通知消息（NOTIFICATION）：根据 persistent 标志决定是否持久化，但都推送
+    Notification,
+    /// 操作消息（OPERATION）：根据操作类型决定同步/异步处理
+    Operation,
+    /// 普通消息：推送+持久化+WAL
+    Normal,
+}
+
 /// 消息处理类型（用于决定是否需要持久化）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageProcessingType {
@@ -13,6 +26,7 @@ pub enum MessageProcessingType {
 pub struct MessageProfile {
     message_type: MessageType,
     message_type_label: String,
+    category: MessageCategory,
     processing_type: MessageProcessingType,
 }
 
@@ -64,19 +78,18 @@ impl MessageProfile {
                         Some(flare_proto::common::message_content::Content::Typing(_)) => {
                             Some("typing".to_string())
                         }
-                        // 注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除
-                        // Some(flare_proto::common::message_content::Content::Vote(_)) => Some("vote".to_string()),
-                        // Some(flare_proto::common::message_content::Content::Task(_)) => Some("task".to_string()),
-                        // Some(flare_proto::common::message_content::Content::Schedule(_)) => Some("schedule".to_string()),
-                        // Some(flare_proto::common::message_content::Content::Announcement(_)) => Some("announcement".to_string()),
+                        Some(flare_proto::common::message_content::Content::Thread(_)) => {
+                            Some("thread".to_string())
+                        }
                         Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
                             Some("system_event".to_string())
                         }
-                        Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                            Some("quote".to_string())
-                        }
+                        // Quote 已废弃：现在通过 Message.quote 字段处理
                         Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
                             Some("link_card".to_string())
+                        }
+                        Some(flare_proto::common::message_content::Content::Operation(_)) => {
+                            Some("operation".to_string())
                         }
                         None => None,
                     }
@@ -101,21 +114,13 @@ impl MessageProfile {
 
             // 功能消息类型（8种）
             "typing" => MessageType::Typing,
-            "recall" => MessageType::Recall,
-            "read" => MessageType::Read,
-            "forward" => MessageType::Forward,
-            // 注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除
-            // "vote" => MessageType::Vote,
-            // "task" => MessageType::Task,
-            // "schedule" => MessageType::Schedule,
-            // "announcement" => MessageType::Announcement,
+            "recall" | "operation" => MessageType::Operation, // recall 和 read 统一使用 Operation
+            "read" => MessageType::Operation,
+            "forward" => MessageType::MergeForward,
 
             // 扩展消息类型（5种）
             "mini_program" | "miniprogram" => MessageType::MiniProgram,
             "link_card" | "linkcard" => MessageType::LinkCard,
-            "quote" => MessageType::Quote,
-            // 注意：Thread 在新版 protobuf 中已移除
-            // "thread" => MessageType::Thread,
             "merge_forward" | "mergeforward" => MessageType::MergeForward,
 
             _ => MessageType::Unspecified,
@@ -130,41 +135,84 @@ impl MessageProfile {
             .entry("message_type".into())
             .or_insert_with(|| message_type_label.clone());
 
+        // 判断消息类别（Temporary/Notification/Operation/Normal）
+        let category = Self::determine_category(&message_type, &message_type_label, &message.extra);
+
         // 判断消息处理类型（Normal vs Notification）
-        let processing_type = Self::determine_processing_type(&message_type_label, &message.extra);
+        let processing_type = Self::determine_processing_type(&category, &message_type_label, &message.content, &message.extra);
 
         MessageProfile {
             message_type,
             message_type_label,
+            category,
             processing_type,
+        }
+    }
+
+    /// 判断消息类别
+    ///
+    /// 规则：
+    /// - MESSAGE_TYPE_TYPING (200) 或 MESSAGE_TYPE_SYSTEM_EVENT (201) => Temporary
+    /// - MESSAGE_TYPE_OPERATION (302) => Operation
+    /// - MESSAGE_TYPE_NOTIFICATION (101) => Notification
+    /// - 其他 => Normal
+    fn determine_category(
+        message_type: &MessageType,
+        message_type_label: &str,
+        _extra: &std::collections::HashMap<String, String>,
+    ) -> MessageCategory {
+        use MessageType::*;
+        match *message_type {
+            Typing | SystemEvent => MessageCategory::Temporary,
+            Operation => MessageCategory::Operation,
+            Notification => MessageCategory::Notification,
+            _ => {
+                // 如果 message_type 未正确设置，根据 label 判断
+                match message_type_label {
+                    "typing" | "system_event" => MessageCategory::Temporary,
+                    "operation" => MessageCategory::Operation,
+                    "notification" => MessageCategory::Notification,
+                    _ => MessageCategory::Normal,
+                }
+            }
         }
     }
 
     /// 判断消息处理类型
     ///
     /// 规则：
-    /// - 如果 extra 中有 `notification_only=true`，则为 Notification
-    /// - 如果 message_type_label 为 "notification"，则为 Notification
-    /// - 如果 message_type 为 Typing（正在输入），则为 Notification（不持久化）
-    /// - 其他情况为 Normal
+    /// - Temporary 类别：Notification（不持久化）
+    /// - Notification 类别：根据 NotificationContent.persistent 标志决定，默认 Notification
+    /// - Operation 类别：Normal（需要持久化）
+    /// - Normal 类别：Normal（需要持久化）
     fn determine_processing_type(
-        message_type_label: &str,
+        category: &MessageCategory,
+        _message_type_label: &str,
+        content: &Option<flare_proto::common::MessageContent>,
         extra: &std::collections::HashMap<String, String>,
     ) -> MessageProcessingType {
-        // 检查 extra 中的 notification_only 标志
-        if let Some(flag) = extra.get("notification_only") {
+        match *category {
+            MessageCategory::Temporary => MessageProcessingType::Notification,
+            MessageCategory::Notification => {
+                // 首先从 NotificationContent 中提取 persistent 标志
+                if let Some(msg_content) = content {
+                    if let Some(flare_proto::common::message_content::Content::Notification(notif)) = &msg_content.content {
+                        if notif.persistent {
+                            return MessageProcessingType::Normal;
+                        }
+                    }
+                }
+                // 如果 content 中没有，检查 extra 中的 persistent 标志（兼容性处理）
+                if let Some(flag) = extra.get("persistent") {
             if flag == "true" || flag == "1" {
-                return MessageProcessingType::Notification;
+                        return MessageProcessingType::Normal;
             }
         }
-
-        // 检查 message_type_label
-        if message_type_label == "notification" || message_type_label == "typing" {
-            return MessageProcessingType::Notification;
+                MessageProcessingType::Notification
         }
-
-        // 默认为普通消息
-        MessageProcessingType::Normal
+            MessageCategory::Operation => MessageProcessingType::Normal,
+            MessageCategory::Normal => MessageProcessingType::Normal,
+        }
     }
 
     pub fn message_type(&self) -> MessageType {
@@ -173,6 +221,10 @@ impl MessageProfile {
 
     pub fn message_type_label(&self) -> &str {
         &self.message_type_label
+    }
+
+    pub fn category(&self) -> MessageCategory {
+        self.category
     }
 
     pub fn processing_type(&self) -> MessageProcessingType {
@@ -185,8 +237,34 @@ impl MessageProfile {
     }
 
     /// 判断是否需要写入WAL
+    ///
+    /// 规则：
+    /// - Temporary: 不需要
+    /// - Notification: 根据 persistent 标志
+    /// - Operation: 需要
+    /// - Normal: 需要
     pub fn needs_wal(&self) -> bool {
-        self.processing_type == MessageProcessingType::Normal
+        match self.category {
+            MessageCategory::Temporary => false,
+            MessageCategory::Notification => self.processing_type == MessageProcessingType::Normal,
+            MessageCategory::Operation => true,
+            MessageCategory::Normal => true,
+        }
+    }
+
+    /// 判断是否为临时消息（只推送，不持久化）
+    pub fn is_temporary(&self) -> bool {
+        self.category == MessageCategory::Temporary
+    }
+
+    /// 判断是否为操作消息
+    pub fn is_operation(&self) -> bool {
+        self.category == MessageCategory::Operation
+    }
+
+    /// 判断是否为通知消息
+    pub fn is_notification(&self) -> bool {
+        self.category == MessageCategory::Notification
     }
 }
 

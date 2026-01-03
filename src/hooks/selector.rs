@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::HookContext;
+use flare_server_core::context::Context;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -51,9 +51,18 @@ pub struct HookSelector {
 }
 
 impl HookSelector {
-    pub fn matches(&self, ctx: &HookContext) -> bool {
-        self.tenants.matches(Some(ctx.tenant_id.as_str()))
-            && self.conversation_types.matches(ctx.conversation_type.as_deref())
-            && self.message_types.matches(ctx.message_type.as_deref())
+    pub fn matches(&self, ctx: &Context) -> bool {
+        use crate::hooks::hook_context_data::get_hook_context_data;
+        
+        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let hook_data = get_hook_context_data(ctx);
+        
+        self.tenants.matches(Some(tenant_id.as_str()))
+            && self.conversation_types.matches(
+                hook_data.and_then(|d| d.conversation_type.as_deref())
+            )
+            && self.message_types.matches(
+                hook_data.and_then(|d| d.message_type.as_deref())
+            )
     }
 }

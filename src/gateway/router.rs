@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use async_trait::async_trait;
 use flare_proto::access_gateway::{
     PushMessageRequest, PushMessageResponse, PushStatus, access_gateway_client::AccessGatewayClient,
@@ -215,10 +215,11 @@ impl GatewayRouter {
                 Some(instance) => {
                     // 根据实例地址直接创建 channel
                     let uri = instance.to_grpc_uri();
-                    let endpoint = Endpoint::from_shared(uri).context(format!(
-                        "Invalid URI for gateway {}: {}",
-                        gateway_id, instance.address
-                    ))?;
+                    let endpoint = Endpoint::from_shared(uri)
+                        .with_context(|| format!(
+                            "Invalid URI for gateway {}: {}",
+                            gateway_id, instance.address
+                        ))?;
 
                     let timeout_duration = Duration::from_millis(self.config.connection_timeout_ms);
                     tokio::time::timeout(timeout_duration, endpoint.connect())

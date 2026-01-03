@@ -4,13 +4,15 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use base64::Engine;
 use reqwest::Client;
 
 use flare_im_core::{
-    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+    DeliveryEvent, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
+use flare_im_core::hooks::hook_context_data::{get_hook_context_data, HookContextData};
+use flare_server_core::context::Context;
 
 /// WebHook适配器
 pub struct WebhookHookAdapter {
@@ -42,18 +44,21 @@ impl WebhookHookAdapter {
     /// 执行PreSend Hook
     pub async fn pre_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
     ) -> Result<PreSendDecision> {
         use serde_json::json;
         use std::time::{SystemTime, UNIX_EPOCH};
 
+        let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
+        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+
         let payload = json!({
             "hook_type": "pre_send",
             "context": {
-                "tenant_id": ctx.tenant_id,
-                "conversation_id": ctx.conversation_id,
-                "conversation_type": ctx.conversation_type,
+                "tenant_id": tenant_id,
+                "conversation_id": hook_data.conversation_id,
+                "conversation_type": hook_data.conversation_type,
             },
             "draft": {
                 "message_id": draft.message_id,
@@ -86,13 +91,13 @@ impl WebhookHookAdapter {
         let response = request
             .send()
             .await
-            .context("WebHook PreSend request failed")?;
+            .with_context(|| "WebHook PreSend request failed")?;
 
         if response.status().is_success() {
             let result: serde_json::Value = response
                 .json()
                 .await
-                .context("Failed to parse WebHook response")?;
+                .with_context(|| "Failed to parse WebHook response")?;
 
             // 检查是否允许发送
             let allow = result
@@ -152,18 +157,21 @@ impl WebhookHookAdapter {
     /// 执行PostSend Hook
     pub async fn post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {
         use serde_json::json;
         use std::time::{SystemTime, UNIX_EPOCH};
 
+        let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
+        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+
         let payload = json!({
             "hook_type": "post_send",
             "context": {
-                "tenant_id": ctx.tenant_id,
-                "conversation_id": ctx.conversation_id,
+                "tenant_id": tenant_id,
+                "conversation_id": hook_data.conversation_id,
             },
             "record": {
                 "message_id": record.message_id,
@@ -191,7 +199,7 @@ impl WebhookHookAdapter {
         let response = request
             .send()
             .await
-            .context("WebHook PostSend request failed")?;
+            .with_context(|| "WebHook PostSend request failed")?;
 
         if response.status().is_success() {
             Ok(())
@@ -207,13 +215,15 @@ impl WebhookHookAdapter {
     }
 
     /// 执行Delivery Hook
-    pub async fn delivery(&self, ctx: &HookContext, event: &DeliveryEvent) -> Result<()> {
+    pub async fn delivery(&self, ctx: &Context, event: &DeliveryEvent) -> Result<()> {
         use serde_json::json;
+
+        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
 
         let payload = json!({
             "hook_type": "delivery",
             "context": {
-                "tenant_id": ctx.tenant_id,
+                "tenant_id": tenant_id,
             },
             "event": {
                 "message_id": event.message_id,
@@ -240,19 +250,21 @@ impl WebhookHookAdapter {
         let _response = request
             .send()
             .await
-            .context("WebHook Delivery request failed")?;
+            .with_context(|| "WebHook Delivery request failed")?;
 
         Ok(())
     }
 
     /// 执行Recall Hook
-    pub async fn recall(&self, ctx: &HookContext, event: &RecallEvent) -> Result<PreSendDecision> {
+    pub async fn recall(&self, ctx: &Context, event: &RecallEvent) -> Result<PreSendDecision> {
         use serde_json::json;
+
+        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
 
         let payload = json!({
             "hook_type": "recall",
             "context": {
-                "tenant_id": ctx.tenant_id,
+                "tenant_id": tenant_id,
             },
             "event": {
                 "message_id": event.message_id,
@@ -278,13 +290,13 @@ impl WebhookHookAdapter {
         let response = request
             .send()
             .await
-            .context("WebHook Recall request failed")?;
+            .with_context(|| "WebHook Recall request failed")?;
 
         if response.status().is_success() {
             let result: serde_json::Value = response
                 .json()
                 .await
-                .context("Failed to parse WebHook response")?;
+                .with_context(|| "Failed to parse WebHook response")?;
 
             let allow = result
                 .get("allow")
@@ -321,7 +333,7 @@ impl WebhookHookAdapter {
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac =
-            HmacSha256::new_from_slice(secret.as_bytes()).context("Invalid secret key")?;
+            HmacSha256::new_from_slice(secret.as_bytes()).with_context(|| "Invalid secret key")?;
         mac.update(payload.as_bytes());
         let result = mac.finalize();
         let signature = hex::encode(result.into_bytes());

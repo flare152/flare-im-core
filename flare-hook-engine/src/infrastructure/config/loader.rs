@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose};
-use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use tracing::{debug, error, info, warn};
 
 use crate::domain::model::HookConfig;

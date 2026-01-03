@@ -47,6 +47,7 @@ impl ConnectionHandler {
         user_id: &str,
         device_id: &str,
         active_connections: usize,
+        connection_metadata: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<String> {
         // 更新活跃连接数
         self.metrics
@@ -61,10 +62,10 @@ impl ConnectionHandler {
             "Connection established"
         );
 
-        // 注册会话到 Signaling Online
+        // 注册会话到 Signaling Online（传递连接 metadata）
         match self
             .session_domain_service
-            .register_session(user_id, device_id, Some(connection_id))
+            .register_session(user_id, device_id, Some(connection_id), connection_metadata)
             .await
         {
             Ok(conversation_id) => {

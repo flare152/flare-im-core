@@ -16,6 +16,7 @@ use flare_proto::media::{
     UploadMultipartChunkResponse,
 };
 use flare_server_core::error::ok_status;
+use flare_im_core::utils::context::require_context;
 use prost_types::Timestamp;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
@@ -50,6 +51,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<tonic::Streaming<UploadFileRequest>>,
     ) -> Result<Response<UploadFileResponse>, Status> {
+        let ctx = require_context(&request)?;
+        let tenant_id = ctx.tenant_id()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        
         let mut stream = request.into_inner();
         let first = stream
             .next()
@@ -57,10 +63,15 @@ impl MediaService for MediaGrpcHandler {
             .ok_or_else(|| status_internal("upload stream empty"))?
             .map_err(status_internal)?;
 
-        let (upload_metadata, mut payload) = match first.request {
+        let (mut upload_metadata, mut payload) = match first.request {
             Some(upload_file_request::Request::Metadata(metadata)) => (metadata, Vec::new()),
             _ => return Err(status_internal("first upload frame must contain metadata")),
         };
+
+        // 将 tenant_id 添加到 metadata 中（如果未设置）
+        if !tenant_id.is_empty() && !upload_metadata.metadata.contains_key("tenant_id") {
+            upload_metadata.metadata.insert("tenant_id".to_string(), tenant_id);
+        }
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(status_internal)?;
@@ -77,13 +88,13 @@ impl MediaService for MediaGrpcHandler {
 
         let metadata = self
             .command_handler
-            .handle_upload_file(upload_metadata, payload)
+            .handle_upload_file(&ctx, upload_metadata, payload)
             .await
             .map_err(status_internal)?;
         // 上传完成后，返回预签名URL
         let presigned = self
             .query_handler
-            .handle_get_file_url(flare_proto::media::GetFileUrlRequest {
+            .handle_get_file_url(&ctx, flare_proto::media::GetFileUrlRequest {
                 file_id: metadata.file_id.clone(),
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
@@ -109,10 +120,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<InitiateMultipartUploadRequest>,
     ) -> Result<Response<InitiateMultipartUploadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let session = self
             .command_handler
-            .handle_initiate_multipart_upload(req)
+            .handle_initiate_multipart_upload(&ctx, req)
             .await
             .map_err(status_internal)?;
 
@@ -131,11 +143,12 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<UploadMultipartChunkRequest>,
     ) -> Result<Response<UploadMultipartChunkResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let chunk_index = req.chunk_index;
         let session = self
             .command_handler
-            .handle_upload_multipart_chunk(req)
+            .handle_upload_multipart_chunk(&ctx, req)
             .await
             .map_err(status_internal)?;
 
@@ -155,16 +168,17 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<CompleteMultipartUploadRequest>,
     ) -> Result<Response<UploadFileResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let metadata = self
             .command_handler
-            .handle_complete_multipart_upload(req)
+            .handle_complete_multipart_upload(&ctx, req)
             .await
             .map_err(status_internal)?;
         // 完成分片上传后也返回预签名URL
         let presigned = self
             .query_handler
-            .handle_get_file_url(flare_proto::media::GetFileUrlRequest {
+            .handle_get_file_url(&ctx, flare_proto::media::GetFileUrlRequest {
                 file_id: metadata.file_id.clone(),
                 expires_in: 0, // 使用服务默认TTL
                 context: None,
@@ -190,9 +204,10 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<AbortMultipartUploadRequest>,
     ) -> Result<Response<AbortMultipartUploadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         self.command_handler
-            .handle_abort_multipart_upload(req)
+            .handle_abort_multipart_upload(&ctx, req)
             .await
             .map_err(status_internal)?;
 
@@ -208,7 +223,17 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<CreateReferenceRequest>,
     ) -> Result<Response<CreateReferenceResponse>, Status> {
+        let ctx = require_context(&request)?;
+        let tenant_id = ctx.tenant_id()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let req = request.into_inner();
+        
+        // 将 tenant_id 添加到 metadata 中（如果未设置）
+        let mut metadata = req.metadata;
+        if !metadata.contains_key("tenant_id") {
+            metadata.insert("tenant_id".to_string(), tenant_id.clone());
+        }
 
         if req.file_id.is_empty() {
             return Err(status_invalid_argument("file_id is required"));
@@ -218,7 +243,7 @@ impl MediaService for MediaGrpcHandler {
         }
 
         let namespace = if req.namespace.is_empty() {
-            req.metadata
+            metadata
                 .get("namespace")
                 .cloned()
                 .unwrap_or_else(|| req.owner_id.clone())
@@ -227,7 +252,7 @@ impl MediaService for MediaGrpcHandler {
         };
 
         let business_tag = if req.business_tag.is_empty() {
-            req.metadata.get("business_tag").cloned()
+            metadata.get("business_tag").cloned()
         } else {
             Some(req.business_tag.clone())
         };
@@ -238,14 +263,14 @@ impl MediaService for MediaGrpcHandler {
             business_tag,
         };
 
-        let metadata = self
+        let file_metadata = self
             .command_handler
-            .handle_attach_reference(&req.file_id, scope, req.metadata)
+            .handle_attach_reference(&ctx, &req.file_id, scope, metadata)
             .await
             .map_err(status_internal)?;
 
         Ok(Response::new(CreateReferenceResponse {
-            info: Some(to_proto_file_info(&metadata)),
+            info: Some(to_proto_file_info(&file_metadata)),
             success: true,
             error_message: String::new(),
             status: Some(ok_status()),
@@ -257,6 +282,7 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<DeleteReferenceRequest>,
     ) -> Result<Response<DeleteReferenceResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         if req.file_id.is_empty() {
@@ -271,7 +297,7 @@ impl MediaService for MediaGrpcHandler {
 
         let metadata = self
             .command_handler
-            .handle_release_reference(&req.file_id, reference_id)
+            .handle_release_reference(&ctx, &req.file_id, reference_id)
             .await
             .map_err(status_internal)?;
 
@@ -288,6 +314,7 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<ListReferencesRequest>,
     ) -> Result<Response<ListReferencesResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         if req.file_id.is_empty() {
@@ -296,7 +323,7 @@ impl MediaService for MediaGrpcHandler {
 
         let references = self
             .query_handler
-            .handle_list_references(&req.file_id)
+            .handle_list_references(&ctx, &req.file_id)
             .await
             .map_err(status_internal)?;
 
@@ -319,11 +346,12 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<CleanupOrphanedAssetsRequest>,
     ) -> Result<Response<CleanupOrphanedAssetsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let _req = request.into_inner();
 
         let cleaned = self
             .command_handler
-            .handle_cleanup_orphaned_assets()
+            .handle_cleanup_orphaned_assets(&ctx)
             .await
             .map_err(status_internal)?;
 
@@ -342,10 +370,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<GetFileUrlRequest>,
     ) -> Result<Response<GetFileUrlResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let presigned = self
             .query_handler
-            .handle_get_file_url(req)
+            .handle_get_file_url(&ctx, req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(GetFileUrlResponse {
@@ -363,10 +392,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<GetFileInfoRequest>,
     ) -> Result<Response<GetFileInfoResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let metadata = self
             .query_handler
-            .handle_get_file_info(&req.file_id)
+            .handle_get_file_info(&ctx, &req.file_id)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(GetFileInfoResponse {
@@ -382,9 +412,10 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<DeleteFileRequest>,
     ) -> Result<Response<DeleteFileResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         self.command_handler
-            .handle_delete_file(req)
+            .handle_delete_file(&ctx, req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(DeleteFileResponse {
@@ -399,10 +430,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<ProcessImageRequest>,
     ) -> Result<Response<ProcessImageResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let result = self
             .command_handler
-            .handle_process_image(req)
+            .handle_process_image(&ctx, req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(ProcessImageResponse {
@@ -420,10 +452,11 @@ impl MediaService for MediaGrpcHandler {
         &self,
         request: Request<ProcessVideoRequest>,
     ) -> Result<Response<ProcessVideoResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let result = self
             .command_handler
-            .handle_process_video(req)
+            .handle_process_video(&ctx, req)
             .await
             .map_err(status_internal)?;
         Ok(Response::new(ProcessVideoResponse {

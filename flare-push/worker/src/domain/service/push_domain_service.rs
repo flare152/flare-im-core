@@ -363,17 +363,20 @@ impl PushDomainService {
                 business_type: String::new(),
                 content: message_content,
                 content_type: 1, // ContentType::PlainText
+                attachments: vec![],
+                quote: None,
                 status: 1,       // MessageStatus::Created = 1
                 extra: HashMap::new(),
                 attributes: HashMap::new(),
                 is_recalled: false,
+                current_edit_version: 0, // 未编辑
+                last_edited_at: None,    // 未编辑
                 recalled_at: None,
                 recall_reason: String::new(),
                 is_burn_after_read: false,
                 burn_after_seconds: 0,
                 tenant: None,
                 audit: None,
-                attachments: Vec::new(),
                 tags: Vec::new(),
                 visibility: HashMap::new(),
                 read_by: Vec::new(),

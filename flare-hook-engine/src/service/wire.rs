@@ -18,7 +18,7 @@ use crate::interface::grpc::{HookExtensionServer, HookServiceServer};
 use crate::service::bootstrap::HookEngineConfig;
 use crate::service::registry::CoreHookRegistry;
 
-use flare_server_core::{BackendType, DiscoveryConfig, DiscoveryFactory, KvBackend, KvStore};
+use flare_server_core::{BackendType, DiscoveryConfig, KvBackend, KvStore};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -116,11 +116,6 @@ pub async fn initialize(config: HookEngineConfig) -> Result<ApplicationContext> 
             .context("Failed to create database config repository")?,
         );
 
-        // 初始化数据库表
-        repository
-            .init_schema()
-            .await
-            .context("Failed to initialize database schema")?;
 
         let repository_clone = repository.clone();
         loaders.push(Arc::new(ConfigLoaderItem::Database(

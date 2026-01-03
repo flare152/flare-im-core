@@ -20,6 +20,7 @@ pub struct KafkaMessagePublisher {
     config: Arc<MessageOrchestratorConfig>,
     // 批量发送缓冲区
     storage_buffer: Arc<Mutex<Vec<StorageStoreMessageRequest>>>,
+    operation_buffer: Arc<Mutex<Vec<StorageStoreMessageRequest>>>,
     push_buffer: Arc<Mutex<Vec<PushPushMessageRequest>>>,
     // 最后刷新时间
     last_flush_time: Arc<Mutex<std::time::Instant>>,
@@ -31,6 +32,7 @@ impl KafkaMessagePublisher {
             producer,
             config: config.clone(),
             storage_buffer: Arc::new(Mutex::new(Vec::new())),
+            operation_buffer: Arc::new(Mutex::new(Vec::new())),
             push_buffer: Arc::new(Mutex::new(Vec::new())),
             last_flush_time: Arc::new(Mutex::new(std::time::Instant::now())),
         });
@@ -72,6 +74,28 @@ impl KafkaMessagePublisher {
                     tracing::error!(error = %e, "Failed to flush storage messages");
                 }
                 *self.last_flush_time.lock().await = std::time::Instant::now();
+            }
+
+            // 刷新操作消息缓冲区
+            let operation_messages = {
+                let mut buffer = self.operation_buffer.lock().await;
+                let last_flush = self.last_flush_time.lock().await;
+                let should_flush = buffer.len() >= self.config.kafka_batch_size
+                    || last_flush.elapsed() >= flush_interval;
+
+                if should_flush && !buffer.is_empty() {
+                    let messages = buffer.drain(..).collect();
+                    drop(buffer);
+                    Some(messages)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(messages) = operation_messages {
+                if let Err(e) = self.publish_operation_batch(messages).await {
+                    tracing::error!(error = %e, "Failed to flush operation messages");
+                }
             }
 
             // 刷新推送消息缓冲区
@@ -166,6 +190,68 @@ impl KafkaMessagePublisher {
         Ok(())
     }
 
+    /// 批量发布操作消息
+    async fn publish_operation_batch(&self, payloads: Vec<StorageStoreMessageRequest>) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+
+        let mut encoded_payloads = Vec::with_capacity(payloads.len());
+        let mut valid_indices = Vec::new();
+
+        for (idx, payload) in payloads.iter().enumerate() {
+            let encoded = payload.encode_to_vec();
+
+            const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+            if encoded.len() > MAX_MESSAGE_SIZE {
+                tracing::error!(
+                    payload_size = encoded.len(),
+                    max_size = MAX_MESSAGE_SIZE,
+                    conversation_id = %payload.conversation_id,
+                    message_id = payload.message.as_ref().map(|m| m.server_id.as_str()).unwrap_or("unknown"),
+                    "Operation message size exceeds maximum allowed size"
+                );
+                continue;
+            }
+
+            encoded_payloads.push(encoded);
+            valid_indices.push(idx);
+        }
+
+        if encoded_payloads.is_empty() {
+            return Ok(());
+        }
+
+        let records: Vec<_> = valid_indices
+            .iter()
+            .enumerate()
+            .map(|(encoded_idx, &payload_idx)| {
+                FutureRecord::to(&self.config.kafka_operation_topic)
+                    .payload(&encoded_payloads[encoded_idx])
+                    .key(&payloads[payload_idx].conversation_id)
+            })
+            .collect();
+
+        let futures: Vec<_> = records
+            .into_iter()
+            .map(|record| {
+                self.producer
+                    .send(record, Duration::from_millis(self.config.kafka_timeout_ms))
+                    .map(|result| result.map_err(|(err, _)| anyhow!("Kafka send error: {}", err)))
+            })
+            .collect();
+
+        try_join_all(futures).await?;
+
+        tracing::info!(
+            topic = %self.config.kafka_operation_topic,
+            batch_size = payloads.len(),
+            "Successfully published batch of operation messages to Kafka"
+        );
+
+        Ok(())
+    }
+
     /// 批量发布推送消息
     async fn publish_push_batch(&self, payloads: Vec<PushPushMessageRequest>) -> Result<()> {
         if payloads.is_empty() {
@@ -255,6 +341,22 @@ impl KafkaMessagePublisher {
             self.publish_storage_batch(messages).await?;
         }
 
+        // 刷新操作消息
+        let operation_messages = {
+            let mut buffer = self.operation_buffer.lock().await;
+            if !buffer.is_empty() {
+                let messages = buffer.drain(..).collect();
+                drop(buffer);
+                Some(messages)
+            } else {
+                None
+            }
+        };
+
+        if let Some(messages) = operation_messages {
+            self.publish_operation_batch(messages).await?;
+        }
+
         // 刷新推送消息
         let push_messages = {
             let mut buffer = self.push_buffer.lock().await;
@@ -297,6 +399,32 @@ impl MessageEventPublisher for KafkaMessagePublisher {
                     buffer.drain(..).collect()
                 };
                 self.publish_storage_batch(messages).await?;
+                *self.last_flush_time.lock().await = std::time::Instant::now();
+            }
+
+            Ok(())
+        })
+    }
+
+    fn publish_operation(
+        &self,
+        payload: StorageStoreMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            // 添加到缓冲区
+            let should_flush = {
+                let mut buffer = self.operation_buffer.lock().await;
+                buffer.push(payload);
+                buffer.len() >= self.config.kafka_batch_size
+            };
+
+            // 如果缓冲区已满，立即刷新
+            if should_flush {
+                let messages: Vec<StorageStoreMessageRequest> = {
+                    let mut buffer = self.operation_buffer.lock().await;
+                    buffer.drain(..).collect()
+                };
+                self.publish_operation_batch(messages).await?;
                 *self.last_flush_time.lock().await = std::time::Instant::now();
             }
 

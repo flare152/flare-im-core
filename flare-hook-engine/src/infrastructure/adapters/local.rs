@@ -8,9 +8,10 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use flare_im_core::{
-    DeliveryEvent, DeliveryHook, HookContext, MessageDraft, MessageRecord, PostSendHook,
+    DeliveryEvent, DeliveryHook, MessageDraft, MessageRecord, PostSendHook,
     PreSendDecision, PreSendHook, RecallEvent, RecallHook,
 };
+use flare_server_core::context::Context;
 
 /// Local Plugin适配器
 pub struct LocalHookAdapter {
@@ -55,7 +56,7 @@ impl LocalHookAdapter {
     pub async fn pre_send(
         &self,
         target: &str,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
     ) -> Result<PreSendDecision> {
         let hook = self
@@ -70,7 +71,7 @@ impl LocalHookAdapter {
     pub async fn post_send(
         &self,
         target: &str,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {
@@ -91,7 +92,7 @@ impl LocalHookAdapter {
     pub async fn delivery(
         &self,
         target: &str,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &DeliveryEvent,
     ) -> Result<()> {
         let hook = self
@@ -111,7 +112,7 @@ impl LocalHookAdapter {
     pub async fn recall(
         &self,
         target: &str,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &RecallEvent,
     ) -> Result<PreSendDecision> {
         let hook = self

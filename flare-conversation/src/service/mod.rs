@@ -53,8 +53,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("conversation", address)
             .add_spawn_with_shutdown("conversation-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 直接包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let conversation_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(ConversationServiceServer::new(handler));
+                
                 Server::builder()
-                    .add_service(ConversationServiceServer::new(handler))
+                    .add_service(conversation_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

@@ -44,106 +44,13 @@ impl PostgresConversationRepository {
         Self { pool, config }
     }
 
-    /// 初始化数据库表结构（如果不存在）
-    pub async fn init_schema(&self) -> Result<()> {
-        // 创建 sessions 表
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS sessions (
-                conversation_id VARCHAR(255) PRIMARY KEY,
-                conversation_type VARCHAR(64) NOT NULL DEFAULT 'single',
-                business_type VARCHAR(64) NOT NULL DEFAULT '',
-                display_name VARCHAR(255),
-                attributes JSONB DEFAULT '{}'::jsonb,
-                visibility VARCHAR(32) NOT NULL DEFAULT 'private',
-                lifecycle_state VARCHAR(32) NOT NULL DEFAULT 'active',
-                metadata JSONB DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create sessions table")?;
-
-        // 创建 session_participants 表
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS session_participants (
-                conversation_id VARCHAR(255) NOT NULL,
-                user_id VARCHAR(255) NOT NULL,
-                roles TEXT[] DEFAULT '{}',
-                muted BOOLEAN DEFAULT FALSE,
-                pinned BOOLEAN DEFAULT FALSE,
-                attributes JSONB DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (conversation_id, user_id),
-                FOREIGN KEY (conversation_id) REFERENCES sessions(conversation_id) ON DELETE CASCADE
-            )
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create session_participants table")?;
-
-        // 创建 user_sync_cursor 表
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS user_sync_cursor (
-                user_id VARCHAR(255) NOT NULL,
-                conversation_id VARCHAR(255) NOT NULL,
-                last_synced_ts BIGINT NOT NULL DEFAULT 0,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (user_id, conversation_id)
-            )
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create user_sync_cursor table")?;
-
-        // 创建索引
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_sessions_business_type 
-            ON sessions (business_type, updated_at DESC)
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create sessions index")?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_session_participants_user_id 
-            ON session_participants (user_id, conversation_id)
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create session_participants index")?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_user_sync_cursor_user_id 
-            ON user_sync_cursor (user_id, last_synced_ts DESC)
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .context("Failed to create user_sync_cursor index")?;
-
-        info!("PostgreSQL session tables initialized successfully");
-        Ok(())
-    }
 }
 
 #[async_trait]
 impl ConversationRepository for PostgresConversationRepository {
     async fn load_bootstrap(
         &self,
+        tenant_id: &str,
         user_id: &str,
         client_cursor: &HashMap<String, i64>,
     ) -> Result<ConversationBootstrapResult> {
@@ -152,9 +59,10 @@ impl ConversationRepository for PostgresConversationRepository {
             r#"
             SELECT conversation_id, last_synced_ts
             FROM user_sync_cursor
-            WHERE user_id = $1
+            WHERE tenant_id = $1 AND user_id = $2
             "#,
         )
+        .bind(tenant_id)
         .bind(user_id)
         .fetch_all(&*self.pool)
         .await
@@ -169,12 +77,12 @@ impl ConversationRepository for PostgresConversationRepository {
             })
             .collect();
 
-        // merge client cursor hints to ensure we cover requested sessions
+        // merge client cursor hints to ensure we cover requested conversations
         for (conversation_id, ts) in client_cursor {
             server_cursor.entry(conversation_id.clone()).or_insert(*ts);
         }
 
-        // 2. 从sessions和session_participants表查询用户参与的会话（包含未读数信息）
+        // 2. 从conversations和conversation_participants表查询用户参与的会话（包含未读数信息）
         let session_rows = sqlx::query(
             r#"
             SELECT DISTINCT
@@ -189,17 +97,20 @@ impl ConversationRepository for PostgresConversationRepository {
                 s.last_message_seq,
                 COALESCE(sp.last_read_msg_seq, 0) as last_read_msg_seq,
                 COALESCE(sp.unread_count, 0) as unread_count
-            FROM sessions s
-            INNER JOIN session_participants sp ON s.conversation_id = sp.conversation_id
-            WHERE sp.user_id = $1
+            FROM conversations s
+            INNER JOIN conversation_participants sp ON s.tenant_id = sp.tenant_id AND s.conversation_id = sp.conversation_id
+            WHERE s.tenant_id = $1
+              AND sp.tenant_id = $1
+              AND sp.user_id = $2
               AND s.lifecycle_state != 'deleted'
             ORDER BY s.updated_at DESC
             "#,
         )
+        .bind(tenant_id)
         .bind(user_id)
         .fetch_all(&*self.pool)
         .await
-        .context("Failed to load user sessions")?;
+        .context("Failed to load user conversations")?;
 
         let mut summaries = Vec::new();
 
@@ -208,7 +119,7 @@ impl ConversationRepository for PostgresConversationRepository {
             let conversation_type: Option<String> = row.get("conversation_type");
             let business_type: Option<String> = row.get("business_type");
             let display_name: Option<String> = row.get("display_name");
-            let attributes: serde_json::Value = row.get("attributes");
+            let attributes: Option<serde_json::Value> = row.get("attributes");
             let updated_at: DateTime<Utc> = row.get("updated_at");
 
             // 从数据库读取未读数相关字段
@@ -216,8 +127,9 @@ impl ConversationRepository for PostgresConversationRepository {
             let last_read_msg_seq: i64 = row.get("last_read_msg_seq");
             let unread_count: i32 = row.get("unread_count");
 
-            let attributes: HashMap<String, String> =
-                serde_json::from_value(attributes).unwrap_or_default();
+            let attributes: HashMap<String, String> = attributes
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
 
             // 注释：最后一条消息信息将在ApplicationService层通过MessageProvider补充
             // 当前实现使用updated_at作为server_cursor_ts的fallback
@@ -287,19 +199,20 @@ impl ConversationRepository for PostgresConversationRepository {
         Ok(())
     }
 
-    async fn create_conversation(&self, session: &Conversation) -> Result<()> {
+    async fn create_conversation(&self, tenant_id: &str, session: &Conversation) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         // 插入会话记录
         sqlx::query(
             r#"
-            INSERT INTO sessions (
-                conversation_id, conversation_type, business_type, display_name,
+            INSERT INTO conversations (
+                tenant_id, conversation_id, conversation_type, business_type, display_name,
                 attributes, visibility, lifecycle_state, metadata, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             "#,
         )
+        .bind(tenant_id)
         .bind(&session.conversation_id)
         .bind(&session.conversation_type)
         .bind(&session.business_type)
@@ -310,18 +223,19 @@ impl ConversationRepository for PostgresConversationRepository {
         .bind(serde_json::to_value(&HashMap::<String, String>::new())?)
         .execute(&mut *tx)
         .await
-        .context("Failed to create session")?;
+        .context("Failed to create conversation")?;
 
         // 插入参与者记录
         for participant in &session.participants {
             sqlx::query(
                 r#"
-                INSERT INTO session_participants (
-                    conversation_id, user_id, roles, muted, pinned, attributes, created_at, updated_at
+                INSERT INTO conversation_participants (
+                    tenant_id, conversation_id, user_id, roles, muted, pinned, attributes, created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 "#,
             )
+            .bind(tenant_id)
             .bind(&session.conversation_id)
             .bind(&participant.user_id)
             .bind(&participant.roles)
@@ -338,20 +252,21 @@ impl ConversationRepository for PostgresConversationRepository {
         Ok(())
     }
 
-    async fn get_conversation(&self, conversation_id: &str) -> Result<Option<Conversation>> {
+    async fn get_conversation(&self, tenant_id: &str, conversation_id: &str) -> Result<Option<Conversation>> {
         let row = sqlx::query(
             r#"
             SELECT conversation_id, conversation_type, business_type, display_name,
                    attributes, visibility, lifecycle_state, metadata,
                    created_at, updated_at
-            FROM sessions
-            WHERE conversation_id = $1
+            FROM conversations
+            WHERE tenant_id = $1 AND conversation_id = $2
             "#,
         )
+        .bind(tenant_id)
         .bind(conversation_id)
         .fetch_optional(&*self.pool)
         .await
-        .context("Failed to get session")?;
+        .context("Failed to get conversation")?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -361,14 +276,15 @@ impl ConversationRepository for PostgresConversationRepository {
         let conversation_type: String = row.get("conversation_type");
         let business_type: String = row.get("business_type");
         let display_name: Option<String> = row.get("display_name");
-        let attributes: serde_json::Value = row.get("attributes");
+        let attributes: Option<serde_json::Value> = row.get("attributes");
         let visibility: String = row.get("visibility");
         let lifecycle_state: String = row.get("lifecycle_state");
         let created_at: DateTime<Utc> = row.get("created_at");
         let updated_at: DateTime<Utc> = row.get("updated_at");
 
-        let attributes: HashMap<String, String> =
-            serde_json::from_value(attributes).unwrap_or_default();
+        let attributes: HashMap<String, String> = attributes
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
 
         let visibility = match visibility.as_str() {
             "private" => crate::domain::model::ConversationVisibility::Private,
@@ -389,10 +305,11 @@ impl ConversationRepository for PostgresConversationRepository {
         let participant_rows = sqlx::query(
             r#"
             SELECT user_id, roles, muted, pinned, attributes
-            FROM session_participants
-            WHERE conversation_id = $1
+            FROM conversation_participants
+            WHERE tenant_id = $1 AND conversation_id = $2
             "#,
         )
+        .bind(tenant_id)
         .bind(&conversation_id)
         .fetch_all(&*self.pool)
         .await
@@ -404,9 +321,10 @@ impl ConversationRepository for PostgresConversationRepository {
             let roles: Vec<String> = p_row.get("roles");
             let muted: bool = p_row.get("muted");
             let pinned: bool = p_row.get("pinned");
-            let attributes: serde_json::Value = p_row.get("attributes");
-            let attributes: HashMap<String, String> =
-                serde_json::from_value(attributes).unwrap_or_default();
+            let attributes: Option<serde_json::Value> = p_row.get("attributes");
+            let attributes: HashMap<String, String> = attributes
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
 
             participants.push(ConversationParticipant {
                 user_id,
@@ -418,6 +336,7 @@ impl ConversationRepository for PostgresConversationRepository {
         }
 
         Ok(Some(Conversation {
+            tenant_id: tenant_id.to_string(),
             conversation_id,
             conversation_type,
             business_type,
@@ -432,52 +351,55 @@ impl ConversationRepository for PostgresConversationRepository {
         }))
     }
 
-    async fn update_conversation(&self, session: &Conversation) -> Result<()> {
+    async fn update_conversation(&self, tenant_id: &str, session: &Conversation) -> Result<()> {
         sqlx::query(
             r#"
-            UPDATE sessions
+            UPDATE conversations
             SET display_name = $1,
                 attributes = $2,
                 visibility = $3,
                 lifecycle_state = $4,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE conversation_id = $5
+            WHERE tenant_id = $5 AND conversation_id = $6
             "#,
         )
         .bind(&session.display_name)
         .bind(serde_json::to_value(&session.attributes)?)
         .bind(session.visibility.as_str())
         .bind(session.lifecycle_state.as_str())
+        .bind(tenant_id)
         .bind(&session.conversation_id)
         .execute(&*self.pool)
         .await
-        .context("Failed to update session")?;
+        .context("Failed to update conversation")?;
 
         info!(conversation_id = %session.conversation_id, "Conversation updated");
         Ok(())
     }
 
-    async fn delete_conversation(&self, conversation_id: &str, hard_delete: bool) -> Result<()> {
+    async fn delete_conversation(&self, tenant_id: &str, conversation_id: &str, hard_delete: bool) -> Result<()> {
         if hard_delete {
             // 物理删除（级联删除参与者）
-            sqlx::query("DELETE FROM sessions WHERE conversation_id = $1")
+            sqlx::query("DELETE FROM conversations WHERE tenant_id = $1 AND conversation_id = $2")
+                .bind(tenant_id)
                 .bind(conversation_id)
                 .execute(&*self.pool)
                 .await
-                .context("Failed to delete session")?;
+                .context("Failed to delete conversation")?;
         } else {
             // 软删除（更新生命周期状态）
             sqlx::query(
                 r#"
-                UPDATE sessions
+                UPDATE conversations
                 SET lifecycle_state = 'deleted', updated_at = CURRENT_TIMESTAMP
-                WHERE conversation_id = $1
+                WHERE tenant_id = $1 AND conversation_id = $2
                 "#,
             )
+            .bind(tenant_id)
             .bind(conversation_id)
             .execute(&*self.pool)
             .await
-            .context("Failed to delete session")?;
+            .context("Failed to delete conversation")?;
         }
 
         info!(conversation_id = %conversation_id, hard_delete = hard_delete, "Conversation deleted");
@@ -486,6 +408,7 @@ impl ConversationRepository for PostgresConversationRepository {
 
     async fn manage_participants(
         &self,
+        tenant_id: &str,
         conversation_id: &str,
         to_add: &[ConversationParticipant],
         to_remove: &[String],
@@ -497,19 +420,20 @@ impl ConversationRepository for PostgresConversationRepository {
         for participant in to_add {
             sqlx::query(
                 r#"
-                INSERT INTO session_participants (
-                    conversation_id, user_id, roles, muted, pinned, attributes, created_at, updated_at
+                INSERT INTO conversation_participants (
+                    tenant_id, conversation_id, user_id, roles, muted, pinned, attributes, created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (conversation_id, user_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (tenant_id, conversation_id, user_id)
                 DO UPDATE SET
-                    roles = $3,
-                    muted = $4,
-                    pinned = $5,
-                    attributes = $6,
+                    roles = $4,
+                    muted = $5,
+                    pinned = $6,
+                    attributes = $7,
                     updated_at = CURRENT_TIMESTAMP
                 "#,
             )
+            .bind(tenant_id)
             .bind(conversation_id)
             .bind(&participant.user_id)
             .bind(&participant.roles)
@@ -523,7 +447,8 @@ impl ConversationRepository for PostgresConversationRepository {
 
         // 删除参与者
         for user_id in to_remove {
-            sqlx::query("DELETE FROM session_participants WHERE conversation_id = $1 AND user_id = $2")
+            sqlx::query("DELETE FROM conversation_participants WHERE tenant_id = $1 AND conversation_id = $2 AND user_id = $3")
+                .bind(tenant_id)
                 .bind(conversation_id)
                 .bind(user_id)
                 .execute(&mut *tx)
@@ -535,12 +460,13 @@ impl ConversationRepository for PostgresConversationRepository {
         for (user_id, roles) in role_updates {
             sqlx::query(
                 r#"
-                UPDATE session_participants
+                UPDATE conversation_participants
                 SET roles = $1, updated_at = CURRENT_TIMESTAMP
-                WHERE conversation_id = $2 AND user_id = $3
+                WHERE tenant_id = $2 AND conversation_id = $3 AND user_id = $4
                 "#,
             )
             .bind(roles)
+            .bind(tenant_id)
             .bind(conversation_id)
             .bind(user_id)
             .execute(&mut *tx)
@@ -554,10 +480,11 @@ impl ConversationRepository for PostgresConversationRepository {
         let participant_rows = sqlx::query(
             r#"
             SELECT user_id, roles, muted, pinned, attributes
-            FROM session_participants
-            WHERE conversation_id = $1
+            FROM conversation_participants
+            WHERE tenant_id = $1 AND conversation_id = $2
             "#,
         )
+        .bind(tenant_id)
         .bind(conversation_id)
         .fetch_all(&*self.pool)
         .await
@@ -569,9 +496,10 @@ impl ConversationRepository for PostgresConversationRepository {
             let roles: Vec<String> = p_row.get("roles");
             let muted: bool = p_row.get("muted");
             let pinned: bool = p_row.get("pinned");
-            let attributes: serde_json::Value = p_row.get("attributes");
-            let attributes: HashMap<String, String> =
-                serde_json::from_value(attributes).unwrap_or_default();
+            let attributes: Option<serde_json::Value> = p_row.get("attributes");
+            let attributes: HashMap<String, String> = attributes
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
 
             participants.push(ConversationParticipant {
                 user_id,
@@ -585,18 +513,19 @@ impl ConversationRepository for PostgresConversationRepository {
         Ok(participants)
     }
 
-    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
+    async fn batch_acknowledge(&self, tenant_id: &str, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for (conversation_id, ts) in cursors {
             sqlx::query(
                 r#"
-                INSERT INTO user_sync_cursor (user_id, conversation_id, last_synced_ts, updated_at)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id, conversation_id)
-                DO UPDATE SET last_synced_ts = $3, updated_at = CURRENT_TIMESTAMP
+                INSERT INTO user_sync_cursor (tenant_id, user_id, conversation_id, last_synced_ts, updated_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                ON CONFLICT (tenant_id, user_id, conversation_id)
+                DO UPDATE SET last_synced_ts = $4, updated_at = CURRENT_TIMESTAMP
                 "#,
             )
+            .bind(tenant_id)
             .bind(user_id)
             .bind(conversation_id)
             .bind(*ts)
@@ -611,6 +540,7 @@ impl ConversationRepository for PostgresConversationRepository {
 
     async fn search_conversations(
         &self,
+        tenant_id: &str,
         user_id: Option<&str>,
         filters: &[ConversationFilter],
         sort: &[ConversationSort],
@@ -629,20 +559,26 @@ impl ConversationRepository for PostgresConversationRepository {
                 s.visibility,
                 s.lifecycle_state,
                 s.updated_at
-            FROM sessions s
+            FROM conversations s
             "#,
         );
 
-        // 如果指定了user_id，需要JOIN session_participants表
+        // 如果指定了user_id，需要JOIN conversation_participants表
         if user_id.is_some() {
-            query.push_str("INNER JOIN session_participants sp ON s.conversation_id = sp.conversation_id\n");
+            query.push_str("INNER JOIN conversation_participants sp ON s.tenant_id = sp.tenant_id AND s.conversation_id = sp.conversation_id\n");
         }
 
         // 构建WHERE子句
         let mut conditions = Vec::new();
         let mut bind_index = 1;
 
+        // 添加 tenant_id 过滤（必需）
+        conditions.push(format!("s.tenant_id = ${}", bind_index));
+        bind_index += 1;
+
         if user_id.is_some() {
+            conditions.push(format!("sp.tenant_id = ${}", bind_index));
+            bind_index += 1;
             conditions.push(format!("sp.user_id = ${}", bind_index));
             bind_index += 1;
         }
@@ -666,11 +602,13 @@ impl ConversationRepository for PostgresConversationRepository {
                 bind_index += 1;
             }
             if filter.participant_user_id.is_some() {
-                if !query.contains("session_participants") {
+                if !query.contains("conversation_participants") {
                     query.push_str(
-                        "INNER JOIN session_participants sp2 ON s.conversation_id = sp2.conversation_id\n",
+                        "INNER JOIN conversation_participants sp2 ON s.tenant_id = sp2.tenant_id AND s.conversation_id = sp2.conversation_id\n",
                     );
                 }
+                conditions.push(format!("sp2.tenant_id = ${}", bind_index));
+                bind_index += 1;
                 conditions.push(format!("sp2.user_id = ${}", bind_index));
                 bind_index += 1;
             }
@@ -714,8 +652,12 @@ impl ConversationRepository for PostgresConversationRepository {
         // 执行查询（使用query而不是query_as，因为动态SQL构建）
         let mut query_builder = sqlx::query(&query);
 
+        // 首先绑定 tenant_id（必需）
+        query_builder = query_builder.bind(tenant_id);
+
         if let Some(uid) = user_id {
-            query_builder = query_builder.bind(uid);
+            query_builder = query_builder.bind(tenant_id); // sp.tenant_id
+            query_builder = query_builder.bind(uid); // sp.user_id
         }
 
         // 绑定过滤器参数
@@ -733,7 +675,8 @@ impl ConversationRepository for PostgresConversationRepository {
                 query_builder = query_builder.bind(vis.as_str());
             }
             if let Some(ref pid) = filter.participant_user_id {
-                query_builder = query_builder.bind(pid);
+                query_builder = query_builder.bind(tenant_id); // sp2.tenant_id
+                query_builder = query_builder.bind(pid); // sp2.user_id
             }
         }
 
@@ -742,7 +685,7 @@ impl ConversationRepository for PostgresConversationRepository {
         let rows = query_builder
             .fetch_all(&*self.pool)
             .await
-            .context("Failed to search sessions")?;
+            .context("Failed to search conversations")?;
 
         // 转换为ConversationSummary
         let summaries: Vec<ConversationSummary> = rows
@@ -752,11 +695,12 @@ impl ConversationRepository for PostgresConversationRepository {
                 let conversation_type: String = row.get("conversation_type");
                 let business_type: String = row.get("business_type");
                 let display_name: Option<String> = row.get("display_name");
-                let attributes: serde_json::Value = row.get("attributes");
+                let attributes: Option<serde_json::Value> = row.get("attributes");
                 let updated_at: DateTime<Utc> = row.get("updated_at");
 
-                let attributes: HashMap<String, String> =
-                    serde_json::from_value(attributes).unwrap_or_default();
+                let attributes: HashMap<String, String> = attributes
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
                 let server_cursor_ts = Some(updated_at.timestamp_millis());
 
                 ConversationSummary {
@@ -813,21 +757,22 @@ impl ConversationRepository for PostgresConversationRepository {
         Ok((summaries, total))
     }
 
-    async fn mark_as_read(&self, user_id: &str, conversation_id: &str, seq: i64) -> Result<()> {
-        // 更新 session_participants 的 last_read_msg_seq 和 unread_count
+    async fn mark_as_read(&self, tenant_id: &str, user_id: &str, conversation_id: &str, seq: i64) -> Result<()> {
+        // 更新 conversation_participants 的 last_read_msg_seq 和 unread_count
         sqlx::query(
             r#"
-            UPDATE session_participants sp
+            UPDATE conversation_participants sp
             SET
                 last_read_msg_seq = $1,
                 unread_count = GREATEST(0, COALESCE((
-                    SELECT last_message_seq FROM sessions WHERE conversation_id = $2
+                    SELECT last_message_seq FROM conversations WHERE tenant_id = $2 AND conversation_id = $3
                 ), 0) - $1),
                 updated_at = CURRENT_TIMESTAMP
-            WHERE sp.conversation_id = $2 AND sp.user_id = $3
+            WHERE sp.tenant_id = $2 AND sp.conversation_id = $3 AND sp.user_id = $4
             "#,
         )
         .bind(seq)
+        .bind(tenant_id)
         .bind(conversation_id)
         .bind(user_id)
         .execute(&*self.pool)
@@ -844,15 +789,16 @@ impl ConversationRepository for PostgresConversationRepository {
         Ok(())
     }
 
-    async fn get_unread_count(&self, user_id: &str, conversation_id: &str) -> Result<i32> {
-        // 从 session_participants 表读取未读数
+    async fn get_unread_count(&self, tenant_id: &str, user_id: &str, conversation_id: &str) -> Result<i32> {
+        // 从 conversation_participants 表读取未读数
         let row = sqlx::query(
             r#"
             SELECT COALESCE(sp.unread_count, 0) as unread_count
-            FROM session_participants sp
-            WHERE sp.conversation_id = $1 AND sp.user_id = $2
+            FROM conversation_participants sp
+            WHERE sp.tenant_id = $1 AND sp.conversation_id = $2 AND sp.user_id = $3
             "#,
         )
+        .bind(tenant_id)
         .bind(conversation_id)
         .bind(user_id)
         .fetch_optional(&*self.pool)

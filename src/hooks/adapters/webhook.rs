@@ -11,9 +11,10 @@ use crate::error::{ErrorBuilder, ErrorCode, Result};
 
 use super::super::config::HookDefinition;
 use super::super::types::{
-    DeliveryEvent, DeliveryHook, HookContext, HookOutcome, MessageDraft, MessageRecord,
+    DeliveryEvent, DeliveryHook, HookOutcome, MessageDraft, MessageRecord,
     PostSendHook, PreSendDecision, PreSendHook, RecallEvent, RecallHook,
 };
+use flare_server_core::context::Context;
 
 #[derive(Clone)]
 pub struct WebhookHookFactory {
@@ -96,15 +97,15 @@ impl WebhookHookFactory {
 }
 
 #[derive(Serialize)]
-struct WebhookContextPayload<'a> {
-    tenant_id: &'a str,
-    conversation_id: Option<&'a str>,
-    conversation_type: Option<&'a str>,
-    message_type: Option<&'a str>,
-    sender_id: Option<&'a str>,
-    trace_id: Option<&'a str>,
-    tags: &'a HashMap<String, String>,
-    attributes: &'a HashMap<String, String>,
+struct WebhookContextPayload {
+    tenant_id: String,
+    conversation_id: Option<String>,
+    conversation_type: Option<String>,
+    message_type: Option<String>,
+    sender_id: Option<String>,
+    trace_id: Option<String>,
+    tags: HashMap<String, String>,
+    attributes: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -156,10 +157,10 @@ impl WebhookDraftPayload {
 }
 
 #[derive(Serialize)]
-struct PreSendWebhookRequest<'a> {
-    context: WebhookContextPayload<'a>,
+struct PreSendWebhookRequest {
+    context: WebhookContextPayload,
     draft: WebhookDraftPayload,
-    metadata: &'a HashMap<String, String>,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -192,16 +193,29 @@ fn build_headers(
     builder
 }
 
-fn webhook_context<'a>(ctx: &'a HookContext) -> WebhookContextPayload<'a> {
+fn webhook_context(ctx: &Context) -> WebhookContextPayload {
+    use crate::hooks::hook_context_data::get_hook_context_data;
+    
+    let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
+    let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+    let trace_id = {
+        let trace_id = ctx.trace_id();
+        if trace_id.is_empty() {
+            None
+        } else {
+            Some(trace_id.to_string())
+        }
+    };
+    
     WebhookContextPayload {
-        tenant_id: &ctx.tenant_id,
-        conversation_id: ctx.conversation_id.as_deref(),
-        conversation_type: ctx.conversation_type.as_deref(),
-        message_type: ctx.message_type.as_deref(),
-        sender_id: ctx.sender_id.as_deref(),
-        trace_id: ctx.trace_id.as_deref(),
-        tags: &ctx.tags,
-        attributes: &ctx.attributes,
+        tenant_id,
+        conversation_id: hook_data.conversation_id,
+        conversation_type: hook_data.conversation_type,
+        message_type: hook_data.message_type,
+        sender_id: hook_data.sender_id,
+        trace_id,
+        tags: hook_data.tags,
+        attributes: hook_data.attributes,
     }
 }
 
@@ -216,11 +230,11 @@ struct WebhookPreSendHook {
 
 #[async_trait]
 impl PreSendHook for WebhookPreSendHook {
-    async fn handle(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision {
+    async fn handle(&self, ctx: &Context, draft: &mut MessageDraft) -> PreSendDecision {
         let request_body = PreSendWebhookRequest {
             context: webhook_context(ctx),
             draft: WebhookDraftPayload::from(&*draft),
-            metadata: &self.static_metadata,
+            metadata: self.static_metadata.clone(),
         };
 
         let builder = self.client.post(&self.endpoint);
@@ -280,11 +294,11 @@ impl PreSendHook for WebhookPreSendHook {
 }
 
 #[derive(Serialize)]
-struct PostSendWebhookRequest<'a> {
-    context: WebhookContextPayload<'a>,
-    record: &'a MessageRecord,
+struct PostSendWebhookRequest {
+    context: WebhookContextPayload,
+    record: MessageRecord,
     draft: WebhookDraftPayload,
-    metadata: &'a HashMap<String, String>,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -300,15 +314,15 @@ struct WebhookPostSendHook {
 impl PostSendHook for WebhookPostSendHook {
     async fn handle(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> HookOutcome {
         let request_body = PostSendWebhookRequest {
             context: webhook_context(ctx),
-            record,
+            record: record.clone(),
             draft: WebhookDraftPayload::from(draft),
-            metadata: &self.static_metadata,
+            metadata: self.static_metadata.clone(),
         };
 
         let builder = self.client.post(&self.endpoint);
@@ -334,10 +348,10 @@ impl PostSendHook for WebhookPostSendHook {
 }
 
 #[derive(Serialize)]
-struct DeliveryWebhookRequest<'a> {
-    context: WebhookContextPayload<'a>,
-    event: &'a DeliveryEvent,
-    metadata: &'a HashMap<String, String>,
+struct DeliveryWebhookRequest {
+    context: WebhookContextPayload,
+    event: DeliveryEvent,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -351,11 +365,11 @@ struct WebhookDeliveryHook {
 
 #[async_trait]
 impl DeliveryHook for WebhookDeliveryHook {
-    async fn handle(&self, ctx: &HookContext, event: &DeliveryEvent) -> HookOutcome {
+    async fn handle(&self, ctx: &Context, event: &DeliveryEvent) -> HookOutcome {
         let request_body = DeliveryWebhookRequest {
             context: webhook_context(ctx),
-            event,
-            metadata: &self.static_metadata,
+            event: event.clone(),
+            metadata: self.static_metadata.clone(),
         };
         let builder = self.client.post(&self.endpoint);
         let builder = build_headers(builder, &self.secret, &self.headers);
@@ -380,10 +394,10 @@ impl DeliveryHook for WebhookDeliveryHook {
 }
 
 #[derive(Serialize)]
-struct RecallWebhookRequest<'a> {
-    context: WebhookContextPayload<'a>,
-    event: &'a RecallEvent,
-    metadata: &'a HashMap<String, String>,
+struct RecallWebhookRequest {
+    context: WebhookContextPayload,
+    event: RecallEvent,
+    metadata: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -397,11 +411,11 @@ struct WebhookRecallHook {
 
 #[async_trait]
 impl RecallHook for WebhookRecallHook {
-    async fn handle(&self, ctx: &HookContext, event: &RecallEvent) -> HookOutcome {
+    async fn handle(&self, ctx: &Context, event: &RecallEvent) -> HookOutcome {
         let request_body = RecallWebhookRequest {
             context: webhook_context(ctx),
-            event,
-            metadata: &self.static_metadata,
+            event: event.clone(),
+            metadata: self.static_metadata.clone(),
         };
         let builder = self.client.post(&self.endpoint);
         let builder = build_headers(builder, &self.secret, &self.headers);

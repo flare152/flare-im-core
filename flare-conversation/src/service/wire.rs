@@ -58,10 +58,6 @@ pub async fn initialize(
     let conversation_repo: Arc<dyn crate::domain::repository::ConversationRepository> =
         if let Some(ref pool) = postgres_pool {
             let repo = PostgresConversationRepository::new(pool.clone(), conversation_config.clone());
-            // 初始化数据库表结构
-            repo.init_schema()
-                .await
-                .context("Failed to initialize PostgreSQL conversation schema")?;
             Arc::new(repo)
         } else {
             Arc::new(RedisConversationRepository::new(

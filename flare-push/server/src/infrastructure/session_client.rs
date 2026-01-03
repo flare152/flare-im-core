@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use flare_proto::common::{ActorContext, RequestContext};
+use flare_proto::common::{ActorContext, RequestContext, TenantContext};
 use flare_proto::conversation::conversation_service_client::ConversationServiceClient as ConversationServiceClientProto;
 use flare_proto::conversation::{UpdateConversationRequest, UpdateConversationResponse};
+use flare_server_core::context::{Context, ContextExt};
 use flare_server_core::discovery::ServiceClient;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
@@ -100,37 +101,57 @@ impl ConversationServiceClient {
     }
 
     /// 获取会话的所有参与者（通过 UpdateConversation 方法，只传 conversation_id 获取 Conversation 信息）
+    #[tracing::instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        conversation_id = %conversation_id,
+    ))]
     pub async fn get_conversation_participants(
         &self,
+        ctx: &Context,
         conversation_id: &str,
-        tenant_id: Option<&str>,
     ) -> Result<Vec<String>> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            ErrorBuilder::new(
+                ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
         let mut client = self.ensure_client().await?;
 
-        // 使用 UpdateConversation 方法，只传 conversation_id，其他字段留空，来获取 Conversation 信息
-        let request = UpdateConversationRequest {
-            context: Some(RequestContext {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                trace: None,
-                actor: Some(ActorContext {
-                    actor_id: String::new(),
-                    r#type: 2, // ActorType::ACTOR_TYPE_SERVICE
-                    roles: vec![],
-                    attributes: std::collections::HashMap::new(),
-                }),
-                device: None,
-                channel: String::new(),
-                user_agent: String::new(),
+        // 从 Context 中提取 RequestContext 和 TenantContext（用于 protobuf 兼容性）
+        let request_context: RequestContext = ctx.request().cloned().map(|rc| rc.into()).unwrap_or_else(|| RequestContext {
+            request_id: ctx.request_id().to_string(),
+            trace: None,
+            actor: Some(ActorContext {
+                actor_id: String::new(),
+                r#type: 2, // ActorType::ACTOR_TYPE_SERVICE
+                roles: vec![],
                 attributes: std::collections::HashMap::new(),
             }),
-            tenant: tenant_id.map(|tid| flare_proto::common::TenantContext {
-                tenant_id: tid.to_string(),
+            device: None,
+            channel: String::new(),
+            user_agent: String::new(),
+            attributes: std::collections::HashMap::new(),
+        });
+
+        let tenant: Option<TenantContext> = ctx.tenant().cloned().map(|tc| tc.into()).or_else(|| {
+            ctx.tenant_id().map(|tenant_id| TenantContext {
+                tenant_id: tenant_id.to_string(),
                 business_type: String::new(),
                 environment: String::new(),
                 organization_id: String::new(),
                 labels: std::collections::HashMap::new(),
                 attributes: std::collections::HashMap::new(),
-            }),
+            })
+        });
+
+        // 使用 UpdateConversation 方法，只传 conversation_id，其他字段留空，来获取 Conversation 信息
+        let request = UpdateConversationRequest {
+            context: Some(request_context),
+            tenant,
             conversation_id: conversation_id.to_string(),
             display_name: String::new(),                  // 留空，不更新
             attributes: std::collections::HashMap::new(), // 留空，不更新

@@ -192,42 +192,6 @@ impl GrpcMessageClient {
         client.remove_reaction(request).await
     }
 
-    /// 回复消息
-    pub async fn reply_message(
-        &self,
-        request: Request<ReplyMessageRequest>,
-    ) -> Result<Response<ReplyMessageResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.reply_message(request).await
-    }
-
-    /// 转发消息
-    pub async fn forward_message(
-        &self,
-        request: Request<ForwardMessageRequest>,
-    ) -> Result<Response<ForwardMessageResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.forward_message(request).await
-    }
-
-    /// 引用消息
-    pub async fn quote_message(
-        &self,
-        request: Request<QuoteMessageRequest>,
-    ) -> Result<Response<QuoteMessageResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.quote_message(request).await
-    }
-
-    /// 在线程中回复
-    pub async fn add_thread_reply(
-        &self,
-        request: Request<AddThreadReplyRequest>,
-    ) -> Result<Response<AddThreadReplyResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.add_thread_reply(request).await
-    }
-
     /// 置顶消息
     pub async fn pin_message(
         &self,
@@ -246,24 +210,6 @@ impl GrpcMessageClient {
         client.unpin_message(request).await
     }
 
-    /// 收藏消息
-    pub async fn favorite_message(
-        &self,
-        request: Request<FavoriteMessageRequest>,
-    ) -> Result<Response<FavoriteMessageResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.favorite_message(request).await
-    }
-
-    /// 取消收藏
-    pub async fn unfavorite_message(
-        &self,
-        request: Request<UnfavoriteMessageRequest>,
-    ) -> Result<Response<UnfavoriteMessageResponse>, Status> {
-        let mut client = self.get_client().await?;
-        client.unfavorite_message(request).await
-    }
-
     /// 标记消息
     pub async fn mark_message(
         &self,
@@ -280,5 +226,77 @@ impl GrpcMessageClient {
     ) -> Result<Response<BatchMarkMessageReadResponse>, Status> {
         let mut client = self.get_client().await?;
         client.batch_mark_message_read(request).await
+    }
+
+    /// 范围标记已读
+    pub async fn mark_messages_read_until(
+        &self,
+        request: Request<MarkMessagesReadUntilRequest>,
+    ) -> Result<Response<MarkMessagesReadUntilResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.mark_messages_read_until(request).await
+    }
+
+    /// 获取置顶消息列表
+    pub async fn get_pinned_messages(
+        &self,
+        request: Request<GetPinnedMessagesRequest>,
+    ) -> Result<Response<GetPinnedMessagesResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.get_pinned_messages(request).await
+    }
+
+    /// 获取标记消息列表
+    pub async fn get_marked_messages(
+        &self,
+        request: Request<GetMarkedMessagesRequest>,
+    ) -> Result<Response<GetMarkedMessagesResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.get_marked_messages(request).await
+    }
+
+    /// 获取话题列表
+    pub async fn get_threads(
+        &self,
+        request: Request<GetThreadsRequest>,
+    ) -> Result<Response<GetThreadsResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.get_threads(request).await
+    }
+
+    /// 获取话题回复列表
+    pub async fn get_thread_replies(
+        &self,
+        request: Request<GetThreadRepliesRequest>,
+    ) -> Result<Response<GetThreadRepliesResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.get_thread_replies(request).await
+    }
+
+    /// 标记会话已读
+    pub async fn mark_conversation_read(
+        &self,
+        request: Request<MarkConversationReadRequest>,
+    ) -> Result<Response<MarkConversationReadResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.mark_conversation_read(request).await
+    }
+
+    /// 标记所有会话已读
+    pub async fn mark_all_conversations_read(
+        &self,
+        request: Request<MarkAllConversationsReadRequest>,
+    ) -> Result<Response<MarkAllConversationsReadResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.mark_all_conversations_read(request).await
+    }
+
+    /// 取消标记消息
+    pub async fn unmark_message(
+        &self,
+        request: Request<UnmarkMessageRequest>,
+    ) -> Result<Response<UnmarkMessageResponse>, Status> {
+        let mut client = self.get_client().await?;
+        client.unmark_message(request).await
     }
 }

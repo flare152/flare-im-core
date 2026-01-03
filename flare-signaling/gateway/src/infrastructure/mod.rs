@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod connection_context;
 pub mod connection_query;
 pub mod conversation_client;
 pub mod error;

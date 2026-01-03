@@ -66,12 +66,36 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("core-gateway", address)
             .add_spawn_with_shutdown("core-gateway-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 分别包裹每个 Service
+                use flare_server_core::middleware::ContextLayer;
+                use tower::Layer;
+                
+                let media_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(MediaServiceServer::new(simple_handler.clone()));
+                
+                let hook_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(HookServiceServer::new(simple_handler.clone()));
+                
+                let message_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(MessageServiceServer::new(simple_handler.clone()));
+                
+                let online_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(OnlineServiceServer::new(simple_handler.clone()));
+                
+                let conversation_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(ConversationServiceServer::new(simple_handler.clone()));
+                
                 Server::builder()
-                    .add_service(MediaServiceServer::new(simple_handler.clone()))
-                    .add_service(HookServiceServer::new(simple_handler.clone()))
-                    .add_service(MessageServiceServer::new(simple_handler.clone()))
-                    .add_service(OnlineServiceServer::new(simple_handler.clone()))
-                    .add_service(ConversationServiceServer::new(simple_handler.clone()))
+                    .add_service(media_service)
+                    .add_service(hook_service)
+                    .add_service(message_service)
+                    .add_service(online_service)
+                    .add_service(conversation_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

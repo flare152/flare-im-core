@@ -1,7 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use flare_proto::common::TenantContext;
 use flare_proto::storage::QueryMessagesRequest;
 use flare_proto::storage::storage_reader_service_client::StorageReaderServiceClient;
+use flare_server_core::client::set_context_metadata;
+use flare_server_core::context::Context;
 use flare_server_core::discovery::ServiceClient;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,22 +88,55 @@ impl StorageReaderMessageProvider {
     }
 
     fn build_request(
+        ctx: &Context,
         conversation_id: &str,
         since_ts: i64,
         cursor: Option<&str>,
         limit: i32,
     ) -> QueryMessagesRequest {
+        // 从 Context 构建 protobuf RequestContext 和 TenantContext
+        let request_context: flare_proto::common::RequestContext = ctx.request()
+            .cloned()
+            .map(|req_ctx| req_ctx.into())
+            .unwrap_or_else(|| {
+                let request_id = if ctx.request_id().is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    ctx.request_id().to_string()
+                };
+                flare_proto::common::RequestContext {
+                    request_id,
+                    trace: None,
+                    actor: None,
+                    device: None,
+                    channel: String::new(),
+                    user_agent: String::new(),
+                    attributes: std::collections::HashMap::new(),
+                }
+            });
+
+        let tenant_context: flare_proto::common::TenantContext = ctx.tenant()
+            .cloned()
+            .map(|t| t.into())
+            .or_else(|| {
+                ctx.tenant_id().map(|tenant_id| {
+                    let tenant: flare_server_core::context::TenantContext = 
+                        flare_server_core::context::TenantContext::new(tenant_id);
+                    tenant.into()
+                })
+            })
+            .unwrap_or_else(|| {
+                flare_proto::common::TenantContext::default()
+            });
+
         QueryMessagesRequest {
             conversation_id: conversation_id.to_string(),
             start_time: since_ts,
             end_time: 0,
             limit,
             cursor: cursor.unwrap_or_default().to_string(),
-            context: None,
-            tenant: Some(TenantContext {
-                tenant_id: String::new(),
-                ..Default::default()
-            }),
+            context: Some(request_context),
+            tenant: Some(tenant_context),
             pagination: None,
         }
     }
@@ -132,15 +167,18 @@ impl StorageReaderMessageProvider {
 impl MessageProvider for StorageReaderMessageProvider {
     async fn sync_messages(
         &self,
+        ctx: &Context,
         conversation_id: &str,
         since_ts: i64,
         cursor: Option<&str>,
         limit: i32,
     ) -> Result<MessageSyncResult> {
         let mut client = self.client().await?;
-        let request = Self::build_request(conversation_id, since_ts, cursor, limit);
+        let mut request = Request::new(Self::build_request(ctx, conversation_id, since_ts, cursor, limit));
+        // 利用 Context 传递能力，设置 metadata
+        set_context_metadata(&mut request, ctx);
         let response = client
-            .query_messages(Request::new(request))
+            .query_messages(request)
             .await
             .context("call storage reader query_messages")?
             .into_inner();
@@ -149,6 +187,7 @@ impl MessageProvider for StorageReaderMessageProvider {
 
     async fn recent_messages(
         &self,
+        ctx: &Context,
         conversation_ids: &[String],
         limit_per_session: i32,
         client_cursor: &HashMap<String, i64>,
@@ -160,6 +199,8 @@ impl MessageProvider for StorageReaderMessageProvider {
         let mut join_set = JoinSet::new();
         let service_name = self.service_name.clone();
         let service_client = Arc::clone(&self.service_client);
+        // 克隆 Context 以便在异步任务中使用
+        let ctx = ctx.clone();
 
         // 为每个会话创建查询任务
         for conversation_id in conversation_ids {
@@ -168,6 +209,7 @@ impl MessageProvider for StorageReaderMessageProvider {
             let limit = limit_per_session;
             let service_name = service_name.clone();
             let service_client = Arc::clone(&service_client);
+            let task_ctx = ctx.clone(); // 为每个任务克隆 Context
 
             join_set.spawn(async move {
                 // 每个任务重新获取 client（因为 gRPC client 不能跨任务共享）
@@ -215,9 +257,11 @@ impl MessageProvider for StorageReaderMessageProvider {
                 };
 
                 let mut client = StorageReaderServiceClient::new(channel);
-                let request = Self::build_request(&conversation_id, since_ts, None, limit);
+                // 使用任务级别的 Context
+                let mut request = Request::new(Self::build_request(&task_ctx, &conversation_id, since_ts, None, limit));
+                set_context_metadata(&mut request, &task_ctx);
                 let response = client
-                    .query_messages(Request::new(request))
+                    .query_messages(request)
                     .await
                     .with_context(|| format!("fetch recent messages for {}", conversation_id))?
                     .into_inner();
@@ -262,27 +306,64 @@ impl MessageProvider for StorageReaderMessageProvider {
 
     async fn sync_messages_by_seq(
         &self,
+        ctx: &Context,
         conversation_id: &str,
         after_seq: i64,
         before_seq: Option<i64>,
         limit: i32,
     ) -> Result<MessageSyncResult> {
         let mut client = self.client().await?;
-        let request = flare_proto::storage::QueryMessagesBySeqRequest {
+        
+        // 从 Context 构建 protobuf RequestContext 和 TenantContext
+        let request_context: flare_proto::common::RequestContext = ctx.request()
+            .cloned()
+            .map(|req_ctx| req_ctx.into())
+            .unwrap_or_else(|| {
+                let request_id = if ctx.request_id().is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    ctx.request_id().to_string()
+                };
+                flare_proto::common::RequestContext {
+                    request_id,
+                    trace: None,
+                    actor: None,
+                    device: None,
+                    channel: String::new(),
+                    user_agent: String::new(),
+                    attributes: std::collections::HashMap::new(),
+                }
+            });
+
+        let tenant_context: flare_proto::common::TenantContext = ctx.tenant()
+            .cloned()
+            .map(|t| t.into())
+            .or_else(|| {
+                ctx.tenant_id().map(|tenant_id| {
+                    let tenant: flare_server_core::context::TenantContext = 
+                        flare_server_core::context::TenantContext::new(tenant_id);
+                    tenant.into()
+                })
+            })
+            .unwrap_or_else(|| {
+                flare_proto::common::TenantContext::default()
+            });
+
+        let mut request = Request::new(flare_proto::storage::QueryMessagesBySeqRequest {
             conversation_id: conversation_id.to_string(),
             after_seq,
             before_seq: before_seq.unwrap_or(0),
             limit,
-            user_id: String::new(), // 可选，用于过滤已删除消息
-            context: None,
-            tenant: Some(TenantContext {
-                tenant_id: String::new(),
-                ..Default::default()
-            }),
-        };
+            user_id: ctx.user_id().map(|s| s.to_string()).unwrap_or_default(),
+            context: Some(request_context),
+            tenant: Some(tenant_context),
+        });
+        
+        // 利用 Context 传递能力，设置 metadata
+        set_context_metadata(&mut request, ctx);
 
         let response = client
-            .query_messages_by_seq(Request::new(request))
+            .query_messages_by_seq(request)
             .await
             .context("call storage reader query_messages_by_seq")?
             .into_inner();

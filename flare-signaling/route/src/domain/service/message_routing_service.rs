@@ -3,7 +3,7 @@
 //! 负责消息路由的核心业务逻辑：分片选择、负载均衡、流控、跨机房选择
 
 use std::sync::Arc;
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use chrono::Utc;
 
 use crate::domain::model::Svid;
@@ -64,7 +64,7 @@ impl MessageRoutingDomainService {
 
         // 2. 流控检查
         self.flow_controller.check(ctx).await
-            .context("Flow control check failed")?;
+            .with_context(|| "Flow control check failed")?;
 
         // 3. 分片选择
         let shard = self
@@ -76,7 +76,7 @@ impl MessageRoutingDomainService {
             .map_err(|e| anyhow::anyhow!("Invalid SVID: {}", e))?;
         
         let route = self.route_repository.find_by_svid(svid.as_str()).await
-            .context("Failed to read route repository")?;
+            .with_context(|| "Failed to read route repository")?;
 
         let candidate = route.map(|r| r.endpoint().as_str().to_string());
         let candidates = candidate.into_iter().collect::<Vec<_>>();

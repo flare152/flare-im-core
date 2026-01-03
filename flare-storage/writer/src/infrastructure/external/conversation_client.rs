@@ -1,12 +1,13 @@
 //! Session 服务客户端 - 通过 gRPC 调用 session 服务
 
 use std::sync::Arc;
-use anyhow::{Result, Context};
+use anyhow::{Result, Context as AnyhowContext};
 use flare_proto::conversation::conversation_service_client::ConversationServiceClient;
 use flare_proto::conversation::{CreateConversationRequest, ConversationParticipant, SessionVisibility};
-use flare_proto::common::RequestContext;
+use flare_proto::common::{RequestContext, TenantContext};
+use flare_server_core::context::{Context, ContextExt};
 use tonic::transport::Channel;
-use tracing::{debug, warn};
+use tracing::{debug, warn, instrument};
 
 use crate::domain::repository::ConversationRepository;
 
@@ -25,14 +26,22 @@ impl GrpcConversationClient {
 
 
 impl ConversationRepository for GrpcConversationClient {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        conversation_id = %conversation_id,
+    ))]
     async fn ensure_conversation(
         &self,
+        ctx: &Context,
         conversation_id: &str,
         conversation_type: &str,
         business_type: &str,
         participants: Vec<String>,
-        tenant_id: Option<&str>,
     ) -> Result<()> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            anyhow::anyhow!("Request cancelled: {}", e)
+        })?;
         // 构建 participants
         let session_participants: Vec<ConversationParticipant> = participants
             .into_iter()
@@ -51,17 +60,37 @@ impl ConversationRepository for GrpcConversationClient {
         let mut attributes = std::collections::HashMap::new();
         attributes.insert("conversation_id".to_string(), conversation_id.to_string());
         
+        // 从 Context 中提取 RequestContext 和 TenantContext（用于 protobuf 兼容性）
+        let request_context = ctx.request().cloned().unwrap_or_else(|| {
+            let request_id = if ctx.request_id().is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                ctx.request_id().to_string()
+            };
+            RequestContext {
+                request_id,
+            trace: None,
+            actor: None,
+            device: None,
+            channel: String::new(),
+            user_agent: String::new(),
+            attributes: std::collections::HashMap::new(),
+        });
+
+        let tenant = ctx.tenant().cloned().or_else(|| {
+            ctx.tenant_id().map(|tenant_id| TenantContext {
+                tenant_id: tenant_id.to_string(),
+                business_type: String::new(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
+            })
+        });
+        
         let mut request = CreateConversationRequest {
-            context: Some(RequestContext {
-                request_id: uuid::Uuid::new_v4().to_string(),
-                user_id: String::new(),
-                device_id: String::new(),
-                client_version: String::new(),
-                trace_id: String::new(),
-            }),
-            tenant: tenant_id.map(|id| flare_proto::common::TenantContext {
-                tenant_id: id.to_string(),
-            }),
+            context: Some(request_context),
+            tenant,
             conversation_type: conversation_type.to_string(),
             business_type: business_type.to_string(),
             participants: session_participants,

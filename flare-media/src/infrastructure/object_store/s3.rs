@@ -21,6 +21,7 @@ pub struct S3ObjectStore {
     cdn_base_url: Option<String>,
     upload_prefix: Option<String>,
     bucket_root_prefix: Option<String>,
+    #[allow(dead_code)] // 用于构建 base_url，虽然字段本身未直接读取，但在 from_config 中使用
     force_path_style: bool,
     presign_url_ttl_seconds: i64, // 预签名URL过期时间（秒）
     use_presign: bool,

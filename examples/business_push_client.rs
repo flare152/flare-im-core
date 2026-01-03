@@ -195,6 +195,8 @@ async fn main() -> Result<()> {
         read_by: vec![],
         reactions: vec![],
         edit_history: vec![],
+        current_edit_version: 0,
+        last_edited_at: None,
         tenant: Some(flare_proto::common::TenantContext {
             tenant_id: tenant_id.clone(),
             business_type: "im".to_string(),

@@ -4,14 +4,17 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
-use flare_proto::common::{RequestContext, TenantContext};
+use anyhow::{Context as AnyhowContext, Result};
+use flare_proto::common::TenantContext;
 use flare_proto::message::message_service_client::MessageServiceClient;
 use flare_proto::message::{SendMessageRequest, SendMessageResponse};
 use prost::Message as ProstMessage;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tonic::transport::Channel;
+
+use flare_server_core::context::Context as ServerContext;
 use tracing::{debug, info};
 
 use crate::domain::repository::RouteRepository;
@@ -19,104 +22,165 @@ use flare_server_core::discovery::ServiceClient;
 
 /// SVID 常量定义
 pub mod svid {
+    /// IM 业务系统 SVID（默认）
     pub const IM: &str = "svid.im";
-    pub const CUSTOMER_SERVICE: &str = "svid.customer";
-    pub const AI_BOT: &str = "svid.ai.bot";
+}
 
-    /// 从旧的 SVID 格式转换为新格式
-    pub fn normalize(svid: &str) -> String {
-        match svid.to_uppercase().as_str() {
-            "IM" => IM.to_string(),
-            "CUSTOMER_SERVICE" | "CS" => CUSTOMER_SERVICE.to_string(),
-            "AI_BOT" | "AI" => AI_BOT.to_string(),
-            _ => {
-                // 如果已经是新格式（包含点），直接返回
-                if svid.contains('.') {
-                    svid.to_string()
-                } else {
-                    // 默认转换为 svid.{svid}
-                    format!("svid.{}", svid.to_lowercase())
-                }
-            }
+/// 缓存的客户端条目
+struct CachedClient {
+    /// 客户端
+    client: MessageServiceClient<Channel>,
+    /// 最后使用时间
+    last_used: Instant,
+}
+
+impl CachedClient {
+    fn new(client: MessageServiceClient<Channel>) -> Self {
+        Self {
+            client,
+            last_used: Instant::now(),
         }
+    }
+
+    fn update_last_used(&mut self) {
+        self.last_used = Instant::now();
+    }
+
+    /// 检查客户端是否应该被清理（超过最大空闲时间）
+    fn should_cleanup(&self, max_idle: Duration) -> bool {
+        self.last_used.elapsed() > max_idle
     }
 }
 
 /// 消息转发服务
 pub struct MessageForwarder {
-    /// IM 业务系统客户端（message-orchestrator）
-    im_client: Arc<Mutex<Option<MessageServiceClient<Channel>>>>,
-    /// 其他业务系统客户端缓存
-    business_clients: Arc<Mutex<HashMap<String, MessageServiceClient<Channel>>>>,
-    /// 服务发现客户端
-    service_client: Arc<Mutex<Option<ServiceClient>>>,
-    /// Router（已废弃，建议使用 MessageRoutingDomainService）
-    #[deprecated(note = "Use MessageRoutingDomainService instead")]
-    router: Arc<Mutex<Option<Arc<crate::service::router::Router>>>>,
+    /// 业务系统客户端缓存（key: "{svid}:{endpoint}"，value: CachedClient）
+    /// 使用 RwLock 提高并发读性能（读多写少场景）
+    business_clients: Arc<RwLock<HashMap<String, CachedClient>>>,
     /// 默认租户ID
     default_tenant_id: String,
+    /// 最大缓存客户端数量
+    max_cache_size: usize,
+    /// 客户端最大空闲时间（超过此时间未使用会被清理）
+    max_idle_duration: Duration,
 }
 
 impl MessageForwarder {
     /// 创建新的消息转发服务
     pub fn new(default_tenant_id: String) -> Self {
         Self {
-            im_client: Arc::new(Mutex::new(None)),
-            business_clients: Arc::new(Mutex::new(HashMap::new())),
-            service_client: Arc::new(Mutex::new(None)),
-            router: Arc::new(Mutex::new(None)),
+            business_clients: Arc::new(RwLock::new(HashMap::new())),
             default_tenant_id,
+            max_cache_size: 100, // 最多缓存 100 个客户端
+            max_idle_duration: Duration::from_secs(300), // 5 分钟空闲后清理
         }
     }
 
-    /// 使用 ServiceClient 创建（推荐，通过 wire 注入）
-    pub fn with_service_client(service_client: ServiceClient, default_tenant_id: String) -> Self {
-        Self {
-            im_client: Arc::new(Mutex::new(None)),
-            business_clients: Arc::new(Mutex::new(HashMap::new())),
-            service_client: Arc::new(Mutex::new(Some(service_client))),
-            router: Arc::new(Mutex::new(None)),
-            default_tenant_id,
+    /// 生成缓存键
+    fn cache_key(svid: &str, endpoint: &str) -> String {
+        format!("{}:{}", svid, endpoint)
+    }
+
+    /// 清理过期和空闲的客户端
+    async fn cleanup_expired_clients(&self) {
+        let mut clients = self.business_clients.write().await;
+        let initial_size = clients.len();
+        
+        clients.retain(|_key, cached_client| {
+            !cached_client.should_cleanup(self.max_idle_duration)
+        });
+        
+        let removed = initial_size - clients.len();
+        if removed > 0 {
+            debug!(
+                removed_count = removed,
+                remaining_count = clients.len(),
+                "Cleaned up expired clients from cache"
+            );
         }
     }
 
-    /// 注入 Router（已废弃，建议使用 MessageRoutingDomainService）
-    #[deprecated(note = "Use MessageRoutingDomainService instead")]
-    pub async fn set_router(&self, router: Arc<crate::service::router::Router>) {
-        let mut guard = self.router.lock().await;
-        *guard = Some(router);
-    }
+    /// 从缓存获取客户端，如果不存在或已失效则创建新的
+    async fn get_or_create_cached_client(
+        &self,
+        svid: &str,
+        endpoint: &str,
+    ) -> Result<MessageServiceClient<Channel>> {
+        let cache_key = Self::cache_key(svid, endpoint);
 
-    /// 初始化 IM 客户端（message-orchestrator）
-    async fn ensure_im_client(&self) -> Result<()> {
-        let mut client_guard = self.im_client.lock().await;
-        if client_guard.is_some() {
-            return Ok(());
+        // 快速路径：尝试从缓存读取（需要写锁以更新 last_used）
+        {
+            let mut clients = self.business_clients.write().await;
+            if let Some(cached) = clients.get_mut(&cache_key) {
+                // 检查是否需要清理
+                if !cached.should_cleanup(self.max_idle_duration) {
+                    // 更新最后使用时间
+                    cached.update_last_used();
+                    // 克隆客户端（tonic 的客户端是轻量级的，内部使用 Arc）
+                    return Ok(cached.client.clone());
+                }
+            }
         }
 
-        info!("Initializing IM service client (message-orchestrator)...");
+        // 慢速路径：需要创建新客户端（写锁）
+        let new_client = self.create_business_client(endpoint, svid).await?;
 
-            // 创建服务发现器（使用常量，根据 SVID 过滤）
-            // 注意：这里使用默认的 SVID (svid.im)，如果需要支持多个 SVID，需要修改为根据请求的 SVID 动态创建
+        // 检查缓存大小，必要时清理
+        let mut clients = self.business_clients.write().await;
+        
+        // 如果缓存已满，清理过期客户端
+        if clients.len() >= self.max_cache_size {
+            drop(clients); // 释放写锁，允许其他操作
+            self.cleanup_expired_clients().await;
+            let mut clients = self.business_clients.write().await;
+            
+            // 如果清理后还是满的，移除最旧的客户端
+            if clients.len() >= self.max_cache_size {
+                let oldest_key = clients
+                    .iter()
+                    .min_by_key(|(_, cached)| cached.last_used)
+                    .map(|(key, _)| key.clone());
+                
+                if let Some(key) = oldest_key {
+                    clients.remove(&key);
+                    debug!(removed_key = %key, "Removed oldest client from cache");
+                }
+            }
+            
+            // 插入新客户端
+            clients.insert(cache_key, CachedClient::new(new_client.clone()));
+            Ok(new_client)
+        } else {
+            // 缓存未满，直接插入
+            clients.insert(cache_key, CachedClient::new(new_client.clone()));
+            Ok(new_client)
+        }
+    }
+
+    /// 创建业务系统客户端（内部方法，不缓存）
+    async fn create_business_client(
+        &self,
+        endpoint: &str,
+        svid: &str,
+    ) -> Result<MessageServiceClient<Channel>> {
+
+        // 特殊处理：如果 SVID 是 svid.im，直接使用 MESSAGE_ORCHESTRATOR 服务名
+        if svid == svid::IM {
             use flare_im_core::service_names::{MESSAGE_ORCHESTRATOR, get_service_name};
             use flare_im_core::config::app_config;
             use flare_im_core::discovery::create_discover_from_registry_config_with_filters;
             
             let message_orchestrator_service = get_service_name(MESSAGE_ORCHESTRATOR);
-        
-        let mut service_client_guard = self.service_client.lock().await;
-        if service_client_guard.is_none() {
             let app_config = app_config();
             
-            // 根据 SVID 过滤服务实例（默认使用 svid.im）
+            // 使用 svid.im 作为过滤条件
             let mut tag_filters = std::collections::HashMap::new();
             tag_filters.insert("svid".to_string(), svid::IM.to_string());
             
-            info!(
+            debug!(
                 service = %message_orchestrator_service,
-                svid_filter = %svid::IM,
-                tag_filters = ?tag_filters,
-                "Creating service discover with SVID filter"
+                svid = svid::IM,
+                "Creating service discover for svid.im with MESSAGE_ORCHESTRATOR"
             );
             
             let discover = if let Some(registry_config) = &app_config.core.registry {
@@ -135,33 +199,26 @@ impl MessageForwarder {
                     )
                 })?
             } else {
-                // 如果没有配置 registry，返回 None（后续会报错）
                 return Err(anyhow::anyhow!(
                     "Service discovery not configured for {}",
                     message_orchestrator_service
                 ));
             };
-            
-            info!(
-                service = %message_orchestrator_service,
-                svid_filter = %svid::IM,
-                "Service discover created successfully"
-            );
 
-            *service_client_guard = Some(ServiceClient::new(discover));
-        }
-
-        let service_client = service_client_guard.as_mut().unwrap();
-        // 添加超时保护，避免服务发现阻塞过长时间
-        info!("Attempting to get channel from service discovery (timeout: 3s)...");
-        let channel = tokio::time::timeout(
-            std::time::Duration::from_secs(3), // 3秒超时
-            service_client.get_channel(),
-        )
+            let mut service_client = ServiceClient::new(discover);
+            // 添加超时保护，避免服务发现阻塞过长时间
+            let channel = tokio::time::timeout(
+                std::time::Duration::from_secs(3), // 3秒超时
+                service_client.get_channel(),
+            )
             .await
-        .map_err(|_| {
-            anyhow::anyhow!("Timeout waiting for service discovery to get channel for {} (3s) - no service instances found matching svid={}", message_orchestrator_service, svid::IM)
-        })?
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Timeout waiting for service discovery to get channel for {} (svid={}) (3s)",
+                    message_orchestrator_service,
+                    svid::IM
+                )
+            })?
             .map_err(|e| {
                 anyhow::anyhow!(
                     "Failed to get channel from service discovery for {} (svid={}): {}",
@@ -170,54 +227,81 @@ impl MessageForwarder {
                     e
                 )
             })?;
-        
-        info!(
-            service = %message_orchestrator_service,
-            svid_filter = %svid::IM,
-            "Channel obtained from service discovery"
-        );
 
-        let client = MessageServiceClient::new(channel);
-        *client_guard = Some(client);
+            return Ok(MessageServiceClient::new(channel));
+        }
 
-        info!("✅ IM service client initialized successfully");
-        Ok(())
-    }
-
-    /// 根据 endpoint 获取或创建业务系统客户端
-    ///
-    /// endpoint 可以是：
-    /// - 服务名（通过服务发现解析）
-    /// - gRPC URL（http://host:port 或 https://host:port）
-    /// - host:port 格式
-    async fn get_business_client(&self, endpoint: &str) -> Result<MessageServiceClient<Channel>> {
-        // 判断 endpoint 是服务名还是 URL
+        // 其他业务系统：判断 endpoint 是服务名还是 URL
         let channel = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
             // 直接 URL
             tonic::transport::Endpoint::from_shared(endpoint.to_string())
-                .context("Invalid endpoint format")?
+                .with_context(|| "Invalid endpoint format")?
                 .connect()
                 .await
-                .context("Failed to connect to business service")?
+                .with_context(|| "Failed to connect to business service")?
         } else if endpoint.contains(':') && !endpoint.contains('.') {
             // host:port 格式
             let endpoint_url = format!("http://{}", endpoint);
             tonic::transport::Endpoint::from_shared(endpoint_url)
-                .context("Invalid endpoint format")?
+                .with_context(|| "Invalid endpoint format")?
                 .connect()
                 .await
-                .context("Failed to connect to business service")?
+                .with_context(|| "Failed to connect to business service")?
         } else {
-            // 服务名（通过服务发现）
-            let discover_result = flare_im_core::discovery::create_discover(endpoint)
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to create service discover for {}: {}", endpoint, e)
-                })?;
-
-            let discover = discover_result.ok_or_else(|| {
-                anyhow::anyhow!("Service discovery not configured for {}", endpoint)
-            })?;
+            // 服务名（通过服务发现，支持 SVID 过滤）
+            use flare_im_core::config::app_config;
+            use flare_im_core::discovery::create_discover_from_registry_config_with_filters;
+            
+            let app_config = app_config();
+            
+            // 根据 SVID 过滤服务实例（如果提供了 SVID）
+            let tag_filters = if !svid.is_empty() {
+                let mut filters = std::collections::HashMap::new();
+                filters.insert("svid".to_string(), svid.to_string());
+                Some(filters)
+            } else {
+                None
+            };
+            
+            let discover = if let Some(registry_config) = &app_config.core.registry {
+                if tag_filters.is_some() {
+                    info!(
+                        service = %endpoint,
+                        svid = %svid,
+                        "Creating service discover with SVID filter"
+                    );
+                    create_discover_from_registry_config_with_filters(
+                        registry_config,
+                        endpoint,
+                        tag_filters,
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to create service discover for {} with SVID filter (svid={}): {}",
+                            endpoint,
+                            svid,
+                            e
+                        )
+                    })?
+                } else {
+                    // 没有 SVID，使用普通的服务发现
+                    let discover_result = flare_im_core::discovery::create_discover(endpoint)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to create service discover for {}: {}", endpoint, e)
+                        })?;
+                    
+                    discover_result.ok_or_else(|| {
+                        anyhow::anyhow!("Service discovery not configured for {}", endpoint)
+                    })?
+                }
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Service discovery not configured for {}",
+                    endpoint
+                ));
+            };
 
             let mut service_client = ServiceClient::new(discover);
             // 添加超时保护，避免服务发现阻塞过长时间
@@ -228,14 +312,16 @@ impl MessageForwarder {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "Timeout waiting for service discovery to get channel for {} (3s)",
-                    endpoint
+                    "Timeout waiting for service discovery to get channel for {} (svid={}) (3s)",
+                    endpoint,
+                    svid
                 )
             })?
             .map_err(|e| {
                 anyhow::anyhow!(
-                    "Failed to get channel from service discovery for {}: {}",
+                    "Failed to get channel from service discovery for {} (svid={}): {}",
                     endpoint,
+                    svid,
                     e
                 )
             })?
@@ -244,173 +330,202 @@ impl MessageForwarder {
         Ok(MessageServiceClient::new(channel))
     }
 
+    /// 根据 endpoint 和 SVID 获取或创建业务系统客户端（带缓存）
+    ///
+    /// endpoint 可以是：
+    /// - 服务名（通过服务发现解析，支持 SVID 过滤）
+    /// - gRPC URL（http://host:port 或 https://host:port）
+    /// - host:port 格式
+    ///
+    /// # 参数
+    /// * `endpoint` - 服务端点（服务名、URL 或 host:port）
+    /// * `svid` - SVID（用于服务发现时的标签过滤）
+    async fn get_business_client(&self, endpoint: &str, svid: &str) -> Result<MessageServiceClient<Channel>> {
+        // 对于 svid.im，使用固定的 endpoint（MESSAGE_ORCHESTRATOR 服务名）
+        let actual_endpoint = if svid == svid::IM {
+            use flare_im_core::service_names::{MESSAGE_ORCHESTRATOR, get_service_name};
+            get_service_name(MESSAGE_ORCHESTRATOR)
+        } else {
+            endpoint.to_string()
+        };
+
+        // 从缓存获取或创建客户端
+        self.get_or_create_cached_client(svid, &actual_endpoint).await
+    }
+    
     /// 转发消息到业务系统
     ///
     /// 返回 (端点, 响应数据) 元组
     pub async fn forward_message(
         &self,
+        ctx: &ServerContext,
         svid: &str,
         payload: Vec<u8>,
-        context: Option<RequestContext>,
-        tenant: Option<TenantContext>,
         route_repository: Option<Arc<dyn RouteRepository + Send + Sync>>,
     ) -> Result<(String, Vec<u8>)> {
-        let normalized_svid = svid::normalize(svid);
-        debug!(svid = %normalized_svid, "Forwarding message to business system");
-
-        // 构造路由上下文（从 RequestContext.attributes 提取）
-        let route_ctx = crate::domain::service::RouteContext {
-            svid: normalized_svid.clone(),
-            conversation_id: context
-                .as_ref()
-                .and_then(|c| c.attributes.get("conversation_id").cloned()),
-            user_id: context
-                .as_ref()
-                .and_then(|c| c.actor.as_ref().map(|a| a.actor_id.clone())),
-            tenant_id: tenant.as_ref().map(|t| t.tenant_id.clone()),
-            client_geo: context
-                .as_ref()
-                .and_then(|c| c.attributes.get("geo").cloned()),
-            login_gateway: context
-                .as_ref()
-                .and_then(|c| c.attributes.get("login_gateway").cloned()),
+        // 提取或使用默认 SVID
+        let resolved_svid = if svid.is_empty() {
+            svid::IM
+        } else {
+            svid
         };
+        debug!(svid = %resolved_svid, "Forwarding message to business system");
 
-        // 根据 SVID 选择转发目标
-        match normalized_svid.as_str() {
-            svid::IM => {
-                // 转发到 message-orchestrator
-                self.forward_to_im(payload, context, tenant).await
-            }
-            _ => {
-                // 其他业务系统：使用路由仓储解析端点并转发
-                if let Some(repo) = route_repository {
-                    // 从路由仓储查找端点
-                    use crate::domain::model::Svid;
-                    let svid = Svid::new(normalized_svid.clone())
-                        .map_err(|e| anyhow::anyhow!("Invalid SVID: {}", e))?;
-                    
-                    let endpoint = match repo.find_by_svid(svid.as_str()).await {
-                        Ok(Some(route)) => route.endpoint().as_str().to_string(),
-                        Ok(None) => {
-                            return Err(anyhow::anyhow!(
-                                "Business service not found for SVID {}",
-                                normalized_svid
-                            ));
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "Failed to resolve route for SVID {}: {}",
-                                normalized_svid,
-                                e
-                            ));
-                        }
-                    };
-
-                    // 连接业务系统客户端并转发消息
-                    let mut client = self.get_business_client(&endpoint).await?;
-
-                    // 构造转发请求
-                    let request = flare_proto::message::SendMessageRequest {
-                        conversation_id: "".to_string(), // 需要根据实际逻辑填充
-                        message: None,              // 消息内容在 payload 中
-                        sync: false,
-                        context,
-                        tenant,
-                    };
-
-                    // 发送请求到业务系统
-                    let response = client
-                        .send_message(tonic::Request::new(request))
-                        .await
-                        .context("Failed to send message to business service")?;
-
-                    let response_inner = response.into_inner();
-
-                    // 序列化响应
-                    let mut response_bytes = Vec::new();
-                    flare_proto::message::SendMessageResponse::encode(
-                        &response_inner,
-                        &mut response_bytes,
-                    )
-                    .context("Failed to encode SendMessageResponse")?;
-
-                    info!(
-                        "✅ Message forwarded to business service successfully: SVID={}, Endpoint={}",
-                        normalized_svid, endpoint
-                    );
-                    Ok((endpoint, response_bytes))
-                } else {
-                    Err(anyhow::anyhow!(
-                        "Route repository not available, cannot resolve endpoint for SVID {}",
-                        normalized_svid
-                    ))
+        // 对于 svid.im，直接使用服务发现，不需要 RouteRepository
+        let endpoint = if resolved_svid == svid::IM {
+            use flare_im_core::service_names::{MESSAGE_ORCHESTRATOR, get_service_name};
+            get_service_name(MESSAGE_ORCHESTRATOR)
+        } else if let Some(repo) = route_repository {
+            // 其他 SVID：从路由仓储解析端点
+            use crate::domain::model::Svid;
+            let svid_obj = Svid::new(resolved_svid.to_string())
+                .map_err(|e| anyhow::anyhow!("Invalid SVID: {}", e))?;
+            
+            match repo.find_by_svid(svid_obj.as_str()).await {
+                Ok(Some(route)) => route.endpoint().as_str().to_string(),
+                Ok(None) => {
+                    return Err(anyhow::anyhow!(
+                        "Business service not found for SVID {}",
+                        resolved_svid
+                    ));
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to resolve route for SVID {}: {}",
+                        resolved_svid,
+                        e
+                    ));
                 }
             }
-        }
-    }
+        } else {
+            return Err(anyhow::anyhow!(
+                "Route repository not available, cannot resolve endpoint for SVID {}",
+                resolved_svid
+            ));
+        };
 
-    /// 转发消息到 IM 业务系统（message-orchestrator）
-    async fn forward_to_im(
-        &self,
-        payload: Vec<u8>,
-        context: Option<RequestContext>,
-        tenant: Option<TenantContext>,
-    ) -> Result<(String, Vec<u8>)> {
-        // 确保客户端已初始化
-        self.ensure_im_client()
-            .await
-            .context("Failed to initialize IM service client")?;
+        // 获取或创建业务系统客户端（带缓存，使用 SVID 过滤）
+        let mut client = self.get_business_client(&endpoint, &resolved_svid).await?;
 
-        // 解析 payload 为 Message 对象（Gateway 发送的是 Message 的 protobuf 编码）
+        // 解析 payload 为 Message 对象
         use flare_proto::common::Message;
-        
         if payload.is_empty() {
-            return Err(anyhow::anyhow!("Empty payload for IM message forwarding"));
+            return Err(anyhow::anyhow!("Empty payload for message forwarding"));
         }
 
-        // 解析为 Message 对象
         let message = Message::decode(&payload[..])
-            .context("Failed to decode payload as Message")?;
+            .map_err(|e| anyhow::anyhow!("Failed to decode payload as Message: {}", e))?;
 
-        // 从 context 的 attributes 中获取 conversation_id
-        let conversation_id = context
-            .as_ref()
-            .and_then(|c| c.attributes.get("conversation_id").cloned())
-            .unwrap_or_else(|| String::new());
+        // 保存消息信息用于错误日志
+        let message_id = message.server_id.clone();
+        let message_type = message.message_type;
+        let conversation_id_for_log = message.conversation_id.clone();
 
-        // 构建 SendMessageRequest
+        // 提取 conversation_id（优先从 message，否则从 context）
+        let conversation_id = if !message.conversation_id.is_empty() {
+            message.conversation_id.clone()
+        } else {
+            ctx.request()
+                .and_then(|req| req.attributes.get("conversation_id").cloned())
+                .unwrap_or_default()
+        };
+
+        // 记录消息信息（用于调试）
+        debug!(
+            message_id = %message_id,
+            message_type = message_type,
+            conversation_id = %conversation_id_for_log,
+            sender_id = %message.sender_id,
+            svid = %resolved_svid,
+            endpoint = %endpoint,
+            "Forwarding message to business service"
+        );
+
+        // 从 Context 中提取 TenantContext（用于 protobuf 兼容性）
+        let tenant_context: TenantContext = ctx.tenant().cloned().map(|tc| tc.into()).or_else(|| {
+            ctx.tenant_id().map(|tenant_id| TenantContext {
+                tenant_id: tenant_id.to_string(),
+                business_type: String::new(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
+            })
+        }).unwrap_or_else(|| {
+            TenantContext {
+                tenant_id: self.default_tenant_id.clone(),
+                business_type: String::new(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
+            }
+        });
+
+        // 从 Context 中提取 RequestContext（用于 protobuf 兼容性）
+        use flare_proto::common::RequestContext;
+        let request_context: RequestContext = ctx.request().cloned().map(|rc| rc.into()).unwrap_or_else(|| {
+            RequestContext {
+                request_id: ctx.request_id().to_string(),
+                trace: None,
+                actor: None,
+                device: None,
+                channel: String::new(),
+                user_agent: String::new(),
+                attributes: std::collections::HashMap::new(),
+            }
+        });
+
+        // 构造转发请求
         let request = SendMessageRequest {
             conversation_id,
             message: Some(message),
-            sync: false, // 默认异步模式
-            context,
-            tenant,
+            sync: false,
+            context: Some(request_context),
+            tenant: Some(tenant_context),
         };
 
-        // 发送请求
-        let mut client_guard = self.im_client.lock().await;
-        let client = client_guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IM service client not available"))?;
-
-        let response = client
+        // 发送请求到业务系统
+        let response = match client
             .send_message(tonic::Request::new(request))
             .await
-            .context("Failed to send message to message-orchestrator")?;
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                use tracing::error;
+                error!(
+                    message_id = %message_id,
+                    message_type = message_type,
+                    conversation_id = %conversation_id_for_log,
+                    svid = %resolved_svid,
+                    endpoint = %endpoint,
+                    error = %e,
+                    error_code = ?e.code(),
+                    error_message = %e.message(),
+                    "❌ Failed to send message to business service"
+                );
+                return Err(anyhow::anyhow!(
+                    "Failed to send message to business service {} (svid={}): {} (code: {:?})",
+                    endpoint,
+                    resolved_svid,
+                    e.message(),
+                    e.code()
+                ));
+            }
+        };
 
         let response_inner = response.into_inner();
 
         // 序列化响应
         let mut response_bytes = Vec::new();
         SendMessageResponse::encode(&response_inner, &mut response_bytes)
-            .context("Failed to encode SendMessageResponse")?;
+            .with_context(|| "Failed to encode SendMessageResponse")?;
 
-        // 获取服务名作为端点标识
-        use flare_im_core::service_names::{MESSAGE_ORCHESTRATOR, get_service_name};
-        let endpoint = get_service_name(MESSAGE_ORCHESTRATOR);
-
-        info!("✅ Message forwarded to IM service successfully, endpoint: {}", endpoint);
+        info!(
+            "✅ Message forwarded to business service successfully: SVID={}, Endpoint={}",
+            resolved_svid, endpoint
+        );
         Ok((endpoint, response_bytes))
     }
+
 }

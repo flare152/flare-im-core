@@ -22,9 +22,12 @@ impl LongConnectionHandler {
 
         // 获取连接信息并处理
         if let Some((user_id, device_id)) = self.get_connection_info(connection_id).await {
+            // 获取连接 metadata（包含 tenant_id 等信息）
+            let connection_metadata = self.get_connection_metadata(connection_id).await;
+            
             if let Err(err) = self
                 .connection_handler
-                .handle_connect(connection_id, &user_id, &device_id, active_count)
+                .handle_connect(connection_id, &user_id, &device_id, active_count, connection_metadata.as_ref())
                 .await
             {
                 warn!(

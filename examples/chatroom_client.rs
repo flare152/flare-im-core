@@ -269,6 +269,7 @@ async fn main() -> Result<()> {
                             content: Some(message_content),
                             content_type: flare_proto::common::ContentType::PlainText as i32,
                             attachments: vec![],
+                            quote: None,
                             extra: std::collections::HashMap::new(),
                             attributes,
                             status: flare_proto::common::MessageStatus::Created as i32,
@@ -287,6 +288,8 @@ async fn main() -> Result<()> {
                             read_by: vec![],
                             reactions: vec![],
                             edit_history: vec![],
+                            current_edit_version: 0,
+                            last_edited_at: None,
                             tenant: Some(flare_proto::common::TenantContext {
                                 tenant_id: "default".to_string(),
                                 business_type: "im".to_string(),
@@ -332,7 +335,6 @@ async fn main() -> Result<()> {
                         let listener_clone = chat_listener.clone();
                         let message_id = msg.server_id.clone();
                         let recipient_id_clone = recipient_id.clone();
-                        let message_clone = message.clone();
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(5), // 5秒超时，确保消息真正发送
                             async move {
@@ -956,7 +958,7 @@ impl ChatListener {
     }
 
     /// 发送客户端ACK给服务器（确认收到消息）
-    async fn send_client_ack(&self, message_id: &str, sender_id: &str) -> Result<()> {
+    async fn send_client_ack(&self, _message_id: &str, _sender_id: &str) -> Result<()> {
         // 构建SendEnvelopeAck
         // let send_ack = flare_proto::common::SendEnvelopeAck {
         //     message_id: message_id.to_string(),

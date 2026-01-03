@@ -13,38 +13,28 @@ use flare_proto::hooks::{
     ListHookConfigsResponse, QueryHookExecutionsRequest, QueryHookExecutionsResponse,
     SetHookStatusRequest, SetHookStatusResponse, UpdateHookConfigRequest, UpdateHookConfigResponse,
 };
-use prost_types::Timestamp;
-use std::str::FromStr;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use flare_server_core::context::Context;
+use flare_im_core::utils::context::require_context;
 
 use crate::domain::model::{
-    HookConfigItem, HookSelectorConfig, HookTransportConfig, LoadBalanceStrategy,
+    HookConfigItem, HookSelectorConfig, HookTransportConfig,
 };
+use std::str::FromStr;
 use crate::infrastructure::persistence::postgres_config::PostgresHookConfigRepository;
 use crate::service::registry::CoreHookRegistry;
 use chrono::Utc;
 
-/// 从gRPC请求中提取租户ID
+/// 从gRPC请求中提取租户ID（向后兼容函数）
 ///
-/// Gateway会在metadata中设置租户信息，优先从metadata中提取，如果没有则返回None
+/// 优先从 Context 中提取，如果没有则返回 None
 fn extract_tenant_id<T>(request: &Request<T>) -> Option<String> {
-    // 方法1: 从metadata中提取（Gateway会在metadata中设置）
-    if let Some(tenant_id) = request
-        .metadata()
-        .get("x-tenant-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
-    {
-        return Some(tenant_id);
+    if let Ok(ctx) = require_context(request) {
+        ctx.tenant_id().map(|s| s.to_string())
+    } else {
+        None
     }
-
-    // 方法2: 从请求扩展中提取（如果使用了Gateway拦截器）
-    // 注意：Hook Engine可能没有使用Gateway的拦截器，所以这个方法可能不适用
-    // 如果需要，可以添加：request.extensions().get::<flare_proto::TenantContext>()
-
-    None
 }
 
 /// HookService gRPC服务实现
@@ -85,13 +75,17 @@ impl HookService for HookServiceServer {
         &self,
         request: Request<CreateHookConfigRequest>,
     ) -> Result<Response<CreateHookConfigResponse>, Status> {
+        let ctx = require_context(&request).map_err(|_| Status::internal("Context not found"))?;
         let req = request.into_inner();
 
-        // 提取租户ID（从请求参数）
-        if req.tenant_id.is_empty() {
+        // 提取租户ID（优先从 Context，其次从请求参数）
+        let tenant_id = if !req.tenant_id.is_empty() {
+            req.tenant_id.clone()
+        } else if let Some(tenant_id) = ctx.tenant_id() {
+            tenant_id.to_string()
+        } else {
             return Err(Status::invalid_argument("tenant_id is required"));
-        }
-        let tenant_id = req.tenant_id.clone();
+        };
 
         // 验证必需字段
         if req.name.is_empty() {
@@ -133,12 +127,16 @@ impl HookService for HookServiceServer {
         let hook_item = protobuf_to_hook_config_item(&req, None)
             .map_err(|e| Status::invalid_argument(format!("Invalid hook config: {}", e)))?;
 
-        // 保存到数据库
-        let created_by = req
-            .context
-            .as_ref()
-            .and_then(|ctx| ctx.actor.as_ref())
-            .map(|a| a.actor_id.as_str());
+        // 保存到数据库（优先从 Context 提取，其次从请求参数）
+        let created_by = ctx
+            .user_id()
+            .map(|s| s.as_ref())
+            .or_else(|| {
+                req.context
+                    .as_ref()
+                    .and_then(|ctx| ctx.actor.as_ref())
+                    .map(|a| a.actor_id.as_str())
+            });
 
         let hook_id = self
             .repository
@@ -316,7 +314,7 @@ impl HookService for HookServiceServer {
 
                     // 解析负载均衡策略
                     let load_balance = if !transport.load_balance.is_empty() {
-                        LoadBalanceStrategy::from_str(&transport.load_balance).ok()
+                        crate::domain::model::LoadBalanceStrategy::from_str(&transport.load_balance).ok()
                     } else {
                         None
                     };
@@ -426,13 +424,16 @@ impl HookService for HookServiceServer {
         &self,
         request: Request<ListHookConfigsRequest>,
     ) -> Result<Response<ListHookConfigsResponse>, Status> {
+        let ctx = require_context(&request).ok();
         let req = request.into_inner();
 
-        // 提取租户ID
-        let tenant_id = if req.tenant_id.is_empty() {
-            None
-        } else {
+        // 提取租户ID（优先从 Context，其次从请求参数）
+        let tenant_id = if !req.tenant_id.is_empty() {
             Some(req.tenant_id.clone())
+        } else if let Some(ref ctx) = ctx {
+            ctx.tenant_id().map(|s| s.to_string())
+        } else {
+            None
         };
 
         // 查询Hook配置（支持enabled_only过滤和租户过滤）
@@ -934,7 +935,7 @@ fn protobuf_to_hook_config_item(
 
             // 解析负载均衡策略
             let load_balance = if !transport.load_balance.is_empty() {
-                LoadBalanceStrategy::from_str(&transport.load_balance).ok()
+                crate::domain::model::LoadBalanceStrategy::from_str(&transport.load_balance).ok()
             } else {
                 None
             };

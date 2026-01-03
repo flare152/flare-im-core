@@ -105,8 +105,8 @@ etcd-client = "0.17"
 # Flare Core
 flare-core = { path = "../flare-core" }
 
-# Flare Server Core
-flare-server-core = { path = "../flare-server-core" }
+# Flare Server Core (启用 proto feature 以使用错误转换函数)
+flare-server-core = { path = "../flare-server-core", features = ["proto"] }
 
 # Flare Proto
 flare-proto = { path = "../flare-proto" }
@@ -144,7 +144,7 @@ name = "flare_im_core"
 path = "src/lib.rs"
 
 [dependencies]
-flare-server-core = { workspace = true }
+flare-server-core = { workspace = true, features = ["proto"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -1,8 +1,5 @@
 //! 服务模块 - 包含服务启动、注册和管理相关功能
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-
 use anyhow::Result;
 use tracing::info;
 
@@ -39,18 +36,29 @@ impl ApplicationBootstrap {
     pub async fn run_with_context(context: ApplicationContext) -> Result<()> {
         info!("Starting Storage Writer (Kafka consumer)");
 
-        // 使用 ServiceRuntime 管理消费者（不需要地址）
-        let consumer = context.consumer;
-        let runtime = ServiceRuntime::new_consumer_only("storage-writer").add_consumer(
-            "kafka-consumer",
-            async move {
-                // 运行消费者循环
-                consumer
-                    .consume_messages()
-                    .await
-                    .map_err(|e| format!("Kafka consumer error: {}", e).into())
-            },
-        );
+        // 使用 ServiceRuntime 管理两个独立的消费者
+        let normal_consumer = context.normal_consumer;
+        let operation_consumer = context.operation_consumer;
+        
+        let runtime = ServiceRuntime::new_consumer_only("storage-writer")
+            .add_consumer(
+                "normal-message-consumer",
+                async move {
+                    normal_consumer
+                        .consume_messages()
+                        .await
+                        .map_err(|e| format!("Normal message consumer error: {}", e).into())
+                },
+            )
+            .add_consumer(
+                "operation-message-consumer",
+                async move {
+                    operation_consumer
+                        .consume_messages()
+                        .await
+                        .map_err(|e| format!("Operation message consumer error: {}", e).into())
+                },
+            );
 
         // 运行服务（不带服务注册，因为这是消费者服务）
         runtime.run().await

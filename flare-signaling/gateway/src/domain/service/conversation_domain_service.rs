@@ -5,11 +5,15 @@
 use async_trait::async_trait;
 use flare_proto::signaling::{HeartbeatRequest, LoginRequest, LogoutRequest};
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result}; // 使用 flare_server_core 的 Result 类型
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
 use crate::domain::repository::SignalingGateway;
 use crate::domain::service::ConnectionQualityService;
+use crate::infrastructure::connection_context::{
+    build_request_context_from_metadata, build_tenant_context_from_metadata,
+};
 
 /// 会话管理领域服务
 ///
@@ -45,15 +49,25 @@ impl ConversationDomainService {
         user_id: &str,
         device_id: &str,
         connection_id: Option<&str>,
+        connection_metadata: Option<&HashMap<String, String>>,
     ) -> Result<String> {
         use uuid::Uuid;
 
-        let conversation_id = Uuid::new_v4().to_string();
+        let _conversation_id = Uuid::new_v4().to_string();
         let server_id = self.gateway_id.clone();
 
         // 构建 metadata，包含 gateway_id
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("gateway_id".to_string(), self.gateway_id.clone());
+
+        // 从连接 metadata 中提取上下文（如果可用）
+        let request_context = connection_metadata
+            .map(|meta| build_request_context_from_metadata(meta, Some(user_id)))
+            .map(|ctx| ctx.into()); // 转换为 proto 类型
+        
+        let tenant_context = connection_metadata
+            .map(|meta| build_tenant_context_from_metadata(meta, "default"))
+            .map(|ctx| ctx.into()); // 转换为 proto 类型
 
         let login_request = LoginRequest {
             user_id: user_id.to_string(),
@@ -61,8 +75,8 @@ impl ConversationDomainService {
             device_id: device_id.to_string(),
             server_id: server_id.clone(),
             metadata,
-            context: None,
-            tenant: None,
+            context: request_context,
+            tenant: tenant_context,
             device_platform: "unknown".to_string(),
             app_version: "unknown".to_string(),
             desired_conflict_strategy: 0,

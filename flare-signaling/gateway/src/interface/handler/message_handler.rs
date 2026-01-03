@@ -5,10 +5,11 @@
 
 use async_trait::async_trait;
 use flare_core::common::error::{FlareError as CoreFlareError, Result as CoreResult};
-use flare_core::common::protocol::{Frame, MessageCommand, NotificationCommand, Reliability, generate_message_id, ack_message, frame_with_message_command};
+use flare_core::common::protocol::{Frame, MessageCommand, NotificationCommand, Reliability, generate_message_id, frame_with_message_command};
 use flare_core::common::protocol::builder::{FrameBuilder, current_timestamp};
 use flare_core::common::protocol::flare::core::commands::command::Type as CommandType;
 use flare_core::server::events::handler::ServerEventHandler;
+use prost::Message;
 use tracing::{debug, error, instrument, warn};
 
 use super::connection::LongConnectionHandler;
@@ -26,33 +27,66 @@ impl ServerEventHandler for LongConnectionHandler {
         connection_id: &str,
     ) -> CoreResult<Option<Frame>> {
         let client_message_id = command.message_id.clone();
-        // 处理消息发送，获取服务端生成的消息ID
-        let (server_message_id,seq) = self.handle_message_send(command, connection_id).await?;
-        
-        // 记录服务端消息ID（用于追踪和日志）
-        debug!(
-            connection_id = %connection_id,
-            client_message_id = %command.message_id,
-            server_message_id = %server_message_id,
-            "Message sent, server_id generated"
-        );
-        
+
         // 刷新会话心跳（忽略错误，不影响主流程）
         if let Err(err) = self.refresh_session(connection_id).await {
             warn!(?err, %connection_id, "failed to refresh session heartbeat");
         }
-        // 创建ack
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("server_message_id".to_string(), server_message_id.as_bytes().to_vec());
-        let send_ack = flare_proto::common::SendEnvelopeAck {
-            server_msg_id: server_message_id.to_string(), // 服务端生成的消息ID（server_id）
-            status: flare_proto::common::AckStatus::Success as i32,
-            seq, // 消息序列号（可选）
-            error_code: 0,
-            error_message: String::new(),
+
+        // 处理消息发送，获取服务端生成的消息ID
+        let send_ack = match self.handle_message_send(command, connection_id).await {
+            Ok((server_message_id, seq)) => {
+                // 构建成功 ACK
+                flare_proto::common::SendEnvelopeAck {
+                    server_msg_id: server_message_id.to_string(),
+                    status: flare_proto::common::AckStatus::Success as i32,
+                    seq,
+                    error_code: 0,
+                    error_message: String::new(),
+                }
+            }
+            Err(e) => {
+                // 处理失败，记录错误
+                error!(
+                    connection_id = %connection_id,
+                    message_id = %client_message_id,
+                    error = %e,
+                    "Failed to handle message send, sending error ACK"
+                );
+                
+                // 构建错误 ACK
+                flare_proto::common::SendEnvelopeAck {
+                    server_msg_id: client_message_id.clone(), // 使用 client_msg_id 作为 fallback
+                    status: flare_proto::common::AckStatus::Failed as i32,
+                    seq: 0,
+                    error_code: 1, // 通用错误码
+                    error_message: e.to_string(),
+                }
+            }
         };
-        let ack =ack_message(client_message_id, Some(metadata));
-        let frame  = frame_with_message_command(ack, Reliability::AtLeastOnce);
+        
+        // 统一构建 ACK Frame（成功和失败共用）
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(conv_id_bytes) = command.metadata.get("conversation_id") {
+            metadata.insert("conversation_id".to_string(), conv_id_bytes.clone());
+        }
+        
+        // 序列化 SendEnvelopeAck 为 payload
+        let mut payload = Vec::new();
+        send_ack.encode(&mut payload).map_err(|e| {
+            CoreFlareError::serialization_error(format!("Failed to encode SendEnvelopeAck: {}", e))
+        })?;
+        
+        // 创建包含 payload 的 ACK 命令
+        let ack_cmd = MessageCommand {
+            r#type: flare_core::common::protocol::flare::core::commands::message_command::Type::Ack as i32,
+            message_id: client_message_id,
+            payload, // 包含 SendEnvelopeAck 的 payload
+            metadata,
+            seq: 0,
+        };
+        
+        let frame = frame_with_message_command(ack_cmd, Reliability::AtLeastOnce);
         Ok(Some(frame))
     }
 

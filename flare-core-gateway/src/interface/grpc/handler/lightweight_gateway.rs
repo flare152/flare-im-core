@@ -384,38 +384,6 @@ impl MessageService for LightweightGatewayHandler {
         self.message_client.remove_reaction(request).await
     }
 
-    /// 回复消息
-    async fn reply_message(
-        &self,
-        request: Request<ReplyMessageRequest>,
-    ) -> Result<Response<ReplyMessageResponse>, Status> {
-        self.message_client.reply_message(request).await
-    }
-
-    /// 转发消息
-    async fn forward_message(
-        &self,
-        request: Request<ForwardMessageRequest>,
-    ) -> Result<Response<ForwardMessageResponse>, Status> {
-        self.message_client.forward_message(request).await
-    }
-
-    /// 引用消息
-    async fn quote_message(
-        &self,
-        request: Request<QuoteMessageRequest>,
-    ) -> Result<Response<QuoteMessageResponse>, Status> {
-        self.message_client.quote_message(request).await
-    }
-
-    /// 在线程中回复
-    async fn add_thread_reply(
-        &self,
-        request: Request<AddThreadReplyRequest>,
-    ) -> Result<Response<AddThreadReplyResponse>, Status> {
-        self.message_client.add_thread_reply(request).await
-    }
-
     /// 置顶消息
     async fn pin_message(
         &self,
@@ -432,22 +400,6 @@ impl MessageService for LightweightGatewayHandler {
         self.message_client.unpin_message(request).await
     }
 
-    /// 收藏消息
-    async fn favorite_message(
-        &self,
-        request: Request<FavoriteMessageRequest>,
-    ) -> Result<Response<FavoriteMessageResponse>, Status> {
-        self.message_client.favorite_message(request).await
-    }
-
-    /// 取消收藏
-    async fn unfavorite_message(
-        &self,
-        request: Request<UnfavoriteMessageRequest>,
-    ) -> Result<Response<UnfavoriteMessageResponse>, Status> {
-        self.message_client.unfavorite_message(request).await
-    }
-
     /// 标记消息
     async fn mark_message(
         &self,
@@ -462,6 +414,70 @@ impl MessageService for LightweightGatewayHandler {
         request: Request<BatchMarkMessageReadRequest>,
     ) -> Result<Response<BatchMarkMessageReadResponse>, Status> {
         self.message_client.batch_mark_message_read(request).await
+    }
+
+    /// 范围标记已读
+    async fn mark_messages_read_until(
+        &self,
+        request: Request<MarkMessagesReadUntilRequest>,
+    ) -> Result<Response<MarkMessagesReadUntilResponse>, Status> {
+        self.message_client.mark_messages_read_until(request).await
+    }
+
+    /// 获取置顶消息列表
+    async fn get_pinned_messages(
+        &self,
+        request: Request<GetPinnedMessagesRequest>,
+    ) -> Result<Response<GetPinnedMessagesResponse>, Status> {
+        self.message_client.get_pinned_messages(request).await
+    }
+
+    /// 获取标记消息列表
+    async fn get_marked_messages(
+        &self,
+        request: Request<GetMarkedMessagesRequest>,
+    ) -> Result<Response<GetMarkedMessagesResponse>, Status> {
+        self.message_client.get_marked_messages(request).await
+    }
+
+    /// 获取话题列表
+    async fn get_threads(
+        &self,
+        request: Request<GetThreadsRequest>,
+    ) -> Result<Response<GetThreadsResponse>, Status> {
+        self.message_client.get_threads(request).await
+    }
+
+    /// 获取话题回复列表
+    async fn get_thread_replies(
+        &self,
+        request: Request<GetThreadRepliesRequest>,
+    ) -> Result<Response<GetThreadRepliesResponse>, Status> {
+        self.message_client.get_thread_replies(request).await
+    }
+
+    /// 标记会话已读
+    async fn mark_conversation_read(
+        &self,
+        request: Request<MarkConversationReadRequest>,
+    ) -> Result<Response<MarkConversationReadResponse>, Status> {
+        self.message_client.mark_conversation_read(request).await
+    }
+
+    /// 标记所有会话已读
+    async fn mark_all_conversations_read(
+        &self,
+        request: Request<MarkAllConversationsReadRequest>,
+    ) -> Result<Response<MarkAllConversationsReadResponse>, Status> {
+        self.message_client.mark_all_conversations_read(request).await
+    }
+
+    /// 取消标记消息
+    async fn unmark_message(
+        &self,
+        request: Request<UnmarkMessageRequest>,
+    ) -> Result<Response<UnmarkMessageResponse>, Status> {
+        self.message_client.unmark_message(request).await
     }
 }
 

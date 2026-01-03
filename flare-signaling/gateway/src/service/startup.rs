@@ -191,12 +191,21 @@ pub async fn start_services(
         .add_spawn_with_shutdown("grpc-server", move |shutdown_rx| async move {
             info!("正在启动 gRPC 服务器: {}", grpc_addr);
 
-            let server_result = Server::builder()
-                .add_service(
+            // 添加上下文中间件（自动提取和注入 TenantContext 和 RequestContext）
+            use flare_server_core::middleware::ContextLayer;
+            
+            // 使用 ContextLayer 包裹 Service
+            
+            let access_gateway_service = ContextLayer::new()
+                .allow_missing()
+                .layer(
                     flare_proto::access_gateway::access_gateway_server::AccessGatewayServer::new(
                         (*access_gateway_handler).clone(),
                     ),
-                )
+                );
+            
+            let server_result = Server::builder()
+                .add_service(access_gateway_service)
                 .serve_with_shutdown(grpc_addr, async move {
                     info!(
                         address = %grpc_addr,

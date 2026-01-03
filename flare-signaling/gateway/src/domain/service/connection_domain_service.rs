@@ -7,6 +7,10 @@ use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 
+use crate::infrastructure::connection_context::{
+    build_tenant_context_from_metadata, build_request_context_from_metadata,
+};
+
 use crate::domain::repository::SignalingGateway;
 use crate::domain::service::ConnectionQualityService;
 
@@ -59,15 +63,48 @@ impl ConnectionDomainService {
         user_id: &str,
         device_id: &str,
         connection_id: Option<&str>,
+        connection_metadata: Option<&std::collections::HashMap<String, String>>,
     ) -> Result<String> {
         use uuid::Uuid;
 
-        let conversation_id = Uuid::new_v4().to_string();
+        let _conversation_id = Uuid::new_v4().to_string();
         let server_id = self.config.gateway_id.clone();
 
         // 构建 metadata，包含 gateway_id
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("gateway_id".to_string(), self.config.gateway_id.clone());
+
+        // 从连接 metadata 中提取上下文（如果可用）
+        #[cfg(feature = "proto")]
+        use flare_server_core::context::conversions::*;
+        
+        let request_context = connection_metadata
+            .map(|meta| {
+                let _ctx = build_request_context_from_metadata(meta, Some(user_id));
+                #[cfg(feature = "proto")]
+                {
+                    Some(flare_proto::common::RequestContext::from(ctx))
+                }
+                #[cfg(not(feature = "proto"))]
+                {
+                    None
+                }
+            })
+            .flatten();
+        
+        let tenant_context = connection_metadata
+            .map(|meta| {
+                let _ctx = build_tenant_context_from_metadata(meta, "default");
+                #[cfg(feature = "proto")]
+                {
+                    Some(flare_proto::common::TenantContext::from(ctx))
+                }
+                #[cfg(not(feature = "proto"))]
+                {
+                    None
+                }
+            })
+            .flatten();
 
         let login_request = LoginRequest {
             user_id: user_id.to_string(),
@@ -75,8 +112,8 @@ impl ConnectionDomainService {
             device_id: device_id.to_string(),
             server_id: server_id.clone(),
             metadata,
-            context: None,
-            tenant: None,
+            context: request_context,
+            tenant: tenant_context,
             device_platform: "unknown".to_string(),
             app_version: "unknown".to_string(),
             desired_conflict_strategy: 0,

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context as AnyhowContext, Result, anyhow, bail};
 use chrono::{Duration, Utc};
 use md5::compute as md5_compute;
 use sha2::{Digest, Sha256};
@@ -8,6 +8,7 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::instrument;
 use uuid::Uuid;
+use flare_server_core::context::{Context, ContextExt};
 
 use crate::domain::model::{
     FILE_CATEGORY_METADATA_KEY, FileAccessType, MediaAssetStatus, MediaDomainConfig,
@@ -60,11 +61,18 @@ impl MediaService {
         }
     }
 
-    #[instrument(skip(self, init))]
+    #[instrument(skip(self, ctx, init), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        tenant_id = ctx.tenant_id().unwrap_or(""),
+    ))]
     pub async fn initiate_multipart_upload(
         &self,
+        ctx: &Context,
         init: MultipartUploadInit,
     ) -> Result<MultipartUploadSession> {
+        ctx.ensure_not_cancelled()?;
+        
         let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
@@ -110,11 +118,19 @@ impl MediaService {
         })
     }
 
-    #[instrument(skip(self, chunk))]
+    #[instrument(skip(self, ctx, chunk), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        upload_id = %chunk.upload_id,
+        chunk_index = chunk.chunk_index,
+    ))]
     pub async fn upload_multipart_chunk(
         &self,
+        ctx: &Context,
         chunk: MultipartChunkPayload,
     ) -> Result<MultipartUploadSession> {
+        ctx.ensure_not_cancelled()?;
+        
         let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
@@ -179,8 +195,14 @@ impl MediaService {
         })
     }
 
-    #[instrument(skip(self))]
-    pub async fn complete_multipart_upload(&self, upload_id: &str) -> Result<MediaFileMetadata> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        upload_id = %upload_id,
+    ))]
+    pub async fn complete_multipart_upload(&self, ctx: &Context, upload_id: &str) -> Result<MediaFileMetadata> {
+        ctx.ensure_not_cancelled()?;
+        
         let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
@@ -226,7 +248,7 @@ impl MediaService {
             metadata: session.metadata.clone(),
         };
 
-        let metadata = self.store_media_file(context).await?;
+        let metadata = self.store_media_file(ctx, context).await?;
 
         session.status = UploadSessionStatus::Completed;
         session.updated_at = Utc::now();
@@ -238,8 +260,14 @@ impl MediaService {
         Ok(metadata)
     }
 
-    #[instrument(skip(self))]
-    pub async fn abort_multipart_upload(&self, upload_id: &str) -> Result<()> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        upload_id = %upload_id,
+    ))]
+    pub async fn abort_multipart_upload(&self, ctx: &Context, upload_id: &str) -> Result<()> {
+        ctx.ensure_not_cancelled()?;
+        
         let Some(store) = &self.upload_conversation_store else {
             bail!("multipart upload is not configured");
         };
@@ -255,11 +283,21 @@ impl MediaService {
         Ok(())
     }
 
-    #[instrument(skip(self, context))]
+    #[instrument(skip(self, ctx, context), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        file_id = context.file_id,
+        file_name = context.file_name,
+        file_size = context.file_size,
+        user_id = context.user_id,
+    ))]
     pub async fn store_media_file(
         &self,
+        ctx: &Context,
         mut context: UploadContext<'_>,
     ) -> Result<MediaFileMetadata> {
+        ctx.ensure_not_cancelled()?;
+        
         tracing::debug!(
             file_id = context.file_id,
             file_name = context.file_name,
@@ -476,15 +514,16 @@ impl MediaService {
         Ok(metadata)
     }
 
-    #[instrument(skip(self))]
-    pub async fn delete_media_file(&self, file_id: &str) -> Result<()> {
-        let mut metadata = self.get_metadata(file_id).await?;
+    #[instrument(skip(self, ctx))]
+    pub async fn delete_media_file(&self, ctx: &Context, file_id: &str) -> Result<()> {
+        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let mut metadata = self.get_metadata(ctx, file_id).await?;
 
         if metadata.reference_count > 1 {
             if let Some(reference_store) = &self.reference_store {
-                let _ = reference_store.delete_any_reference(file_id).await;
+                let _ = reference_store.delete_any_reference(tenant_id, file_id).await;
                 let updated_count = reference_store
-                    .count_references(file_id)
+                    .count_references(tenant_id, file_id)
                     .await
                     .unwrap_or(metadata.reference_count.saturating_sub(1));
                 metadata.reference_count = updated_count;
@@ -524,7 +563,7 @@ impl MediaService {
         }
 
         if let Some(reference_store) = &self.reference_store {
-            let _ = reference_store.delete_all_references(file_id).await;
+            let _ = reference_store.delete_all_references(tenant_id, file_id).await;
         }
 
         if let Some(store) = &self.metadata_store {
@@ -538,7 +577,8 @@ impl MediaService {
         Ok(())
     }
 
-    pub async fn get_metadata(&self, file_id: &str) -> Result<MediaFileMetadata> {
+    pub async fn get_metadata(&self, ctx: &Context, file_id: &str) -> Result<MediaFileMetadata> {
+        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         if let Some(cache) = &self.metadata_cache {
             if let Some(metadata) = cache.get_cached_metadata(file_id).await? {
                 return Ok(metadata);
@@ -546,7 +586,7 @@ impl MediaService {
         }
 
         if let Some(store) = &self.metadata_store {
-            if let Some(metadata) = store.load_metadata(file_id).await? {
+            if let Some(metadata) = store.load_metadata(tenant_id, file_id).await? {
                 if let Some(cache) = &self.metadata_cache {
                     cache.cache_metadata(&metadata).await.ok();
                 }
@@ -557,12 +597,21 @@ impl MediaService {
         Err(anyhow!("metadata not found: {file_id}"))
     }
 
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        file_id = %file_id,
+    ))]
     pub async fn create_presigned_url(
         &self,
+        ctx: &Context,
         file_id: &str,
         expires_in: i64,
     ) -> Result<PresignedUrl> {
-        let metadata = self.get_metadata(file_id).await?;
+        ctx.ensure_not_cancelled()?;
+        
+        let _tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let metadata = self.get_metadata(ctx, file_id).await?;
         let expires_in = if expires_in > 0 {
             expires_in
         } else {
@@ -666,15 +715,18 @@ impl MediaService {
 
     pub async fn add_reference(
         &self,
+        ctx: &Context,
         file_id: &str,
         scope: MediaReferenceScope,
         metadata: HashMap<String, String>,
     ) -> Result<MediaFileMetadata> {
-        let mut file_metadata = self.get_metadata(file_id).await?;
+        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let mut file_metadata = self.get_metadata(ctx, file_id).await?;
 
         if let Some(reference_store) = &self.reference_store {
             if reference_store
                 .reference_exists(
+                    tenant_id,
                     file_id,
                     &scope.namespace,
                     &scope.owner_id,
@@ -697,7 +749,7 @@ impl MediaService {
             };
 
             if reference_store.create_reference(&reference).await? {
-                file_metadata.reference_count = reference_store.count_references(file_id).await?;
+                file_metadata.reference_count = reference_store.count_references(tenant_id, file_id).await?;
             }
         } else {
             file_metadata.reference_count = file_metadata.reference_count.saturating_add(1);
@@ -713,23 +765,25 @@ impl MediaService {
 
     pub async fn remove_reference(
         &self,
+        ctx: &Context,
         file_id: &str,
         reference_id: Option<&str>,
     ) -> Result<MediaFileMetadata> {
-        let mut file_metadata = self.get_metadata(file_id).await?;
+        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let mut file_metadata = self.get_metadata(ctx, file_id).await?;
 
         if let Some(reference_store) = &self.reference_store {
             let removed = if let Some(reference_id) = reference_id {
                 reference_store.delete_reference(reference_id).await?
             } else {
                 reference_store
-                    .delete_any_reference(file_id)
+                    .delete_any_reference(tenant_id, file_id)
                     .await?
                     .is_some()
             };
 
             if removed {
-                file_metadata.reference_count = reference_store.count_references(file_id).await?;
+                file_metadata.reference_count = reference_store.count_references(tenant_id, file_id).await?;
             }
         } else {
             file_metadata.reference_count = file_metadata.reference_count.saturating_sub(1);
@@ -749,15 +803,22 @@ impl MediaService {
         Ok(file_metadata)
     }
 
-    pub async fn list_references(&self, file_id: &str) -> Result<Vec<MediaReference>> {
+    pub async fn list_references(&self, ctx: &Context, file_id: &str) -> Result<Vec<MediaReference>> {
+        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         if let Some(reference_store) = &self.reference_store {
-            reference_store.list_references(file_id).await
+            reference_store.list_references(tenant_id, file_id).await
         } else {
             Ok(vec![])
         }
     }
 
-    pub async fn cleanup_orphaned_assets(&self) -> Result<Vec<String>> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+    ))]
+    pub async fn cleanup_orphaned_assets(&self, ctx: &Context) -> Result<Vec<String>> {
+        ctx.ensure_not_cancelled()?;
+        
         let Some(store) = &self.metadata_store else {
             return Ok(vec![]);
         };
@@ -774,6 +835,11 @@ impl MediaService {
                 .or_else(|| asset.metadata.get(STORAGE_PATH_METADATA_KEY).cloned())
                 .unwrap_or_else(|| asset.file_id.clone());
 
+            // 从 metadata 中提取 tenant_id，如果没有则使用默认值
+            let tenant_id = asset.metadata.get("tenant_id")
+                .map(|s| s.as_str())
+                .unwrap_or("default");
+
             if let Some(repo) = &self.object_repo {
                 let _ = repo.delete_object(&storage_path).await;
             }
@@ -781,7 +847,7 @@ impl MediaService {
                 let _ = local.delete(&storage_path).await;
             }
             if let Some(reference_store) = &self.reference_store {
-                let _ = reference_store.delete_all_references(&asset.file_id).await;
+                let _ = reference_store.delete_all_references(tenant_id, &asset.file_id).await;
             }
             let _ = store.delete_metadata(&asset.file_id).await;
             if let Some(cache) = &self.metadata_cache {
@@ -938,8 +1004,14 @@ impl MediaService {
             return Ok(());
         };
 
+        // 从 metadata 中提取 tenant_id
+        let tenant_id = metadata.metadata.get("tenant_id")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        
         if reference_store
             .reference_exists(
+                &tenant_id,
                 &metadata.file_id,
                 &scope.namespace,
                 &scope.owner_id,
@@ -947,7 +1019,7 @@ impl MediaService {
             )
             .await?
         {
-            metadata.reference_count = reference_store.count_references(&metadata.file_id).await?;
+            metadata.reference_count = reference_store.count_references(&tenant_id, &metadata.file_id).await?;
             metadata.status = MediaAssetStatus::Active;
             metadata.grace_expires_at = None;
             self.save_and_cache(metadata).await?;
@@ -966,7 +1038,7 @@ impl MediaService {
         };
 
         if reference_store.create_reference(&reference).await? {
-            metadata.reference_count = reference_store.count_references(&metadata.file_id).await?;
+            metadata.reference_count = reference_store.count_references(tenant_id.as_str(), &metadata.file_id).await?;
         }
 
         metadata.status = if metadata.reference_count > 0 {

@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use flare_proto::common::{RequestContext, TenantContext};
+use anyhow::{Context as AnyhowContext, Result};
+use flare_proto::common::TenantContext;
 use flare_proto::signaling::router::router_service_client::RouterServiceClient;
 use flare_proto::signaling::router::{SelectPushTargetsRequest, SelectPushTargetsResponse};
 use prost::Message as ProstMessage;
@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
+use flare_server_core::context::Context;
 use flare_server_core::discovery::ServiceClient;
 
 /// Route 服务客户端
@@ -104,21 +105,29 @@ impl RouteServiceClient {
     }
 
     /// 选择推送目标设备
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, ctx))]
     pub async fn select_push_targets(
         &self,
+        ctx: &Context,
         user_id: &str,
         strategy: flare_proto::signaling::router::PushStrategy,
-        tenant: Option<TenantContext>,
     ) -> Result<SelectPushTargetsResponse> {
         self.initialize()
             .await
-            .context("Failed to initialize Route Service client")?;
+            .with_context(|| "Failed to initialize Route Service client")?;
 
         let mut client_guard = self.client.lock().await;
         let client = client_guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Route Service client not available"))?;
+
+        // 从 Context 中提取 TenantContext（用于 protobuf 兼容性）
+        let tenant: Option<flare_proto::TenantContext> = ctx.tenant().cloned().map(|tc| tc.into()).or_else(|| {
+            ctx.tenant_id().map(|tenant_id| flare_proto::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                ..Default::default()
+            })
+        });
 
         let request = SelectPushTargetsRequest {
             user_id: user_id.to_string(),
@@ -129,7 +138,7 @@ impl RouteServiceClient {
         let response = client
             .select_push_targets(tonic::Request::new(request))
             .await
-            .context("Failed to call SelectPushTargets RPC")?;
+            .with_context(|| "Failed to call SelectPushTargets RPC")?;
 
         Ok(response.into_inner())
     }

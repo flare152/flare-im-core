@@ -8,7 +8,9 @@
 
 set -e
 
+
 # 颜色输出
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -18,6 +20,13 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOGS_DIR="$PROJECT_ROOT/logs"
+
+
+echo -e "${YELLOW}🧹 清除之前的日志...${NC}"
+# 清除之前的日志
+rm -rf "$LOGS_DIR"/*.log
+echo -e "${GREEN}   ✓ 清除完成${NC}"
+echo ""
 
 # 解析参数
 GATEWAY_MODE="${1:-single}"  # 默认单网关模式

@@ -12,7 +12,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context as AnyhowContext, Result, anyhow};
 use flare_server_core::{Config, RegistryConfig};
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -1107,7 +1107,7 @@ fn load_config_from_source(path: &Path) -> Result<FlareAppConfig> {
     // 获取路径元数据
     let metadata = path
         .metadata()
-        .with_context(|| format!("unable to read metadata for {}", path.display()))?;
+        .context(format!("unable to read metadata for {}", path.display()))?;
 
     // 根据路径类型加载配置
     if metadata.is_dir() {
@@ -1126,7 +1126,7 @@ fn load_config_from_file(path: &Path) -> Result<FlareAppConfig> {
         .with_context(|| format!("unable to read config file: {}", Path::new(path).display()))?;
     // 解析 TOML 格式的配置内容
     let mut cfg: FlareAppConfig = toml::from_str(&content)
-        .with_context(|| format!("invalid config format: {}", Path::new(path).display()))?;
+        .context(format!("invalid config format: {}", Path::new(path).display()))?;
     // 确保配置有默认值
     cfg.ensure_defaults();
     Ok(cfg)
@@ -1157,7 +1157,7 @@ fn load_config_from_directory(path: &Path) -> Result<FlareAppConfig> {
 
     let cfg: FlareAppConfig = merged
         .try_into()
-        .with_context(|| format!("invalid configuration after merging {}", path.display()))?;
+        .context(format!("invalid configuration after merging {}", path.display()))?;
 
     Ok(cfg)
 }
@@ -1169,7 +1169,7 @@ fn merge_directory(root: &mut Value, dir: &Path) -> Result<()> {
     }
 
     let mut entries = fs::read_dir(dir)
-        .with_context(|| format!("unable to read config directory {}", dir.display()))?
+        .context(format!("unable to read config directory {}", dir.display()))?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             entry
@@ -1194,9 +1194,9 @@ fn merge_directory(root: &mut Value, dir: &Path) -> Result<()> {
 /// 加载 TOML 值
 fn load_toml_value(path: &Path) -> Result<Value> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("unable to read config fragment {}", path.display()))?;
+        .context(format!("unable to read config fragment {}", path.display()))?;
     let value: Value = toml::from_str(&content)
-        .with_context(|| format!("invalid TOML content in fragment {}", path.display()))?;
+        .context(format!("invalid TOML content in fragment {}", path.display()))?;
     Ok(value)
 }
 

@@ -8,10 +8,3 @@ pub mod wire;
 
 pub use bootstrap::ApplicationBootstrap;
 pub use metrics::RouterMetrics;
-
-// 向后兼容：保留 router 和 device_router 的导出（已废弃，建议使用 domain 层）
-#[deprecated(note = "Use domain::value_objects and domain::service instead")]
-pub mod router;
-
-#[deprecated(note = "Use domain::entities::device_route::DeviceRoute instead")]
-pub mod device_router;

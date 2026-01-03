@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
-use flare_proto::common::{RequestContext, TenantContext};
+use flare_im_core::hooks::{MessageDraft, MessageRecord};
+use flare_im_core::hooks::hook_context_data::{HookContextData, set_hook_context_data};
 use flare_proto::push::PushOptions;
+use flare_server_core::context::Context;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use uuid::Uuid;
 
@@ -14,9 +15,9 @@ const SENDER_PUSH_SERVER: &str = "push-server";
 const CONTENT_TYPE_JSON: &str = "application/json";
 const CONTENT_TYPE_BINARY: &str = "application/octet-stream";
 
-/// Hook 编排所需的 envelope，保存 HookContext 及核心元数据。
+/// Hook 编排所需的 envelope，保存 Context 及核心元数据。
 pub struct PushHookEnvelope {
-    context: HookContext,
+    context: Context,
     message_id: String,
     conversation_id: String,
     message_type: String,
@@ -24,7 +25,7 @@ pub struct PushHookEnvelope {
 }
 
 impl PushHookEnvelope {
-    pub fn hook_context(&self) -> &HookContext {
+    pub fn hook_context(&self) -> &Context {
         &self.context
     }
 
@@ -46,19 +47,15 @@ impl PushHookEnvelope {
 
 /// 构造消息类推送的 Hook envelope。
 pub fn prepare_message_envelope(
-    default_tenant_id: &str,
-    tenant: Option<&TenantContext>,
+    ctx: &Context,
     user_id: &str,
-    request: Option<&RequestContext>,
     options: Option<&PushOptions>,
     payload: Vec<u8>,
 ) -> (PushHookEnvelope, MessageDraft) {
     prepare_envelope(
-        default_tenant_id,
-        tenant,
+        ctx,
         user_id,
         "push_message",
-        request,
         options,
         payload,
         CONTENT_TYPE_BINARY,
@@ -68,10 +65,8 @@ pub fn prepare_message_envelope(
 
 /// 构造通知类推送的 Hook envelope。
 pub fn prepare_notification_envelope(
-    default_tenant_id: &str,
-    tenant: Option<&TenantContext>,
+    ctx: &Context,
     user_id: &str,
-    request: Option<&RequestContext>,
     options: Option<&PushOptions>,
     notification: &DispatchNotification,
 ) -> Result<(PushHookEnvelope, MessageDraft)> {
@@ -95,11 +90,9 @@ pub fn prepare_notification_envelope(
     })?;
 
     Ok(prepare_envelope(
-        default_tenant_id,
-        tenant,
+        ctx,
         user_id,
         "push_notification",
-        request,
         options,
         payload,
         CONTENT_TYPE_JSON,
@@ -134,22 +127,28 @@ pub fn build_post_send_record(envelope: &PushHookEnvelope, draft: &MessageDraft)
 }
 
 fn prepare_envelope(
-    default_tenant_id: &str,
-    tenant: Option<&TenantContext>,
+    ctx: &Context,
     user_id: &str,
     message_type: &str,
-    request: Option<&RequestContext>,
     options: Option<&PushOptions>,
     payload: Vec<u8>,
     _default_content_type: &str,
     mut extra_metadata: HashMap<String, String>,
 ) -> (PushHookEnvelope, MessageDraft) {
-    let tenant_id = tenant
-        .and_then(|t| (!t.tenant_id.is_empty()).then_some(t.tenant_id.clone()))
-        .unwrap_or_else(|| default_tenant_id.to_string());
+    // 从 Context 中提取 tenant_id
+    let tenant_id = ctx.tenant_id()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "default".to_string());
     let conversation_id = format!("{SESSION_TYPE_PUSH}:{user_id}");
 
-    if let Some(req) = request {
+    // 从 Context 中提取 trace 信息
+    let trace_id = ctx.trace_id();
+    if !trace_id.is_empty() {
+        extra_metadata.insert("trace_id".to_string(), trace_id.to_string());
+    }
+
+    // 从 RequestContext 中提取更多信息（如果存在）
+    if let Some(req) = ctx.request() {
         if let Some(trace_ctx) = req.trace.as_ref() {
             if !trace_ctx.trace_id.is_empty() {
                 extra_metadata.insert("trace_id".to_string(), trace_ctx.trace_id.clone());
@@ -184,7 +183,17 @@ fn prepare_envelope(
     }
 
     let mut request_metadata = HashMap::new();
-    if let Some(req) = request {
+    let request_id = ctx.request_id();
+    if !request_id.is_empty() {
+        request_metadata.insert("request_id".to_string(), request_id.to_string());
+    }
+    let trace_id = ctx.trace_id();
+    if !trace_id.is_empty() {
+        request_metadata.insert("trace_id".to_string(), trace_id.to_string());
+    }
+
+    // 从 RequestContext 中提取更多信息（如果存在）
+    if let Some(req) = ctx.request() {
         if !req.request_id.is_empty() {
             request_metadata.insert("request_id".to_string(), req.request_id.clone());
         }
@@ -202,30 +211,36 @@ fn prepare_envelope(
     tags.insert("user_id".to_string(), user_id.to_string());
     tags.insert("push.message_type".to_string(), message_type.to_string());
 
-    let mut context = HookContext::new(tenant_id.clone())
-        .with_session(conversation_id.clone())
+    // 创建新的 Context（基于传入的 ctx）
+    let mut hook_ctx = ctx.clone();
+    
+    // 设置会话ID
+    hook_ctx = hook_ctx.with_session_id(conversation_id.clone());
+    
+    // 创建 HookContextData
+    let mut hook_data = HookContextData::new()
+        .with_conversation_id(conversation_id.clone())
         .with_conversation_type(SESSION_TYPE_PUSH)
         .with_message_type(message_type.to_string())
-        .with_sender(SENDER_PUSH_SERVER)
+        .with_sender_id(SENDER_PUSH_SERVER)
+        .with_tags(tags.clone())
+        .with_attributes(extra_metadata.clone())
+        .with_request_metadata(request_metadata)
         .occurred_now();
 
-    if let Some(req) = request {
-        if let Some(trace_ctx) = req.trace.as_ref() {
-            if !trace_ctx.trace_id.is_empty() {
-                context = context.with_trace(trace_ctx.trace_id.clone());
-            }
-        }
-    }
-
-    context.tags = tags.clone();
-    context.attributes = extra_metadata.clone();
-    context.request_metadata = request_metadata;
+    // 将 HookContextData 存储到 Context
+    hook_ctx = set_hook_context_data(hook_ctx, hook_data);
 
     let mut draft = MessageDraft::new(payload);
     let message_id = Uuid::new_v4().to_string();
     draft.set_message_id(&message_id);
     draft.set_conversation_id(conversation_id.clone());
-    if let Some(req) = request {
+    
+    // 从 Context 中提取 request_id
+    let request_id = ctx.request_id();
+    if !request_id.is_empty() {
+        draft.set_client_message_id(request_id.to_string());
+    } else if let Some(req) = ctx.request() {
         if !req.request_id.is_empty() {
             draft.set_client_message_id(req.request_id.clone());
         }
@@ -236,7 +251,7 @@ fn prepare_envelope(
     draft.metadata = extra_metadata.clone();
 
     let envelope = PushHookEnvelope {
-        context,
+        context: hook_ctx,
         message_id,
         conversation_id,
         message_type: message_type.to_string(),

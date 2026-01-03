@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 
 use crate::application::handlers::{MessageStorageCommandHandler, MessageStorageQueryHandler};
 use crate::config::StorageReaderConfig;
 use crate::domain::repository::{MessageStateRepository, MessageStorage, VisibilityStorage};
 use crate::domain::service::{MessageStorageDomainConfig, MessageStorageDomainService};
 use crate::infrastructure::persistence::message_state_repo::PostgresMessageStateRepository;
-use crate::infrastructure::persistence::postgres::PostgresMessageStorage;
+use crate::infrastructure::persistence::postgres_store::PostgresMessageStorage;
 use crate::interface::grpc::handler::StorageReaderGrpcHandler;
 
 /// 应用上下文 - 包含所有已初始化的服务
@@ -34,13 +34,13 @@ pub async fn initialize(
     // 1. 加载存储读取器配置
     let config = Arc::new(
         StorageReaderConfig::from_app_config(app_config)
-            .context("Failed to load storage reader service configuration")?,
+            .with_context(|| "Failed to load storage reader service configuration")?,
     );
 
     // 2. 创建消息存储实例（必须使用 PostgreSQL）
     let storage: Arc<dyn MessageStorage + Send + Sync> = match PostgresMessageStorage::new(&config)
         .await
-        .context("Failed to create PostgreSQL storage")?
+        .with_context(|| "Failed to create PostgreSQL storage")?
     {
         Some(postgres_storage) => {
             tracing::info!("Using PostgreSQL storage");
@@ -77,7 +77,7 @@ pub async fn initialize(
                 .test_before_acquire(true)
                 .connect(url)
                 .await
-                .context("Failed to create pool for message_state_repo")?;
+                .with_context(|| "Failed to create pool for message_state_repo")?;
             Some(Arc::new(PostgresMessageStateRepository::new(Arc::new(
                 pool,
             ))))

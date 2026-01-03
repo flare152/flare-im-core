@@ -3,11 +3,14 @@
 //! 负责设备路由查询的业务流程编排
 
 use std::sync::Arc;
-use anyhow::{Context, Result};
 use tracing::info;
+use flare_server_core::context::{Context, ContextExt};
+use flare_server_core::error::ErrorCode;
+use tracing::instrument;
 
 use crate::domain::entities::device_route::DeviceRoute;
 use crate::infrastructure::OnlineServiceClient;
+use crate::application::dto::{PushTargetsResult, DeviceRouteResult, BatchDeviceRouteResult, device_route_to_target};
 use flare_proto::signaling::router::PushStrategy;
 
 /// 设备路由处理器
@@ -28,24 +31,50 @@ impl DeviceRouteHandler {
     /// 根据策略选择推送目标设备
     ///
     /// # 参数
+    /// * `ctx` - 上下文
     /// * `user_id` - 用户ID
     /// * `strategy` - 推送策略
     ///
     /// # 返回
-    /// 选中的设备路由列表
+    /// 推送目标选择结果（应用层响应）
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        user_id = %user_id,
+        strategy = ?strategy,
+    ))]
     pub async fn select_push_targets(
         &self,
+        ctx: &Context,
         user_id: &str,
         strategy: PushStrategy,
-    ) -> Result<Vec<DeviceRoute>> {
+    ) -> PushTargetsResult {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        }).ok(); // 忽略取消错误，继续处理
         info!(user_id = %user_id, strategy = ?strategy, "Selecting push targets");
 
         // 从 Online 服务查询用户的所有在线设备
-        let devices_resp = self
+        let devices_resp = match self
             .online_client
-            .list_user_devices(user_id)
+            .list_user_devices(ctx, user_id)
             .await
-            .context("Failed to query user devices from Online service")?;
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::error!(error = %e, user_id = %user_id, "Failed to query user devices from Online service");
+                return PushTargetsResult {
+                    targets: vec![],
+                    error_code: Some(ErrorCode::InternalError as u32),
+                    error_message: Some(format!("Failed to query user devices: {}", e)),
+                };
+            }
+        };
 
         // 转换为设备路由
         let mut routes: Vec<DeviceRoute> = devices_resp
@@ -98,7 +127,15 @@ impl DeviceRouteHandler {
             "Push targets selected"
         );
 
-        Ok(selected_routes)
+        // 转换为应用层响应
+        PushTargetsResult {
+            targets: selected_routes
+                .into_iter()
+                .map(|r| device_route_to_target(&r))
+                .collect(),
+            error_code: None,
+            error_message: None,
+        }
     }
 
     /// 获取设备路由
@@ -108,42 +145,76 @@ impl DeviceRouteHandler {
     /// * `device_id` - 设备ID
     ///
     /// # 返回
-    /// 设备路由，如果不存在则返回 None
+    /// 设备路由查询结果（应用层响应）
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        user_id = %user_id,
+        device_id = %device_id,
+    ))]
     pub async fn get_device_route(
         &self,
+        ctx: &Context,
         user_id: &str,
         device_id: &str,
-    ) -> Result<Option<DeviceRoute>> {
+    ) -> DeviceRouteResult {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        }).ok(); // 忽略取消错误，继续处理
+        
         info!(user_id = %user_id, device_id = %device_id, "Getting device route");
 
         // 从 Online 服务查询设备信息
-        let devices_resp = self
+        match self
             .online_client
-            .list_user_devices(user_id)
+            .list_user_devices(ctx, user_id)
             .await
-            .context("Failed to query user devices")?;
+        {
+            Ok(devices_resp) => {
+                // 查找指定设备
+                let device = devices_resp
+                    .devices
+                    .into_iter()
+                    .find(|d| d.device_id == device_id);
 
-        // 查找指定设备
-        let device = devices_resp
-            .devices
-            .into_iter()
-            .find(|d| d.device_id == device_id);
-
-        match device {
-            Some(d) => {
-                let route = DeviceRoute::new(
-                    user_id.to_string(),
-                    d.device_id,
-                    d.gateway_id,
-                    d.server_id,
-                    d.priority,
-                    calculate_quality_score(&d.connection_quality),
-                );
-                Ok(Some(route))
+                match device {
+                    Some(d) => {
+                        let route = DeviceRoute::new(
+                            user_id.to_string(),
+                            d.device_id,
+                            d.gateway_id,
+                            d.server_id,
+                            d.priority,
+                            calculate_quality_score(&d.connection_quality),
+                        );
+                        DeviceRouteResult {
+                            target: Some(device_route_to_target(&route)),
+                            error_code: None,
+                            error_message: None,
+                        }
+                    }
+                    None => {
+                        info!(user_id = %user_id, device_id = %device_id, "Device not found");
+                        DeviceRouteResult {
+                            target: None,
+                            error_code: Some(ErrorCode::UserNotFound as u32),
+                            error_message: Some("Device not found or offline".to_string()),
+                        }
+                    }
+                }
             }
-            None => {
-                info!(user_id = %user_id, device_id = %device_id, "Device not found");
-                Ok(None)
+            Err(e) => {
+                tracing::error!(error = %e, user_id = %user_id, "Failed to get device route");
+                DeviceRouteResult {
+                    target: None,
+                    error_code: Some(ErrorCode::InternalError as u32),
+                    error_message: Some(format!("Failed to get device route: {}", e)),
+                }
             }
         }
     }
@@ -154,11 +225,26 @@ impl DeviceRouteHandler {
     /// * `devices` - 设备列表（user_id, device_id）
     ///
     /// # 返回
-    /// 设备路由映射（key: "user_id:device_id"）
+    /// 批量设备路由查询结果（应用层响应）
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        device_count = devices.len(),
+    ))]
     pub async fn batch_get_device_routes(
         &self,
+        ctx: &Context,
         devices: Vec<(String, String)>,
-    ) -> Result<std::collections::HashMap<String, DeviceRoute>> {
+    ) -> BatchDeviceRouteResult {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        }).ok(); // 忽略取消错误，继续处理
+        
         info!(device_count = devices.len(), "Batch getting device routes");
 
         let mut routes = std::collections::HashMap::new();
@@ -175,7 +261,7 @@ impl DeviceRouteHandler {
 
         // 为每个用户查询设备
         for (user_id, device_ids) in user_devices {
-            match self.online_client.list_user_devices(&user_id).await {
+            match self.online_client.list_user_devices(ctx, &user_id).await {
                 Ok(devices_resp) => {
                     for device in devices_resp.devices {
                         if device_ids.contains(&device.device_id) {
@@ -200,7 +286,16 @@ impl DeviceRouteHandler {
         }
 
         info!(found_routes = routes.len(), "Batch device routes retrieved");
-        Ok(routes)
+        
+        // 转换为应用层响应
+        BatchDeviceRouteResult {
+            routes: routes
+                .into_iter()
+                .map(|(k, v)| (k, device_route_to_target(&v)))
+                .collect(),
+            error_code: None,
+            error_message: None,
+        }
     }
 }
 

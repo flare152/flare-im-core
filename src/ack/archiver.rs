@@ -196,56 +196,6 @@ pub struct ArchiveStats {
     pub latest_timestamp: i64,
 }
 
-/// ACK归档表初始化
-pub async fn init_ack_archive_table(db_pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS ack_archive_records (
-            id BIGSERIAL PRIMARY KEY,
-            message_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            ack_type TEXT NOT NULL,
-            ack_status TEXT NOT NULL,
-            timestamp BIGINT NOT NULL,
-            importance_level SMALLINT DEFAULT 1 CHECK (importance_level BETWEEN 1 AND 3),
-            metadata JSONB,
-            archived_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
-            
-            -- 索引
-            CONSTRAINT idx_ack_archive_message_user UNIQUE (message_id, user_id, ack_type),
-            CONSTRAINT idx_ack_archive_timestamp TIMESTAMP (timestamp),
-            CONSTRAINT idx_ack_archive_importance IMPORTANCE (importance_level)
-        )"
-    )
-    .execute(db_pool)
-    .await?;
-
-    // 创建索引
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_ack_archive_message_id ON ack_archive_records (message_id)"
-    )
-    .execute(db_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_ack_archive_user_id ON ack_archive_records (user_id)"
-    )
-    .execute(db_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_ack_archive_timestamp_desc ON ack_archive_records (timestamp DESC)"
-    )
-    .execute(db_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_ack_archive_importance_level ON ack_archive_records (importance_level)"
-    )
-    .execute(db_pool)
-    .await?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -261,8 +211,6 @@ mod tests {
             .connect("postgresql://localhost/test_db")
             .await?;
 
-        // 初始化表
-        init_ack_archive_table(&db_pool).await?;
 
         let archiver = AckArchiver::new(db_pool, 100);
 

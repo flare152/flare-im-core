@@ -1,18 +1,20 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use base64::{Engine as _, engine::general_purpose};
 use chrono::Utc;
 use flare_im_core::utils::timestamp_to_datetime;
-use flare_proto::common::{ContentType, Message, MessageSource, MessageStatus, MessageType};
+use flare_proto::common::Message;
 use prost::Message as _;
 use serde_json::to_value;
-use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions};
+use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
+
+use crate::infrastructure::persistence::operation_store;
 
 use crate::config::StorageWriterConfig;
 use crate::domain::repository::ArchiveStoreRepository;
 
 pub struct PostgresMessageStore {
     pool: Pool<Postgres>,
+    operation_store: operation_store::OperationStore,
 }
 
 impl PostgresMessageStore {
@@ -39,233 +41,198 @@ impl PostgresMessageStore {
             .connect(url)
             .await?;
 
-        let store = Self { pool };
+        let operation_store = operation_store::OperationStore::new(pool.clone());
 
-        // 初始化数据库表结构
-        store
-            .init_schema()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize PostgreSQL schema: {}", e))?;
-
+        let store = Self {
+            pool,
+            operation_store,
+        };
         Ok(Some(store))
     }
 }
 
 impl PostgresMessageStore {
-    /// 获取数据库连接池（用于创建 SeqGenerator 和 ConversationRepository）
+    /// 获取数据库连接池（用于创建 ConversationRepository）
     pub fn pool(&self) -> &Pool<Postgres> {
         &self.pool
     }
 
-    /// 初始化数据库表结构（如果不存在）
-    ///
-    /// 注意：表结构必须与 deploy/init.sql 中的定义一致
-    /// 如果表已存在（通过 init.sql 创建），此方法不会修改表结构
-    pub async fn init_schema(&self) -> Result<()> {
-        // 创建 messages 表（与 deploy/init.sql 保持一致）
-        // 注意：TimescaleDB 要求分区列（timestamp）必须包含在主键中
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                client_msg_id TEXT,
-                sender_id TEXT NOT NULL,
-                content BYTEA,
-                timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                extra JSONB DEFAULT '{}',
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                message_type TEXT,
-                content_type TEXT,
-                business_type TEXT,
-                status TEXT DEFAULT 'sent',
-                is_recalled BOOLEAN DEFAULT FALSE,
-                recalled_at TIMESTAMP WITH TIME ZONE,
-                is_burn_after_read BOOLEAN DEFAULT FALSE,
-                burn_after_seconds INTEGER,
-                seq BIGINT,
-                updated_at TIMESTAMP WITH TIME ZONE,
-                visibility JSONB,
-                read_by JSONB,
-                operations JSONB,
-                edit_history JSONB DEFAULT '[]'::jsonb,  -- 编辑历史记录
-                reactions JSONB DEFAULT '[]'::jsonb,    -- 反应列表
-                PRIMARY KEY (timestamp, id)
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
+    /// 根据消息ID查询消息（内部辅助方法，不需要 tenant_id 作为条件，使用唯一索引）
+    async fn get_message_by_id(&self, message_id: &str) -> Result<Option<flare_proto::common::Message>> {
+        use serde_json::Value as JsonValue;
+        use flare_proto::common::{MessageType, MessageStatus, MessageSource};
 
-        // 创建索引（与 deploy/init.sql 保持一致）
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_conversation_id 
-            ON messages(conversation_id)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_sender_id 
-            ON messages(sender_id)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp 
-            ON messages(conversation_id, timestamp DESC)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_id_unique 
-            ON messages(id)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_client_msg_id 
-            ON messages(client_msg_id) WHERE client_msg_id IS NOT NULL
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_sender_client_msg_id 
-            ON messages(sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_business_type 
-            ON messages(business_type)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_message_type 
-            ON messages(message_type)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_status 
-            ON messages(status)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_is_recalled 
-            ON messages(is_recalled)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // 为 seq 字段创建索引（用于按会话查询消息时排序）
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_session_seq 
-            ON messages(conversation_id, seq)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // 为 updated_at 字段创建索引（用于查询最近更新的消息）
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_messages_updated_at 
-            ON messages(updated_at DESC)
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // 如果使用 TimescaleDB，转换为 Hypertable（与 deploy/init.sql 保持一致）
-        let hypertable_result = sqlx::query(
-            r#"
-            SELECT create_hypertable('messages', 'timestamp', 
-                chunk_time_interval => INTERVAL '1 day',
-                if_not_exists => TRUE)
-            "#,
-        )
-        .execute(&self.pool)
-        .await;
-
-        // 如果成功创建 hypertable，配置 TimescaleDB 高级特性
-        if hypertable_result.is_ok() {
-            // 启用列式存储（TimescaleDB 2.x+）
-            // 注意：列式存储可以提高压缩比（约 10:1），但查询性能可能略有下降
-            // 对于历史数据（30天以上），压缩带来的存储节省远大于查询性能损失
-            let _ = sqlx::query(
-                r#"
-                ALTER TABLE messages SET (
-                    timescaledb.enable_columnstore = true,
-                    timescaledb.segmentby = 'conversation_id',
-                    timescaledb.orderby = 'timestamp DESC, id'
-                )
-                "#,
-            )
-            .execute(&self.pool)
-            .await; // 忽略错误，可能版本不支持或已配置
-
-            // 配置列式存储策略（30天后移动到列式存储）
-            // 注意：如果 TimescaleDB 版本 < 2.x，此策略会失败，但不影响基本功能
-            let _ = sqlx::query(
-                r#"
-                CALL add_columnstore_policy('messages', after => INTERVAL '30 days')
-                "#,
-            )
-            .execute(&self.pool)
-            .await; // 忽略错误，可能版本不支持或已配置
-
-            // 配置数据保留策略（可选，保留最近 90 天的数据）
-            // 注意：生产环境可以根据需求调整保留时间
-            // let _ = sqlx::query(
-            //     r#"
-            //     SELECT add_retention_policy('messages', INTERVAL '90 days')
-            //     "#,
-            // )
-            // .execute(&self.pool)
-            // .await;
-
-            tracing::info!(
-                "TimescaleDB hypertable configured with columnstore and compression policies"
-            );
-        } else {
-            tracing::debug!(
-                "Not using TimescaleDB or hypertable already exists, skipping advanced configuration"
-            );
+        // 查询消息（使用唯一索引 idx_messages_server_id_unique，不需要 tenant_id 作为条件）
+        #[derive(sqlx::FromRow)]
+        struct MessageRow {
+            server_id: String,
+            conversation_id: String,
+            client_msg_id: Option<String>,
+            sender_id: String,
+            receiver_id: Option<String>,
+            channel_id: Option<String>,
+            content: Option<Vec<u8>>,
+            timestamp: chrono::DateTime<chrono::Utc>,
+            extra: Option<serde_json::Value>,
+            message_type: Option<String>,
+            content_type: Option<String>,
+            business_type: Option<String>,
+            status: Option<String>,
+            is_burn_after_read: Option<bool>,
+            burn_after_seconds: Option<i32>,
+            seq: Option<i64>,
+            tenant_id: String,
+            conversation_type: Option<String>,
         }
 
-        Ok(())
+        let row = sqlx::query_as::<_, MessageRow>(
+            r#"
+            SELECT 
+                server_id, conversation_id, client_msg_id, sender_id, receiver_id, channel_id,
+                content, timestamp, extra, message_type, content_type, business_type, status,
+                is_burn_after_read, burn_after_seconds, seq, tenant_id, conversation_type
+            FROM messages
+            WHERE server_id = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let row = match row {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        // 解析 extra JSON
+        let extra_value: JsonValue = row.extra.unwrap_or_else(|| serde_json::json!({}));
+        let extra_map = extra_value.as_object()
+            .cloned()
+            .unwrap_or_else(|| serde_json::Map::new());
+
+        // 解析 content 为 MessageContent
+        let content = if let Some(content_bytes) = row.content {
+            flare_proto::common::MessageContent::decode(content_bytes.as_slice())
+                .ok()
+                .map(|c| Some(c))
+                .unwrap_or(None)
+        } else {
+            None
+        };
+
+        // 解析 message_type
+        let message_type = match row.message_type.as_deref() {
+            Some("TEXT") => MessageType::Text as i32,
+            Some("IMAGE") => MessageType::Image as i32,
+            Some("VIDEO") => MessageType::Video as i32,
+            Some("AUDIO") => MessageType::Audio as i32,
+            Some("FILE") => MessageType::File as i32,
+            Some("LOCATION") => MessageType::Location as i32,
+            Some("CARD") => MessageType::Card as i32,
+            Some("NOTIFICATION") => MessageType::Notification as i32,
+            Some("TYPING") => MessageType::Typing as i32,
+            Some("SYSTEM_EVENT") => MessageType::SystemEvent as i32,
+            Some("OPERATION") => MessageType::Operation as i32,
+            _ => MessageType::Unspecified as i32,
+        };
+
+        // 解析 status
+        let status = match row.status.as_deref() {
+            Some("INIT") => MessageStatus::Created as i32,
+            Some("SENT") => MessageStatus::Sent as i32,
+            Some("EDITED") => MessageStatus::Sent as i32, // EDITED 状态映射到 Sent
+            Some("RECALLED") => MessageStatus::Recalled as i32,
+            Some("DELETED_HARD") => MessageStatus::DeletedHard as i32,
+            _ => MessageStatus::Sent as i32,
+        };
+
+        // 解析 timestamp
+        let timestamp = Some(prost_types::Timestamp {
+            seconds: row.timestamp.timestamp(),
+            nanos: row.timestamp.timestamp_subsec_nanos() as i32,
+        });
+
+        // 解析 tenant_id
+        let tenant = Some(flare_proto::common::TenantContext {
+            tenant_id: row.tenant_id.clone(),
+                business_type: String::new(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
+            });
+
+        // 解析 conversation_type
+        let conversation_type = match row.conversation_type.as_deref() {
+            Some("single") => flare_proto::common::ConversationType::Single as i32,
+            Some("group") => flare_proto::common::ConversationType::Group as i32,
+            Some("channel") => flare_proto::common::ConversationType::Channel as i32,
+            _ => flare_proto::common::ConversationType::Unspecified as i32,
+        };
+
+        // 解析 content_type
+        let content_type = match row.content_type.as_deref() {
+            Some("text/plain") => flare_proto::common::ContentType::PlainText as i32,
+            Some("text/html") => flare_proto::common::ContentType::Html as i32,
+            Some("text/markdown") => flare_proto::common::ContentType::Markdown as i32,
+            Some("application/json") => flare_proto::common::ContentType::Json as i32,
+            _ => flare_proto::common::ContentType::Unspecified as i32,
+        };
+
+        // 构建 Message 对象
+        let message = flare_proto::common::Message {
+            server_id: row.server_id,
+            conversation_id: row.conversation_id,
+            client_msg_id: row.client_msg_id.unwrap_or_default(),
+            sender_id: row.sender_id,
+            source: MessageSource::User as i32,
+            seq: row.seq.unwrap_or(0) as u64,
+            timestamp,
+            conversation_type,
+            message_type,
+            business_type: row.business_type.unwrap_or_default(),
+            receiver_id: row.receiver_id.unwrap_or_default(),
+            channel_id: row.channel_id.unwrap_or_default(),
+            content,
+            content_type,
+            attachments: vec![],
+            extra: extra_map
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
+            offline_push_info: None,
+            tags: vec![],
+            tenant: None,
+            attributes: std::collections::HashMap::new(),
+            status,
+            is_recalled: row.status.as_deref() == Some("RECALLED"),
+            recalled_at: if row.status.as_deref() == Some("RECALLED") {
+                timestamp.clone()
+            } else {
+                None
+            },
+            recall_reason: String::new(), // 需要从 extra 或单独字段获取
+            is_burn_after_read: row.is_burn_after_read.unwrap_or(false),
+            burn_after_seconds: row.burn_after_seconds.unwrap_or(0),
+            timeline: None, // 需要从数据库字段构建
+            visibility: std::collections::HashMap::new(),
+            read_by: vec![],
+            reactions: vec![],
+            edit_history: vec![],
+            current_edit_version: 0,
+            last_edited_at: None,
+            audit: None,
+            extensions: vec![],
+            quote: None,
+        };
+
+        Ok(Some(message))
     }
 }
 
@@ -276,188 +243,71 @@ impl ArchiveStoreRepository for PostgresMessageStore {
     }
 
     async fn store_archive(&self, message: &Message) -> Result<()> {
-        let timestamp = message
-            .timestamp
-            .as_ref()
-            .and_then(|ts| timestamp_to_datetime(ts))
-            .unwrap_or_else(|| Utc::now());
+        use crate::infrastructure::persistence::helpers::*;
 
-        // 提取租户ID（保留用于 future use）
-        let _tenant_id = message
-            .tenant
-            .as_ref()
-            .map(|t| t.tenant_id.as_str())
-            .unwrap_or("");
+        let timestamp = get_message_timestamp(message);
+        let content_type = infer_content_type(message);
+        let content_bytes = encode_message_content(message);
+        let extra_value = build_extra_value(message)?;
+        let message_type_str = message_type_to_string(message.message_type);
+        let seq = extract_seq_from_extra(&extra_value);
 
-        // 推断 content_type（基于新的 MessageContent oneof 结构）
-        let content_type = message
-            .content
-            .as_ref()
-            .map(|c| match &c.content {
-                Some(flare_proto::common::message_content::Content::Text(_)) => "text/plain",
-                Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
-                Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
-                Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
-                Some(flare_proto::common::message_content::Content::File(_)) => {
-                    "application/octet-stream"
-                }
-                Some(flare_proto::common::message_content::Content::Location(_)) => {
-                    "application/location"
-                }
-                Some(flare_proto::common::message_content::Content::Card(_)) => "application/card",
-                Some(flare_proto::common::message_content::Content::Notification(_)) => {
-                    "application/notification"
-                }
-                Some(flare_proto::common::message_content::Content::Custom(_)) => {
-                    "application/custom"
-                }
-                Some(flare_proto::common::message_content::Content::Forward(_)) => {
-                    "application/forward"
-                }
-                Some(flare_proto::common::message_content::Content::Typing(_)) => {
-                    "application/typing"
-                }
-                Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
-                    "application/system_event"
-                }
-                Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                    "application/quote"
-                }
-                Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
-                    "application/link_card"
-                }
-                None => "application/unknown",
+        // 提取 tenant_id（从 message.tenant 或 extra 中提取）
+        use serde_json::Value as JsonValue;
+        let tenant_id = message.tenant.as_ref()
+            .map(|t| t.tenant_id.clone())
+            .or_else(|| {
+                extra_value.get("tenant_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
             })
-            .unwrap_or_else(|| {
-                // 如果 content_type 字段有值，使用它
-                match message.content_type {
-                    x if x == ContentType::PlainText as i32 => "text/plain",
-                    x if x == ContentType::Html as i32 => "text/html",
-                    x if x == ContentType::Markdown as i32 => "text/markdown",
-                    x if x == ContentType::Html as i32 => "text/html",
-                    x if x == ContentType::Json as i32 => "application/json",
-                    _ => "application/unknown",
-                }
-            });
+            .unwrap_or_else(|| "default".to_string());
 
-        // 编码消息内容
-        let content_bytes = message
-            .content
-            .as_ref()
-            .map(|c| {
-                let mut buf = Vec::new();
-                c.encode(&mut buf).unwrap_or_default();
-                buf
-            })
-            .unwrap_or_default();
-
-        // 构建 extra JSONB 字段（包含所有扩展信息）
-        let mut extra_value = serde_json::Map::new();
-        if let Some(ref tenant) = message.tenant {
-            extra_value.insert(
-                "tenant_id".to_string(),
-                serde_json::Value::String(tenant.tenant_id.clone()),
-            );
-        }
-        // 转换 source 枚举为字符串（sender_type 已改为 source 枚举）
-        let source_str = match std::convert::TryFrom::try_from(message.source) {
-            Ok(MessageSource::User) => "user",
-            Ok(MessageSource::System) => "system",
-            Ok(MessageSource::Bot) => "bot",
-            Ok(MessageSource::Admin) => "admin",
-            _ => "",
+        // 提取 conversation_type（从 message 或 extra 中）
+        let conversation_type_str = if message.conversation_type != 0 {
+            match message.conversation_type {
+                1 => Some("single"),
+                2 => Some("group"),
+                3 => Some("channel"),
+                _ => None,
+            }
+        } else if let Some(JsonValue::String(ct)) = extra_value.get("conversation_type") {
+            match ct.as_str() {
+                "single" => Some("single"),
+                "group" => Some("group"),
+                "channel" => Some("channel"),
+                _ => None,
+            }
+        } else {
+            None
         };
-        if !source_str.is_empty() {
-            extra_value.insert(
-                "sender_type".to_string(),
-                serde_json::Value::String(source_str.to_string()),
-            );
-        }
-        // receiver_id 已废弃，通过 conversation_id 确定接收者
-        // conversation_type 是 i32 类型，需要转换
-        if message.conversation_type != 0 {
-            let conversation_type_str = match message.conversation_type {
-                1 => "single",
-                2 => "group",
-                3 => "channel",
-                _ => "unknown",
-            };
-            extra_value.insert(
-                "conversation_type".to_string(),
-                serde_json::Value::String(conversation_type_str.to_string()),
-            );
-        }
-        if !message.tags.is_empty() {
-            extra_value.insert(
-                "tags".to_string(),
-                serde_json::Value::Array(
-                    message
-                        .tags
-                        .iter()
-                        .map(|t| serde_json::Value::String(t.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        if !message.attributes.is_empty() {
-            for (k, v) in &message.attributes {
-                extra_value.insert(k.clone(), serde_json::Value::String(v.clone()));
-            }
-        }
-        // 合并原有的 extra 字段
-        if let Ok(existing_extra) = serde_json::from_value::<
-            serde_json::Map<String, serde_json::Value>,
-        >(to_value(&message.extra)?)
-        {
-            for (k, v) in existing_extra {
-                extra_value.insert(k, v);
-            }
-        }
-
-        // 转换 message_type 枚举为字符串（与表结构匹配）
-        let message_type_str = std::convert::TryFrom::try_from(message.message_type)
-            .ok()
-            .map(|mt| match mt {
-                MessageType::Text => "text",
-                MessageType::Image => "image",
-                MessageType::Video => "video",
-                MessageType::Audio => "audio",
-                MessageType::File => "file",
-                MessageType::Location => "location",
-                MessageType::Card => "card",
-                MessageType::Custom => "custom",
-                MessageType::Notification => "notification",
-                MessageType::Typing => "typing",
-                MessageType::Recall => "recall",
-                MessageType::Read => "read",
-                MessageType::Forward => "forward",
-                _ => "unknown",
-            })
-            .map(|s| s.to_string());
-
-        // 从 extra 中提取 seq（如果存在）
-        let seq: Option<i64> = extra_value.get("seq").and_then(|v| v.as_i64());
 
         sqlx::query(
             r#"
             INSERT INTO messages (
-                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
-                extra, created_at, message_type, content_type, business_type,
-                status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
-                seq, updated_at
+                server_id, conversation_id, client_msg_id, sender_id, receiver_id, channel_id,
+                content, timestamp, created_at, updated_at, message_type, content_type, business_type,
+                source, status, is_burn_after_read, burn_after_seconds, seq, conversation_type,
+                tenant_id, extra, attributes, tags
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
             ON CONFLICT (timestamp, server_id) DO UPDATE
             SET conversation_id = EXCLUDED.conversation_id,
                 client_msg_id = EXCLUDED.client_msg_id,
                 sender_id = EXCLUDED.sender_id,
+                receiver_id = EXCLUDED.receiver_id,
+                channel_id = EXCLUDED.channel_id,
                 content = EXCLUDED.content,
                 content_type = EXCLUDED.content_type,
                 status = EXCLUDED.status,
                 extra = EXCLUDED.extra,
+                attributes = EXCLUDED.attributes,
+                tags = EXCLUDED.tags,
                 business_type = EXCLUDED.business_type,
                 message_type = EXCLUDED.message_type,
                 seq = EXCLUDED.seq,
+                conversation_type = EXCLUDED.conversation_type,
+                tenant_id = EXCLUDED.tenant_id,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -465,53 +315,54 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         .bind(&message.conversation_id)
         .bind(if message.client_msg_id.is_empty() { None::<String> } else { Some(message.client_msg_id.clone()) })
         .bind(&message.sender_id)
+        .bind(if message.receiver_id.is_empty() { None::<String> } else { Some(message.receiver_id.clone()) })
+        .bind(if message.channel_id.is_empty() { None::<String> } else { Some(message.channel_id.clone()) })
         .bind(content_bytes)
         .bind(timestamp)
-        .bind(to_value(&extra_value)?)
         .bind(timestamp) // created_at 使用 timestamp
+        .bind(timestamp) // updated_at 使用 timestamp
         .bind(message_type_str.as_deref())
         .bind(content_type)
         .bind(&message.business_type)
-        .bind({
-            // 转换 status 枚举为字符串
-            std::convert::TryFrom::try_from(message.status)
-                .ok()
-                .map(|s| match s {
-                    MessageStatus::Created => "created",
-                    MessageStatus::Sent => "sent",
-                    MessageStatus::Delivered => "delivered",
-                    MessageStatus::Read => "read",
-                    MessageStatus::Failed => "failed",
-                    MessageStatus::Recalled => "recalled",
-                    _ => "unknown",
-                })
-                .unwrap_or("unknown")
+        .bind(match message.source {
+            1 => "user",
+            2 => "system",
+            3 => "bot",
+            4 => "admin",
+            _ => "user",
         })
-        .bind(message.is_recalled)
-        .bind(
-            message
-                .recalled_at
-                .as_ref()
-                .and_then(|ts| timestamp_to_datetime(ts)),
-        )
+        .bind(crate::infrastructure::persistence::helpers::message_status_to_string(message.status))
         .bind(message.is_burn_after_read)
         .bind(message.burn_after_seconds)
         .bind(seq)
-        .bind(timestamp) // updated_at 使用 timestamp
+        .bind(conversation_type_str)
+        .bind(&tenant_id)
+        .bind(to_value(&extra_value)?)
+        .bind(to_value(&message.attributes)?)
+        .bind(&message.tags)
         .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
-    async fn update_message_status(
+    async fn update_message_fsm_state(
         &self,
         message_id: &str,
-        status: flare_proto::common::MessageStatus,
-        is_recalled: Option<bool>,
-        recalled_at: Option<prost_types::Timestamp>,
+        fsm_state: &str,
+        recall_reason: Option<&str>,
     ) -> Result<()> {
-        self.update_message_status_internal(message_id, status, is_recalled, recalled_at)
+        // 从消息中查询 tenant_id（用于接口一致性，但 UPDATE 时不需要作为条件）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .update_message_fsm_state(&tenant_id, message_id, fsm_state, recall_reason)
             .await
     }
 
@@ -520,18 +371,126 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         message_id: &str,
         new_content: &flare_proto::common::MessageContent,
         edit_version: i32,
+        editor_id: &str,
+        reason: Option<&str>,
     ) -> Result<()> {
-        self.update_message_content_internal(message_id, new_content, edit_version)
+        // 从消息中查询 tenant_id（查询时需要，UPDATE 时不需要作为条件）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .update_message_content(&tenant_id, message_id, new_content, edit_version, editor_id, reason)
             .await
     }
 
     async fn update_message_visibility(
         &self,
         message_id: &str,
-        user_id: Option<&str>,
-        visibility: flare_proto::common::VisibilityStatus,
+        user_id: &str,
+        visibility_status: &str,
     ) -> Result<()> {
-        self.update_message_visibility_internal(message_id, user_id, visibility)
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .update_message_visibility(&tenant_id, message_id, user_id, visibility_status)
+            .await
+    }
+
+    async fn record_message_read(
+        &self,
+        message_id: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .record_message_read(&tenant_id, message_id, user_id)
+            .await
+    }
+
+    async fn upsert_message_reaction(
+        &self,
+        message_id: &str,
+        emoji: &str,
+        user_id: &str,
+        add: bool,
+    ) -> Result<()> {
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .upsert_message_reaction(&tenant_id, message_id, emoji, user_id, add)
+            .await
+    }
+
+    async fn pin_message(
+        &self,
+        message_id: &str,
+        conversation_id: &str,
+        user_id: &str,
+        pin: bool,
+        expire_at: Option<chrono::DateTime<chrono::Utc>>,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .pin_message(&tenant_id, message_id, conversation_id, user_id, pin, expire_at, reason)
+            .await
+    }
+
+    async fn mark_message(
+        &self,
+        message_id: &str,
+        conversation_id: &str,
+        user_id: &str,
+        mark_type: &str,
+        color: Option<&str>,
+        add: bool,
+    ) -> Result<()> {
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .mark_message(&tenant_id, message_id, conversation_id, user_id, mark_type, color, add)
             .await
     }
 
@@ -540,7 +499,23 @@ impl ArchiveStoreRepository for PostgresMessageStore {
         message_id: &str,
         operation: &flare_proto::common::MessageOperation,
     ) -> Result<()> {
-        self.append_operation_internal(message_id, operation).await
+        // 从消息中查询 tenant_id（INSERT 时需要）
+        let tenant_id = self
+            .get_message_by_id(message_id)
+            .await?
+            .and_then(|msg| {
+                msg.tenant.as_ref().map(|t| t.tenant_id.clone())
+            })
+            .unwrap_or_else(|| "default".to_string());
+        
+        self.operation_store
+            .append_operation(&tenant_id, message_id, operation)
+            .await
+    }
+
+    async fn get_message(&self, message_id: &str) -> Result<Option<Message>> {
+        // 调用内部辅助方法
+        self.get_message_by_id(message_id).await
     }
 
     /// 批量存储消息（优化性能）
@@ -644,173 +619,14 @@ impl PostgresMessageStore {
                     .and_then(|ts| timestamp_to_datetime(ts))
                     .unwrap_or_else(|| Utc::now());
 
-                // 构建 extra JSONB 字段
-                let mut extra_value = serde_json::Map::new();
-                if let Some(ref tenant) = message.tenant {
-                    extra_value.insert(
-                        "tenant_id".to_string(),
-                        serde_json::Value::String(tenant.tenant_id.clone()),
-                    );
-                }
-                let source_str = match std::convert::TryFrom::try_from(message.source) {
-                    Ok(MessageSource::User) => "user",
-                    Ok(MessageSource::System) => "system",
-                    Ok(MessageSource::Bot) => "bot",
-                    Ok(MessageSource::Admin) => "admin",
-                    _ => "",
-                };
-                if !source_str.is_empty() {
-                    extra_value.insert(
-                        "sender_type".to_string(),
-                        serde_json::Value::String(source_str.to_string()),
-                    );
-                }
-                // receiver_id 已废弃，通过 conversation_id 确定接收者
-                // conversation_type 是 i32 类型，需要转换
-                if message.conversation_type != 0 {
-                    let conversation_type_str = match message.conversation_type {
-                        1 => "single",
-                        2 => "group",
-                        3 => "channel",
-                        _ => "unknown",
-                    };
-                    extra_value.insert(
-                        "conversation_type".to_string(),
-                        serde_json::Value::String(conversation_type_str.to_string()),
-                    );
-                }
-                if !message.tags.is_empty() {
-                    extra_value.insert(
-                        "tags".to_string(),
-                        serde_json::Value::Array(
-                            message
-                                .tags
-                                .iter()
-                                .map(|t| serde_json::Value::String(t.clone()))
-                                .collect(),
-                        ),
-                    );
-                }
-                if !message.attributes.is_empty() {
-                    for (k, v) in &message.attributes {
-                        extra_value.insert(k.clone(), serde_json::Value::String(v.clone()));
-                    }
-                }
-                if let Ok(existing_extra) =
-                    serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
-                        to_value(&message.extra).unwrap_or_default(),
-                    )
-                {
-                    for (k, v) in existing_extra {
-                        extra_value.insert(k, v);
-                    }
-                }
+                use crate::infrastructure::persistence::helpers::*;
 
-                let content_type = message
-                    .content
-                    .as_ref()
-                    .map(|c| match &c.content {
-                        Some(flare_proto::common::message_content::Content::Text(_)) => {
-                            "text/plain"
-                        }
-                        Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
-                        Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
-                        Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
-                        Some(flare_proto::common::message_content::Content::File(_)) => {
-                            "application/octet-stream"
-                        }
-                        Some(flare_proto::common::message_content::Content::Location(_)) => {
-                            "application/location"
-                        }
-                        Some(flare_proto::common::message_content::Content::Card(_)) => {
-                            "application/card"
-                        }
-                        Some(flare_proto::common::message_content::Content::Notification(_)) => {
-                            "application/notification"
-                        }
-                        Some(flare_proto::common::message_content::Content::Custom(_)) => {
-                            "application/custom"
-                        }
-                        Some(flare_proto::common::message_content::Content::Forward(_)) => {
-                            "application/forward"
-                        }
-                        Some(flare_proto::common::message_content::Content::Typing(_)) => {
-                            "application/typing"
-                        }
-                        Some(flare_proto::common::message_content::Content::Custom(c)) => {
-                            // Vote/Task/Schedule/Announcement 现在通过 Custom + content_type 实现
-                            match c.r#type.as_str() {
-                                "vote" => "application/vote",
-                                "task" => "application/task",
-                                "schedule" => "application/schedule",
-                                "announcement" => "application/announcement",
-                                _ => "application/custom",
-                            }
-                        }
-                        Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
-                            "application/system_event"
-                        }
-                        Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                            "application/quote"
-                        }
-                        Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
-                            "application/link_card"
-                        }
-                        None => "application/unknown",
-                    })
-                    .unwrap_or_else(|| match message.content_type {
-                        x if x == ContentType::PlainText as i32 => "text/plain",
-                        x if x == ContentType::Html as i32 => "text/html",
-                        x if x == ContentType::Markdown as i32 => "text/markdown",
-                        x if x == ContentType::Html as i32 => "text/html",
-                        x if x == ContentType::Json as i32 => "application/json",
-                        _ => "application/unknown",
-                    });
-
-                let content_bytes = message
-                    .content
-                    .as_ref()
-                    .map(|c| {
-                        let mut buf = Vec::new();
-                        c.encode(&mut buf).unwrap_or_default();
-                        buf
-                    })
-                    .unwrap_or_default();
-
-                let message_type_str = std::convert::TryFrom::try_from(message.message_type)
-                    .ok()
-                    .map(|mt| match mt {
-                        MessageType::Text => "text",
-                        MessageType::Image => "image",
-                        MessageType::Video => "video",
-                        MessageType::Audio => "audio",
-                        MessageType::File => "file",
-                        MessageType::Location => "location",
-                        MessageType::Card => "card",
-                        MessageType::Custom => "custom",
-                        MessageType::Notification => "notification",
-                        MessageType::Typing => "typing",
-                        MessageType::Recall => "recall",
-                        MessageType::Read => "read",
-                        MessageType::Forward => "forward",
-                        _ => "unknown",
-                    })
-                    .map(|s| s.to_string());
-
-                let seq: Option<i64> = extra_value.get("seq").and_then(|v| v.as_i64());
-
-                let status_str = std::convert::TryFrom::try_from(message.status)
-                    .ok()
-                    .map(|s| match s {
-                        MessageStatus::Created => "created",
-                        MessageStatus::Sent => "sent",
-                        MessageStatus::Delivered => "delivered",
-                        MessageStatus::Read => "read",
-                        MessageStatus::Failed => "failed",
-                        MessageStatus::Recalled => "recalled",
-                        _ => "unknown",
-                    })
-                    .unwrap_or("unknown");
+                let extra_value = build_extra_value(message).unwrap_or_default();
+                let content_type = infer_content_type(message);
+                let content_bytes = encode_message_content(message);
+                let message_type_str = message_type_to_string(message.message_type);
+                let seq = extract_seq_from_extra(&extra_value);
+                let status_str = message_status_to_string(message.status);
 
                 (
                     message.server_id.clone(),
@@ -824,11 +640,6 @@ impl PostgresMessageStore {
                     content_type.to_string(),
                     message.business_type.clone(),
                     status_str.to_string(),
-                    message.is_recalled,
-                    message
-                        .recalled_at
-                        .as_ref()
-                        .and_then(|ts| timestamp_to_datetime(ts)),
                     message.is_burn_after_read,
                     message.burn_after_seconds,
                     seq,
@@ -867,7 +678,7 @@ impl PostgresMessageStore {
                 INSERT INTO messages (
                     server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
-                    status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
+                    status, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
                 )
                 "#,
@@ -886,11 +697,9 @@ impl PostgresMessageStore {
                 b.push_bind(&row.8); // content_type
                 b.push_bind(&row.9); // business_type
                 b.push_bind(&row.10); // status_str
-                b.push_bind(row.11); // is_recalled
-                b.push_bind(row.12); // recalled_at
-                b.push_bind(row.13); // is_burn_after_read
-                b.push_bind(row.14); // burn_after_seconds
-                b.push_bind(row.15); // seq
+                b.push_bind(row.11); // is_burn_after_read
+                b.push_bind(row.12); // burn_after_seconds
+                b.push_bind(row.13); // seq
                 b.push_bind(row.5); // updated_at (same as timestamp)
             });
 
@@ -984,180 +793,24 @@ impl PostgresMessageStore {
                 .and_then(|ts| timestamp_to_datetime(ts))
                 .unwrap_or_else(|| Utc::now());
 
-            // 构建 extra JSONB 字段（复用单条插入的逻辑）
-            let mut extra_value = serde_json::Map::new();
-            if let Some(ref tenant) = message.tenant {
-                extra_value.insert(
-                    "tenant_id".to_string(),
-                    serde_json::Value::String(tenant.tenant_id.clone()),
-                );
-            }
-            let source_str = match std::convert::TryFrom::try_from(message.source) {
-                Ok(MessageSource::User) => "user",
-                Ok(MessageSource::System) => "system",
-                Ok(MessageSource::Bot) => "bot",
-                Ok(MessageSource::Admin) => "admin",
-                _ => "",
-            };
-            if !source_str.is_empty() {
-                extra_value.insert(
-                    "sender_type".to_string(),
-                    serde_json::Value::String(source_str.to_string()),
-                );
-            }
-            // receiver_id 已废弃，通过 conversation_id 确定接收者
-            // conversation_type 是 i32 类型，需要转换
-            if message.conversation_type != 0 {
-                let conversation_type_str = match message.conversation_type {
-                    1 => "single",
-                    2 => "group",
-                    3 => "channel",
-                    _ => "unknown",
-                };
-                extra_value.insert(
-                    "conversation_type".to_string(),
-                    serde_json::Value::String(conversation_type_str.to_string()),
-                );
-            }
-            if !message.tags.is_empty() {
-                extra_value.insert(
-                    "tags".to_string(),
-                    serde_json::Value::Array(
-                        message
-                            .tags
-                            .iter()
-                            .map(|t| serde_json::Value::String(t.clone()))
-                            .collect(),
-                    ),
-                );
-            }
-            if !message.attributes.is_empty() {
-                for (k, v) in &message.attributes {
-                    extra_value.insert(k.clone(), serde_json::Value::String(v.clone()));
-                }
-            }
-            if let Ok(existing_extra) = serde_json::from_value::<
-                serde_json::Map<String, serde_json::Value>,
-            >(to_value(&message.extra)?)
-            {
-                for (k, v) in existing_extra {
-                    extra_value.insert(k, v);
-                }
-            }
+            use crate::infrastructure::persistence::helpers::*;
 
-            let content_type = message
-                .content
-                .as_ref()
-                .map(|c| match &c.content {
-                    Some(flare_proto::common::message_content::Content::Text(_)) => "text/plain",
-                    Some(flare_proto::common::message_content::Content::Image(_)) => "image/*",
-                    Some(flare_proto::common::message_content::Content::Video(_)) => "video/*",
-                    Some(flare_proto::common::message_content::Content::Audio(_)) => "audio/*",
-                    Some(flare_proto::common::message_content::Content::File(_)) => {
-                        "application/octet-stream"
-                    }
-                    Some(flare_proto::common::message_content::Content::Location(_)) => {
-                        "application/location"
-                    }
-                    Some(flare_proto::common::message_content::Content::Card(_)) => {
-                        "application/card"
-                    }
-                    Some(flare_proto::common::message_content::Content::Notification(_)) => {
-                        "application/notification"
-                    }
-                    Some(flare_proto::common::message_content::Content::Custom(_)) => {
-                        "application/custom"
-                    }
-                    Some(flare_proto::common::message_content::Content::Forward(_)) => {
-                        "application/forward"
-                    }
-                    Some(flare_proto::common::message_content::Content::Typing(_)) => {
-                        "application/typing"
-                    }
-                    Some(flare_proto::common::message_content::Content::Custom(c)) => {
-                        // Vote/Task/Schedule/Announcement 现在通过 Custom + content_type 实现
-                        match c.r#type.as_str() {
-                            "vote" => "application/vote",
-                            "task" => "application/task",
-                            "schedule" => "application/schedule",
-                            "announcement" => "application/announcement",
-                            _ => "application/custom",
-                        }
-                    }
-                    Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
-                        "application/system_event"
-                    }
-                    Some(flare_proto::common::message_content::Content::Quote(_)) => {
-                        "application/quote"
-                    }
-                    Some(flare_proto::common::message_content::Content::LinkCard(_)) => {
-                        "application/link_card"
-                    }
-                    None => "application/unknown",
-                })
-                .unwrap_or_else(|| match message.content_type {
-                    x if x == ContentType::PlainText as i32 => "text/plain",
-                    x if x == ContentType::Html as i32 => "text/html",
-                    x if x == ContentType::Markdown as i32 => "text/markdown",
-                    x if x == ContentType::Html as i32 => "text/html",
-                    x if x == ContentType::Json as i32 => "application/json",
-                    _ => "application/unknown",
-                });
-
-            let content_bytes = message
-                .content
-                .as_ref()
-                .map(|c| {
-                    let mut buf = Vec::new();
-                    c.encode(&mut buf).unwrap_or_default();
-                    buf
-                })
-                .unwrap_or_default();
-
-            let message_type_str = std::convert::TryFrom::try_from(message.message_type)
-                .ok()
-                .map(|mt| match mt {
-                    MessageType::Text => "text",
-                    MessageType::Image => "image",
-                    MessageType::Video => "video",
-                    MessageType::Audio => "audio",
-                    MessageType::File => "file",
-                    MessageType::Location => "location",
-                    MessageType::Card => "card",
-                    MessageType::Custom => "custom",
-                    MessageType::Notification => "notification",
-                    MessageType::Typing => "typing",
-                    MessageType::Recall => "recall",
-                    MessageType::Read => "read",
-                    MessageType::Forward => "forward",
-                    _ => "unknown",
-                })
-                .map(|s| s.to_string());
-
-            let seq: Option<i64> = extra_value.get("seq").and_then(|v| v.as_i64());
-
-            let status_str = std::convert::TryFrom::try_from(message.status)
-                .ok()
-                .map(|s| match s {
-                    MessageStatus::Created => "created",
-                    MessageStatus::Sent => "sent",
-                    MessageStatus::Delivered => "delivered",
-                    MessageStatus::Read => "read",
-                    MessageStatus::Failed => "failed",
-                    MessageStatus::Recalled => "recalled",
-                    _ => "unknown",
-                })
-                .unwrap_or("unknown");
+            let extra_value = build_extra_value(message).unwrap_or_default();
+            let content_type = infer_content_type(message);
+            let content_bytes = encode_message_content(message);
+            let message_type_str = message_type_to_string(message.message_type);
+            let seq = extract_seq_from_extra(&extra_value);
+            let status_str = message_status_to_string(message.status);
 
             sqlx::query(
                 r#"
                 INSERT INTO messages (
                     server_id, conversation_id, sender_id, content, timestamp,
                     extra, created_at, message_type, content_type, business_type,
-                    status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
+                    status, is_burn_after_read, burn_after_seconds,
                     seq, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ON CONFLICT (timestamp, server_id) DO UPDATE
                 SET conversation_id = EXCLUDED.conversation_id,
                     sender_id = EXCLUDED.sender_id,
@@ -1182,8 +835,6 @@ impl PostgresMessageStore {
             .bind(content_type)
             .bind(&message.business_type)
             .bind(status_str)
-            .bind(message.is_recalled)
-            .bind(message.recalled_at.as_ref().and_then(|ts| timestamp_to_datetime(ts)))
             .bind(message.is_burn_after_read)
             .bind(message.burn_after_seconds)
             .bind(seq)
@@ -1204,258 +855,3 @@ impl PostgresMessageStore {
     }
 }
 
-impl PostgresMessageStore {
-    /// 更新消息状态（用于撤回、编辑、删除等操作）
-    async fn update_message_status_internal(
-        &self,
-        message_id: &str,
-        status: flare_proto::common::MessageStatus,
-        is_recalled: Option<bool>,
-        recalled_at: Option<prost_types::Timestamp>,
-    ) -> Result<()> {
-        use sqlx::QueryBuilder;
-
-        let status_str = match status {
-            flare_proto::common::MessageStatus::Created => "created",
-            flare_proto::common::MessageStatus::Sent => "sent",
-            flare_proto::common::MessageStatus::Delivered => "delivered",
-            flare_proto::common::MessageStatus::Read => "read",
-            flare_proto::common::MessageStatus::Failed => "failed",
-            flare_proto::common::MessageStatus::Recalled => "recalled",
-            _ => "unknown",
-        };
-
-        let mut query = QueryBuilder::new("UPDATE messages SET status = ");
-        query.push_bind(status_str);
-        query.push(", updated_at = CURRENT_TIMESTAMP");
-
-        if let Some(recalled) = is_recalled {
-            query.push(", is_recalled = ");
-            query.push_bind(recalled);
-        }
-
-        if let Some(recalled_ts) = recalled_at {
-            if let Some(dt) = timestamp_to_datetime(&recalled_ts) {
-                query.push(", recalled_at = ");
-                query.push_bind(dt);
-            }
-        }
-
-        query.push(" WHERE server_id = ");
-        query.push_bind(message_id);
-
-        query.build().execute(&self.pool).await?;
-
-        Ok(())
-    }
-
-    /// 更新消息内容（用于编辑操作）
-    ///
-    /// 功能：
-    /// 1. 获取当前消息内容
-    /// 2. 将当前内容保存到编辑历史
-    /// 3. 更新消息内容为新内容
-    /// 4. 更新编辑历史列表
-    async fn update_message_content_internal(
-        &self,
-        message_id: &str,
-        new_content: &flare_proto::common::MessageContent,
-        edit_version: i32,
-    ) -> Result<()> {
-        use prost::Message as _;
-
-        // 1. 获取当前消息（用于保存编辑历史）
-        let current_message_row = sqlx::query(
-            r#"
-            SELECT content, sender_id, timestamp, edit_history
-            FROM messages
-            WHERE server_id = $1
-            "#,
-        )
-        .bind(message_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let (current_content_bytes, sender_id, timestamp, existing_edit_history_json) =
-            match current_message_row {
-                Some(row) => (
-                    row.get::<Vec<u8>, _>("content"),
-                    row.get::<String, _>("sender_id"),
-                    row.get::<chrono::DateTime<chrono::Utc>, _>("timestamp"),
-                    row.try_get::<serde_json::Value, _>("edit_history").ok(),
-                ),
-                None => return Err(anyhow::anyhow!("Message not found: {}", message_id)),
-            };
-
-        // 2. 验证编辑版本号（必须递增）
-        let current_edit_version: i32 = existing_edit_history_json
-            .as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.last())
-            .and_then(|entry| entry.get("edit_version"))
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32)
-            .unwrap_or(0);
-
-        if edit_version <= current_edit_version {
-            return Err(anyhow::anyhow!(
-                "Edit version must be greater than current version. Current: {}, Provided: {}",
-                current_edit_version,
-                edit_version
-            ));
-        }
-
-        // 4. 构建编辑历史记录
-        // 注意：edit_history 存储为 JSONB，包含完整的 EditHistory 信息
-        // 由于 MessageContent 是二进制格式，我们将其编码为 base64 字符串存储
-        let content_base64 = general_purpose::STANDARD.encode(&current_content_bytes);
-
-        let edit_history_entry = serde_json::json!({
-            "edit_version": current_edit_version,  // 当前版本（编辑前的版本）
-            "content_encoded": content_base64,     // base64 编码的内容
-            "edited_at": timestamp.to_rfc3339(),
-            "editor_id": sender_id,
-            "reason": "",
-            "show_edited_mark": true
-        });
-
-        // 5. 合并编辑历史
-        let mut edit_history_array = match existing_edit_history_json {
-            Some(serde_json::Value::Array(arr)) => arr,
-            _ => Vec::new(),
-        };
-        edit_history_array.push(edit_history_entry);
-
-        // 6. 编码新内容
-        let mut new_content_bytes = Vec::new();
-        new_content.encode(&mut new_content_bytes)?;
-
-        // 7. 更新消息内容、编辑历史和 extra
-        sqlx::query(
-            r#"
-            UPDATE messages
-            SET 
-                content = $1,
-                edit_history = $2::jsonb,
-                updated_at = CURRENT_TIMESTAMP,
-                extra = COALESCE(extra, '{}'::jsonb) || $3::jsonb
-            WHERE id = $4
-            "#,
-        )
-        .bind(&new_content_bytes)
-        .bind(serde_json::Value::Array(edit_history_array))
-        .bind(serde_json::json!({
-            "edit_version": edit_version,
-            "edited_at": Utc::now().timestamp()
-        }))
-        .bind(message_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    /// 更新消息可见性（用于删除操作）
-    async fn update_message_visibility_internal(
-        &self,
-        message_id: &str,
-        user_id: Option<&str>,
-        visibility: flare_proto::common::VisibilityStatus,
-    ) -> Result<()> {
-        let vis_value = visibility as i32;
-
-        if let Some(uid) = user_id {
-            // 用户维度：更新 visibility JSONB 中的特定用户
-            let vis_json = serde_json::json!({ uid: vis_value });
-            sqlx::query(
-                r#"
-                UPDATE messages
-                SET 
-                    visibility = COALESCE(visibility, '{}'::jsonb) || $1::jsonb,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                "#,
-            )
-            .bind(serde_json::to_value(&vis_json)?)
-            .bind(message_id)
-            .execute(&self.pool)
-            .await?;
-        } else {
-            // 全局删除：设置所有用户的 visibility 为 DELETED
-            // 注意：这里我们使用一个特殊的标记来表示全局删除
-            sqlx::query(
-                r#"
-                UPDATE messages
-                SET 
-                    visibility = jsonb_build_object('*', $1),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = $2
-                "#,
-            )
-            .bind(vis_value)
-            .bind(message_id)
-            .execute(&self.pool)
-            .await?;
-        }
-
-        Ok(())
-    }
-
-    /// 追加操作记录到消息
-    async fn append_operation_internal(
-        &self,
-        message_id: &str,
-        operation: &flare_proto::common::MessageOperation,
-    ) -> Result<()> {
-        // 读取当前消息的 operations
-        let row = sqlx::query("SELECT operations FROM messages WHERE id = $1")
-            .bind(message_id)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        let mut operations: Vec<serde_json::Value> = if let Some(row) = row {
-            let ops_value: Option<serde_json::Value> = row.get("operations");
-            ops_value
-                .and_then(|v| v.as_array().cloned())
-                .unwrap_or_default()
-        } else {
-            return Err(anyhow::anyhow!("Message not found: {}", message_id));
-        };
-
-        // 序列化新操作
-        let operation_json = serde_json::json!({
-            "operation_type": operation.operation_type,
-            "target_message_id": operation.target_message_id,
-            "operator_id": operation.operator_id,
-            "timestamp": operation.timestamp.as_ref().map(|ts| {
-                serde_json::json!({
-                    "seconds": ts.seconds,
-                    "nanos": ts.nanos
-                })
-            }),
-            "show_notice": operation.show_notice,
-            "notice_text": operation.notice_text,
-            "target_user_id": operation.target_user_id,
-            "metadata": operation.metadata,
-        });
-
-        operations.push(operation_json);
-
-        // 更新 operations 数组
-        sqlx::query(
-            r#"
-            UPDATE messages
-            SET 
-                operations = $1::jsonb,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
-            "#,
-        )
-        .bind(serde_json::to_value(&operations)?)
-        .bind(message_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-}

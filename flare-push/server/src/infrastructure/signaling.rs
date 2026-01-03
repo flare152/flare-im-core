@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use flare_proto::signaling::online::online_service_client::OnlineServiceClient;
 use flare_proto::signaling::online::{GetOnlineStatusRequest, GetOnlineStatusResponse};
+use flare_server_core::context::Context;
 use flare_server_core::discovery::ServiceClient;
 use flare_server_core::error::{ErrorBuilder, ErrorCode, Result};
 use tokio::sync::Mutex;
@@ -109,22 +110,29 @@ impl SignalingOnlineClient {
     /// 批量查询用户在线状态
     pub async fn batch_get_online_status(
         &self,
+        ctx: &Context,
         user_ids: &[String],
-        tenant_id: Option<&str>,
     ) -> Result<HashMap<String, OnlineStatus>> {
         let mut client = self.ensure_client().await?;
 
-        let request = GetOnlineStatusRequest {
-            user_ids: user_ids.to_vec(),
-            context: Some(flare_proto::RequestContext::default()),
-            tenant: tenant_id.map(|tid| flare_proto::TenantContext {
-                tenant_id: tid.to_string(),
+        // 从 Context 中提取 TenantContext（用于 protobuf 兼容性）
+        let tenant: Option<flare_proto::TenantContext> = ctx.tenant().cloned().map(|tc| tc.into()).or_else(|| {
+            ctx.tenant_id().map(|tenant_id| flare_proto::TenantContext {
+                tenant_id: tenant_id.to_string(),
                 business_type: String::new(),
                 environment: String::new(),
                 organization_id: String::new(),
                 labels: std::collections::HashMap::new(),
                 attributes: std::collections::HashMap::new(),
-            }),
+            })
+        });
+
+        let request_context: flare_proto::RequestContext = ctx.request().cloned().map(|rc| rc.into()).unwrap_or_else(|| flare_proto::RequestContext::default());
+
+        let request = GetOnlineStatusRequest {
+            user_ids: user_ids.to_vec(),
+            context: Some(request_context),
+            tenant,
         };
 
         let response: GetOnlineStatusResponse = client

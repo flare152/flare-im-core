@@ -7,9 +7,10 @@ use crate::error::{ErrorBuilder, ErrorCode, FlareError, Result};
 
 use super::selector::HookSelector;
 use super::types::{
-    DeliveryEvent, DeliveryHook, HookContext, HookKind, HookMetadata, HookOutcome, MessageDraft,
+    DeliveryEvent, DeliveryHook, HookKind, HookMetadata, HookOutcome, MessageDraft,
     MessageRecord, PostSendHook, PreSendDecision, PreSendHook, RecallEvent, RecallHook,
 };
+use flare_server_core::context::Context;
 
 #[derive(Debug)]
 struct RegistryEntry<T: ?Sized> {
@@ -50,7 +51,7 @@ impl PreSendPlan {
         &self.metadata
     }
 
-    pub async fn execute(&self, ctx: &HookContext, draft: &mut MessageDraft) -> PreSendDecision {
+    pub async fn execute(&self, ctx: &Context, draft: &mut MessageDraft) -> PreSendDecision {
         let fut = self.handler.handle(ctx, draft);
         match tokio::time::timeout(self.metadata.timeout, fut).await {
             Ok(decision) => match decision {
@@ -163,7 +164,7 @@ impl HookRegistry {
         guard.sort_by(|a, b| a.metadata.priority.cmp(&b.metadata.priority));
     }
 
-    pub async fn plan_pre_send(&self, ctx: &HookContext) -> Vec<PreSendPlan> {
+    pub async fn plan_pre_send(&self, ctx: &Context) -> Vec<PreSendPlan> {
         let guard = self.pre_send.read().await;
         guard
             .iter()
@@ -177,7 +178,7 @@ impl HookRegistry {
 
     pub async fn execute_pre_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
     ) -> Result<()> {
         for plan in self.plan_pre_send(ctx).await {
@@ -191,7 +192,7 @@ impl HookRegistry {
 
     pub async fn execute_post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {
@@ -220,7 +221,7 @@ impl HookRegistry {
         Ok(())
     }
 
-    pub async fn execute_delivery(&self, ctx: &HookContext, event: &DeliveryEvent) -> Result<()> {
+    pub async fn execute_delivery(&self, ctx: &Context, event: &DeliveryEvent) -> Result<()> {
         let guard = self.delivery.read().await;
         for entry in guard.iter().filter(|entry| entry.selector.matches(ctx)) {
             let fut = entry.handler.handle(ctx, event);
@@ -246,7 +247,7 @@ impl HookRegistry {
         Ok(())
     }
 
-    pub async fn execute_recall(&self, ctx: &HookContext, event: &RecallEvent) -> Result<()> {
+    pub async fn execute_recall(&self, ctx: &Context, event: &RecallEvent) -> Result<()> {
         let guard = self.recall.read().await;
         for entry in guard.iter().filter(|entry| entry.selector.matches(ctx)) {
             let fut = entry.handler.handle(ctx, event);

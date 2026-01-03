@@ -9,6 +9,7 @@ use crate::domain::model::MessageDefaults;
 pub struct MessageOrchestratorConfig {
     pub kafka_bootstrap: String,
     pub kafka_storage_topic: String, // 存储队列: flare.im.message.created
+    pub kafka_operation_topic: String, // 操作消息队列: storage-message-operations
     pub kafka_push_topic: String,    // 推送队列: flare.im.push.tasks
     pub kafka_timeout_ms: u64,
     // 批量发送配置
@@ -82,6 +83,12 @@ impl MessageOrchestratorConfig {
             "PUSH_KAFKA_PUSH_TOPIC",
         )
         .unwrap_or_else(|| "flare.im.push.tasks".to_string());
+
+        let kafka_operation_topic = env_or_fallback(
+            "MESSAGE_ORCHESTRATOR_KAFKA_OPERATION_TOPIC",
+            "STORAGE_KAFKA_OPERATION_TOPIC",
+        )
+        .unwrap_or_else(|| "storage-message-operations".to_string());
 
         let kafka_timeout_ms = env_or_fallback(
             "MESSAGE_ORCHESTRATOR_KAFKA_TIMEOUT_MS",
@@ -204,6 +211,7 @@ impl MessageOrchestratorConfig {
         Self {
             kafka_bootstrap,
             kafka_storage_topic,
+            kafka_operation_topic,
             kafka_push_topic,
             kafka_timeout_ms,
             kafka_batch_size,

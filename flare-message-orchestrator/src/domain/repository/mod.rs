@@ -15,6 +15,12 @@ pub trait MessageEventPublisher: Send + Sync {
         payload: StorageStoreMessageRequest,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 
+    /// 发布操作消息到操作队列 (storage-message-operations)
+    fn publish_operation(
+        &self,
+        payload: StorageStoreMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
     /// 发布推送任务到推送队列 (flare.im.push.tasks)
     fn publish_push(
         &self,
@@ -57,6 +63,19 @@ impl MessageEventPublisher for MessageEventPublisherItem {
         })
     }
 
+    fn publish_operation(
+        &self,
+        payload: StorageStoreMessageRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            match self {
+                MessageEventPublisherItem::Kafka(publisher) => {
+                    publisher.publish_operation(payload).await
+                }
+            }
+        })
+    }
+
     fn publish_push(
         &self,
         payload: PushPushMessageRequest,
@@ -91,6 +110,12 @@ pub trait WalRepository: Send + Sync {
         &'a self,
         submission: &'a MessageSubmission,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    /// 根据消息ID从 WAL 中查询消息（用于权限验证时的 fallback）
+    fn find_by_message_id<'a>(
+        &'a self,
+        message_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<flare_proto::common::Message>>> + Send + 'a>>;
 }
 
 /// WalRepository 的枚举封装，用于在 Rust 2024 下避免 `dyn` + async trait 带来的
@@ -109,6 +134,16 @@ impl WalRepository for WalRepositoryItem {
         match self {
             WalRepositoryItem::Noop(repo) => Box::pin(repo.append(submission)),
             WalRepositoryItem::Redis(repo) => Box::pin(repo.append(submission)),
+        }
+    }
+
+    fn find_by_message_id<'a>(
+        &'a self,
+        message_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<flare_proto::common::Message>>> + Send + 'a>> {
+        match self {
+            WalRepositoryItem::Noop(repo) => Box::pin(repo.find_by_message_id(message_id)),
+            WalRepositoryItem::Redis(repo) => Box::pin(repo.find_by_message_id(message_id)),
         }
     }
 }

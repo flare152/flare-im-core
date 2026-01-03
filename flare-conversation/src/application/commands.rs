@@ -8,7 +8,6 @@ use crate::domain::model::{
 /// 批量确认命令
 #[derive(Debug, Clone)]
 pub struct BatchAcknowledgeCommand {
-    pub user_id: String,
     pub cursors: Vec<(String, i64)>,
 }
 
@@ -32,7 +31,6 @@ pub struct DeleteConversationCommand {
 /// 强制会话同步命令
 #[derive(Debug, Clone)]
 pub struct ForceConversationSyncCommand {
-    pub user_id: String,
     pub conversation_ids: Vec<String>,
     pub reason: Option<String>,
 }
@@ -49,7 +47,6 @@ pub struct ManageParticipantsCommand {
 /// 更新游标命令
 #[derive(Debug, Clone)]
 pub struct UpdateCursorCommand {
-    pub user_id: String,
     pub conversation_id: String,
     pub message_ts: i64,
 }
@@ -57,7 +54,6 @@ pub struct UpdateCursorCommand {
 /// 更新设备状态命令
 #[derive(Debug, Clone)]
 pub struct UpdatePresenceCommand {
-    pub user_id: String,
     pub device_id: String,
     pub device_platform: Option<String>,
     pub state: DeviceState,

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::registry::HookRegistry;
-use super::types::{HookContext, MessageDraft, MessageRecord, PreSendDecision};
+use super::types::{MessageDraft, MessageRecord, PreSendDecision};
+use flare_server_core::context::Context;
 
 /// Hook 调度器，封装常用执行入口
 #[derive(Clone)]
@@ -19,7 +20,7 @@ impl HookDispatcher {
     /// 调用获取会话参与者的Hook
     pub async fn invoke_get_conversation_participants(
         &self,
-        _ctx: &HookContext,
+        _ctx: &Context,
         _conversation_id: &str,
     ) -> Result<Option<Vec<String>>> {
         // 在Hook注册表中查找GetConversationParticipantsHook类型的Hook
@@ -30,7 +31,7 @@ impl HookDispatcher {
     /// 执行 PreSend Hook
     pub async fn pre_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
     ) -> Result<PreSendDecision> {
         // 计划要执行的 PreSend Hooks
@@ -51,7 +52,7 @@ impl HookDispatcher {
     /// 执行 PostSend Hook
     pub async fn post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {

@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flare_im_core::hooks::{DeliveryEvent, HookContext, MessageDraft, MessageRecord};
+use flare_im_core::hooks::{DeliveryEvent, MessageDraft, MessageRecord};
+use flare_server_core::context::{Context, ContextExt};
 use flare_proto::hooks::hook_extension_client::HookExtensionClient;
 use flare_proto::hooks::{
     DeliveryHookRequest, DeliveryHookResponse, HookDeliveryEvent as ProtoHookDeliveryEvent,
@@ -45,21 +46,39 @@ impl HookExecutor {
     }
 
     /// 构建 Hook 调用上下文
-    fn build_hook_context(&self, ctx: &HookContext) -> HookInvocationContext {
+    fn build_hook_context(&self, ctx: &Context) -> HookInvocationContext {
+        use flare_im_core::hooks::hook_context_data::get_hook_context_data;
+        use flare_proto::common::{RequestContext, TenantContext};
+        
+        let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
+        
         HookInvocationContext {
-            request_context: Some(flare_proto::common::RequestContext {
-                request_id: ctx.trace_id.clone().unwrap_or_default(),
-                ..Default::default()
+            request_context: Some(RequestContext {
+                request_id: ctx.request_id().to_string(),
+                trace: None,
+                actor: None,
+                device: None,
+                channel: String::new(),
+                user_agent: String::new(),
+                attributes: std::collections::HashMap::new(),
             }),
-            tenant: Some(flare_proto::common::TenantContext {
-                tenant_id: ctx.tenant_id.clone(),
-                ..Default::default()
+            tenant: ctx.tenant_id().map(|tid| TenantContext {
+                tenant_id: tid.to_string(),
+                business_type: String::new(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
             }),
-            conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
-            conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
-            corridor: "push".to_string(),
-            tags: ctx.tags.clone(),
-            attributes: ctx.attributes.clone(),
+            conversation_id: hook_data.conversation_id.clone().unwrap_or_default(),
+            conversation_type: hook_data.conversation_type.clone().unwrap_or_default(),
+            corridor: hook_data
+                .attributes
+                .get("corridor")
+                .cloned()
+                .unwrap_or_else(|| "messaging".to_string()),
+            tags: hook_data.tags.clone(),
+            attributes: hook_data.attributes.clone(),
         }
     }
 
@@ -87,8 +106,21 @@ impl HookExecutor {
     /// 1. 优先调用 Hook 引擎
     /// 2. Hook 引擎不可用或超时时，降级为日志记录
     /// 3. Hook 失败不影响推送结果，只记录错误
-    #[instrument(skip(self, ctx), fields(message_id = %event.message_id, user_id = %event.user_id))]
-    pub async fn post_delivery(&self, ctx: &HookContext, event: &DeliveryEvent) -> Result<()> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        message_id = %event.message_id,
+        user_id = %event.user_id
+    ))]
+    pub async fn post_delivery(&self, ctx: &Context, event: &DeliveryEvent) -> Result<()> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
         if let Some(client) = &self.client {
             let hook_context = self.build_hook_context(ctx);
             let delivery_event = Self::delivery_event_to_proto(event);
@@ -146,12 +178,24 @@ impl HookExecutor {
     ///
     /// 注意：这是同步 Hook，可能修改推送内容或拒绝推送
     /// 需要等待 Hook 执行完成才能继续推送
-    #[instrument(skip(self, ctx, push_request), fields(message_id = ?push_request.message.as_ref().map(|m| &m.server_id)))]
+    #[instrument(skip(self, ctx, push_request), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        message_id = ?push_request.message.as_ref().map(|m| &m.server_id)
+    ))]
     pub async fn push_pre_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         push_request: &mut flare_proto::push::PushMessageRequest,
     ) -> Result<bool> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
         if let Some(client) = &self.client {
             let hook_context = self.build_hook_context(ctx);
 
@@ -244,13 +288,24 @@ impl HookExecutor {
     /// 执行 PushPostSend Hook
     ///
     /// 用于处理推送任务入队后的通知 Hook 调用
-    #[instrument(skip(self, ctx, record, draft))]
+    #[instrument(skip(self, ctx, record, draft), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+    ))]
     pub async fn push_post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
         if let Some(client) = &self.client {
             let hook_context = self.build_hook_context(ctx);
 

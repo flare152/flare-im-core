@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
+use flare_server_core::context::Context;
 use flare_proto::media::{
     AbortMultipartUploadRequest, CompleteMultipartUploadRequest, DeleteFileRequest,
     InitiateMultipartUploadRequest, ProcessImageRequest, ProcessVideoRequest, UploadFileMetadata,
@@ -38,6 +39,7 @@ impl MediaCommandHandler {
 
     pub async fn handle_upload_file(
         &self,
+        ctx: &Context,
         metadata: UploadFileMetadata,
         payload: Vec<u8>,
     ) -> Result<MediaFileMetadata> {
@@ -46,7 +48,7 @@ impl MediaCommandHandler {
             self.domain_service.prepare_upload_context_data(&metadata);
 
         // 构建 UploadContext（在命令处理器作用域中，确保生命周期正确）
-        let context = UploadContext {
+        let upload_context = UploadContext {
             file_id: &file_id,
             file_name: metadata.file_name.as_str(),
             mime_type: metadata.mime_type.as_str(),
@@ -61,19 +63,20 @@ impl MediaCommandHandler {
         };
 
         self.domain_service
-            .store_media_file(context)
+            .store_media_file(ctx, upload_context)
             .await
             .context("store media file")
     }
 
-    pub async fn handle_delete_file(&self, request: DeleteFileRequest) -> Result<()> {
+    pub async fn handle_delete_file(&self, ctx: &Context, request: DeleteFileRequest) -> Result<()> {
         self.domain_service
-            .delete_media_file(&request.file_id)
+            .delete_media_file(ctx, &request.file_id)
             .await
     }
 
     pub async fn handle_initiate_multipart_upload(
         &self,
+        ctx: &Context,
         request: InitiateMultipartUploadRequest,
     ) -> Result<MultipartUploadSession> {
         // 使用领域服务准备分片上传初始化（业务逻辑下沉到领域层）
@@ -83,13 +86,14 @@ impl MediaCommandHandler {
             .context("prepare multipart upload init")?;
 
         self.domain_service
-            .initiate_multipart_upload(init)
+            .initiate_multipart_upload(ctx, init)
             .await
             .context("initiate multipart upload")
     }
 
     pub async fn handle_upload_multipart_chunk(
         &self,
+        ctx: &Context,
         request: UploadMultipartChunkRequest,
     ) -> Result<MultipartUploadSession> {
         if request.upload_id.is_empty() {
@@ -106,58 +110,63 @@ impl MediaCommandHandler {
         };
 
         self.domain_service
-            .upload_multipart_chunk(payload)
+            .upload_multipart_chunk(ctx, payload)
             .await
             .context("upload multipart chunk")
     }
 
     pub async fn handle_complete_multipart_upload(
         &self,
+        ctx: &Context,
         request: CompleteMultipartUploadRequest,
     ) -> Result<MediaFileMetadata> {
         self.domain_service
-            .complete_multipart_upload(&request.upload_id)
+            .complete_multipart_upload(ctx, &request.upload_id)
             .await
             .context("complete multipart upload")
     }
 
     pub async fn handle_abort_multipart_upload(
         &self,
+        ctx: &Context,
         request: AbortMultipartUploadRequest,
     ) -> Result<()> {
         self.domain_service
-            .abort_multipart_upload(&request.upload_id)
+            .abort_multipart_upload(ctx, &request.upload_id)
             .await
             .context("abort multipart upload")
     }
 
     pub async fn handle_attach_reference(
         &self,
+        ctx: &Context,
         file_id: &str,
         scope: MediaReferenceScope,
         metadata: HashMap<String, String>,
     ) -> Result<MediaFileMetadata> {
         self.domain_service
-            .add_reference(file_id, scope, metadata)
+            .add_reference(ctx, file_id, scope, metadata)
             .await
     }
 
     pub async fn handle_release_reference(
         &self,
+        ctx: &Context,
         file_id: &str,
         reference_id: Option<&str>,
     ) -> Result<MediaFileMetadata> {
         self.domain_service
-            .remove_reference(file_id, reference_id)
+            .remove_reference(ctx, file_id, reference_id)
             .await
     }
 
-    pub async fn handle_cleanup_orphaned_assets(&self) -> Result<Vec<String>> {
-        self.domain_service.cleanup_orphaned_assets().await
+    pub async fn handle_cleanup_orphaned_assets(&self, ctx: &Context) -> Result<Vec<String>> {
+        self.domain_service.cleanup_orphaned_assets(ctx).await
     }
 
     pub async fn handle_process_image(
         &self,
+        ctx: &Context,
         request: ProcessImageRequest,
     ) -> Result<ProcessedMediaResult> {
         info!(
@@ -166,11 +175,12 @@ impl MediaCommandHandler {
             "Process image request received"
         );
         // 集成真实的图片处理管道
-        self.process_image_pipeline(request).await
+        self.process_image_pipeline(ctx, request).await
     }
 
     pub async fn handle_process_video(
         &self,
+        ctx: &Context,
         request: ProcessVideoRequest,
     ) -> Result<ProcessedMediaResult> {
         info!(
@@ -179,7 +189,7 @@ impl MediaCommandHandler {
             "Process video request received"
         );
         // 集成真实的视频处理管道
-        self.process_video_pipeline(request).await
+        self.process_video_pipeline(ctx, request).await
     }
 
     pub fn to_proto_file_info(&self, metadata: &MediaFileMetadata) -> flare_proto::media::FileInfo {
@@ -296,6 +306,7 @@ impl MediaCommandHandler {
     #[instrument(skip(self), fields(file_id = %request.file_id))]
     async fn process_image_pipeline(
         &self,
+        ctx: &Context,
         request: ProcessImageRequest,
     ) -> Result<ProcessedMediaResult> {
         info!(
@@ -307,7 +318,7 @@ impl MediaCommandHandler {
         // 1. 获取原始文件信息
         let original_file = self
             .domain_service
-            .get_metadata(&request.file_id)
+            .get_metadata(ctx, &request.file_id)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to get original file: {}", e))?;
 
@@ -385,18 +396,18 @@ impl MediaCommandHandler {
     #[instrument(skip(self), fields(file_id = %request.file_id))]
     async fn process_video_pipeline(
         &self,
+        ctx: &Context,
         request: ProcessVideoRequest,
     ) -> Result<ProcessedMediaResult> {
         info!(
             file_id = %request.file_id,
-            operations_count = request.operations.len(),
             "Starting video processing pipeline"
         );
 
         // 1. 获取原始视频文件信息
         let original_file = self
             .domain_service
-            .get_metadata(&request.file_id)
+            .get_metadata(ctx, &request.file_id)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to get original video file: {}", e))?;
 

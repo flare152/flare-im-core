@@ -47,13 +47,12 @@ pub struct ApplicationBootstrap;
 impl ApplicationBootstrap {
     /// 运行应用的主入口点
     pub async fn run(config: HookEngineConfig) -> Result<()> {
-        use flare_im_core::{ServiceHelper, load_config};
+        use flare_im_core::load_config;
 
         // 加载应用配置
         let app_config = load_config(Some("config"));
 
-        // 解析服务器地址（使用默认端口 50110）
-        let default_port = 50110;
+        // 解析服务器地址
         let address: SocketAddr = format!(
             "{}:{}",
             app_config.base().server.address,
@@ -92,25 +91,39 @@ impl ApplicationBootstrap {
 
         let runtime = ServiceRuntime::new("hook-engine", address)
             .add_spawn_with_shutdown("hook-engine-grpc", move |shutdown_rx| async move {
-                // 构建服务器（使用链式调用）
-                let mut server_builder = Server::builder()
-                    .add_service(
+                // 使用 ContextLayer 包裹每个 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let hook_extension_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(
                         flare_proto::hooks::hook_extension_server::HookExtensionServer::new(
                             hook_extension_service
-                        ),
+                        )
                     );
+                
+                let server = match hook_service {
+                    Some(hook_service) => {
+                        info!("HookService registered");
+                        let hook_service_wrapped = ContextLayer::new()
+                            .allow_missing()
+                            .layer(
+                                flare_proto::hooks::hook_service_server::HookServiceServer::new(
+                                    hook_service
+                                )
+                            );
+                        
+                        Server::builder()
+                            .add_service(hook_extension_service)
+                            .add_service(hook_service_wrapped)
+                    }
+                    None => {
+                        Server::builder()
+                            .add_service(hook_extension_service)
+                    }
+                };
 
-                // 注册HookService服务（如果可用）
-                if let Some(hook_service) = hook_service {
-                    server_builder = server_builder.add_service(
-                        flare_proto::hooks::hook_service_server::HookServiceServer::new(
-                            hook_service
-                        ),
-                    );
-                    info!("HookService registered");
-                }
-
-                server_builder
+                server
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

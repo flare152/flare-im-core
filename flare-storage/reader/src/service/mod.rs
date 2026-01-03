@@ -56,8 +56,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("storage-reader", address)
             .add_spawn_with_shutdown("storage-reader-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let storage_reader_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(StorageReaderServiceServer::new(handler));
+                
                 Server::builder()
-                    .add_service(StorageReaderServiceServer::new(handler))
+                    .add_service(storage_reader_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

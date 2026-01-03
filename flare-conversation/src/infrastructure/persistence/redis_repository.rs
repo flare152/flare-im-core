@@ -43,6 +43,7 @@ impl RedisConversationRepository {
 impl ConversationRepository for RedisConversationRepository {
     async fn load_bootstrap(
         &self,
+        _tenant_id: &str,
         user_id: &str,
         client_cursor: &HashMap<String, i64>,
     ) -> Result<ConversationBootstrapResult> {
@@ -56,7 +57,7 @@ impl ConversationRepository for RedisConversationRepository {
             .filter_map(|(k, v)| v.parse::<i64>().ok().map(|ts| (k, ts)))
             .collect();
 
-        // merge client cursor hints to ensure we cover requested sessions
+        // merge client cursor hints to ensure we cover requested conversations
         for (conversation_id, ts) in client_cursor {
             server_cursor.entry(conversation_id.clone()).or_insert(*ts);
         }
@@ -126,25 +127,25 @@ impl ConversationRepository for RedisConversationRepository {
     }
 
     // Redis repository不支持会话管理操作，这些操作需要在PostgreSQL repository中实现
-    async fn create_conversation(&self, _session: &Conversation) -> Result<()> {
+    async fn create_conversation(&self, _tenant_id: &str, _session: &Conversation) -> Result<()> {
         Err(anyhow::anyhow!(
             "RedisConversationRepository does not support create_conversation. Use PostgresConversationRepository instead."
         ))
     }
 
-    async fn get_conversation(&self, _conversation_id: &str) -> Result<Option<Conversation>> {
+    async fn get_conversation(&self, _tenant_id: &str, _conversation_id: &str) -> Result<Option<Conversation>> {
         Err(anyhow::anyhow!(
             "RedisConversationRepository does not support get_conversation. Use PostgresConversationRepository instead."
         ))
     }
 
-    async fn update_conversation(&self, _session: &Conversation) -> Result<()> {
+    async fn update_conversation(&self, _tenant_id: &str, _session: &Conversation) -> Result<()> {
         Err(anyhow::anyhow!(
             "RedisConversationRepository does not support update_conversation. Use PostgresConversationRepository instead."
         ))
     }
 
-    async fn delete_conversation(&self, _conversation_id: &str, _hard_delete: bool) -> Result<()> {
+    async fn delete_conversation(&self, _tenant_id: &str, _conversation_id: &str, _hard_delete: bool) -> Result<()> {
         Err(anyhow::anyhow!(
             "RedisConversationRepository does not support delete_conversation. Use PostgresConversationRepository instead."
         ))
@@ -152,6 +153,7 @@ impl ConversationRepository for RedisConversationRepository {
 
     async fn manage_participants(
         &self,
+        _tenant_id: &str,
         _conversation_id: &str,
         _to_add: &[ConversationParticipant],
         _to_remove: &[String],
@@ -162,7 +164,7 @@ impl ConversationRepository for RedisConversationRepository {
         ))
     }
 
-    async fn batch_acknowledge(&self, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
+    async fn batch_acknowledge(&self, _tenant_id: &str, user_id: &str, cursors: &[(String, i64)]) -> Result<()> {
         // Redis repository支持批量确认，因为这只是更新光标
         let mut conn = self.connection().await?;
         let cursor_key = self.user_cursor_key(user_id);
@@ -174,6 +176,7 @@ impl ConversationRepository for RedisConversationRepository {
 
     async fn search_conversations(
         &self,
+        _tenant_id: &str,
         _user_id: Option<&str>,
         _filters: &[ConversationFilter],
         _sort: &[ConversationSort],
@@ -185,13 +188,13 @@ impl ConversationRepository for RedisConversationRepository {
         ))
     }
 
-    async fn mark_as_read(&self, _user_id: &str, _conversation_id: &str, _seq: i64) -> Result<()> {
+    async fn mark_as_read(&self, _tenant_id: &str, _user_id: &str, _conversation_id: &str, _seq: i64) -> Result<()> {
         Err(anyhow::anyhow!(
             "RedisConversationRepository does not support mark_as_read. Use PostgresConversationRepository instead."
         ))
     }
 
-    async fn get_unread_count(&self, user_id: &str, conversation_id: &str) -> Result<i32> {
+    async fn get_unread_count(&self, _tenant_id: &str, user_id: &str, conversation_id: &str) -> Result<i32> {
         // Redis repository 支持读取未读数（从缓存）
         let mut conn = self.connection().await?;
         let unread_key = self.session_unread_key(conversation_id);

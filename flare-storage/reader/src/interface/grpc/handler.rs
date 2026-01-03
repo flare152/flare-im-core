@@ -61,9 +61,6 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             .await
         {
             Ok(result) => {
-                let message_count = result.messages.len() as i32;
-                let has_more = message_count >= req.limit;
-
                 Ok(Response::new(QueryMessagesResponse {
                     messages: result.messages,
                     next_cursor: result.next_cursor.clone(),
@@ -427,17 +424,12 @@ impl StorageReaderService for StorageReaderGrpcHandler {
             "edit" => OperationType::Edit as i32,
             "delete" => OperationType::Delete as i32,
             "read" => OperationType::Read as i32,
-            "reply" => OperationType::Reply as i32,
-            "forward" => OperationType::Forward as i32,
+            // Reply 和 Quote 不在 OperationType 中，它们通过 Message.quote 字段处理
             "reaction_add" | "reaction" => OperationType::ReactionAdd as i32,
             "reaction_remove" => OperationType::ReactionRemove as i32,
-            "quote" => OperationType::Quote as i32,
             "pin" => OperationType::Pin as i32,
             "unpin" => OperationType::Unpin as i32,
-            "favorite" => OperationType::Favorite as i32,
-            "unfavorite" => OperationType::Unfavorite as i32,
             "mark" => OperationType::Mark as i32,
-            "thread" | "thread_reply" => OperationType::ThreadReply as i32,
             _ => OperationType::Unspecified as i32,
         };
 
@@ -462,7 +454,6 @@ impl StorageReaderService for StorageReaderGrpcHandler {
                 );
                 meta
             },
-            extensions: Vec::new(), // 添加必填字段
         };
 
         match self

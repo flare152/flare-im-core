@@ -11,22 +11,21 @@ use flare_proto::push::{
 };
 use tonic::{Request, Response, Status};
 use tracing::{error, info};
+use flare_im_core::utils::context::require_context;
+use flare_server_core::context::Context;
 
 use crate::application::commands::{EnqueueMessageCommand, EnqueueNotificationCommand};
 use crate::application::handlers::PushCommandHandler;
-use flare_im_core::hooks::HookDispatcher;
 
 #[derive(Clone)]
 pub struct PushGrpcHandler {
     command_handler: Arc<PushCommandHandler>,
-    hook_dispatcher: HookDispatcher,
 }
 
 impl PushGrpcHandler {
-    pub fn new(command_handler: Arc<PushCommandHandler>, hook_dispatcher: HookDispatcher) -> Self {
+    pub fn new(command_handler: Arc<PushCommandHandler>) -> Self {
         Self {
             command_handler,
-            hook_dispatcher,
         }
     }
 
@@ -34,9 +33,10 @@ impl PushGrpcHandler {
         &self,
         request: Request<PushMessageRequest>,
     ) -> Result<Response<PushMessageResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let command = EnqueueMessageCommand { request: req };
-        match self.command_handler.handle_enqueue_message(command).await {
+        match self.command_handler.handle_enqueue_message(&ctx, command).await {
             Ok(resp) => Ok(Response::new(resp)),
             Err(err) => {
                 error!(?err, "failed to enqueue push message");
@@ -49,11 +49,12 @@ impl PushGrpcHandler {
         &self,
         request: Request<PushNotificationRequest>,
     ) -> Result<Response<PushNotificationResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let command = EnqueueNotificationCommand { request: req };
         match self
             .command_handler
-            .handle_enqueue_notification(command)
+            .handle_enqueue_notification(&ctx, command)
             .await
         {
             Ok(resp) => Ok(Response::new(resp)),
@@ -68,9 +69,10 @@ impl PushGrpcHandler {
         &self,
         request: Request<PushAckRequest>,
     ) -> Result<Response<PushAckResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let command = crate::application::commands::EnqueueAckCommand { request: req };
-        match self.command_handler.handle_enqueue_ack(command).await {
+        match self.command_handler.handle_enqueue_ack(&ctx, command).await {
             Ok(resp) => Ok(Response::new(resp)),
             Err(err) => {
                 error!(?err, "failed to enqueue push ACK");

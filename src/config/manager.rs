@@ -10,7 +10,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use toml::Value;
 
 use super::{FlareAppConfig, ObjectStoreConfig};

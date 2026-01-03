@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use flare_hook_engine::interface::grpc::HookExtensionServer;
-use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
+use flare_im_core::hooks::{MessageDraft, MessageRecord};
+use flare_server_core::context::{Context, ContextExt};
 use flare_proto::hooks::hook_extension_server::HookExtension;
 use flare_server_core::error::Result;
 use tonic::IntoRequest;
@@ -23,25 +24,25 @@ impl HookExecutor {
     }
 
     /// 执行 PreSend Hook
-    #[instrument(skip(self))]
-    pub async fn pre_send(&self, ctx: &HookContext, draft: &mut MessageDraft) -> Result<()> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+    ))]
+    pub async fn pre_send(&self, ctx: &Context, draft: &mut MessageDraft) -> Result<()> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
+        use flare_im_core::hooks::hook_context_data::get_hook_context_data;
+        use flare_hook_engine::infrastructure::adapters::conversion::context_to_proto;
+        
         // 构建PreSendHookRequest
         let request = flare_proto::hooks::PreSendHookRequest {
-            context: Some(flare_proto::hooks::HookInvocationContext {
-                request_context: Some(flare_proto::common::RequestContext {
-                    request_id: ctx.trace_id.clone().unwrap_or_default(),
-                    ..Default::default()
-                }),
-                tenant: Some(flare_proto::common::TenantContext {
-                    tenant_id: ctx.tenant_id.clone(),
-                    ..Default::default()
-                }),
-                conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
-                conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
-                corridor: "messaging".to_string(), // 或根据实际情况设置
-                tags: ctx.tags.clone(),
-                attributes: ctx.attributes.clone(),
-            }),
+            context: Some(context_to_proto(ctx)),
             draft: Some(flare_proto::hooks::HookMessageDraft {
                 message_id: draft.message_id.clone().unwrap_or_default(),
                 client_message_id: draft.client_message_id.clone().unwrap_or_default(),
@@ -102,30 +103,29 @@ impl HookExecutor {
     }
 
     /// 执行 PostSend Hook
-    #[instrument(skip(self, ctx, record, draft))]
+    #[instrument(skip(self, ctx, record, draft), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+    ))]
     pub async fn post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
     ) -> Result<()> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InternalError,
+                "Request cancelled",
+            )
+            .details(e.to_string())
+            .build_error()
+        })?;
+        use flare_hook_engine::infrastructure::adapters::conversion::context_to_proto;
+        
         // 构建PostSendHookRequest
         let request = flare_proto::hooks::PushPostSendHookRequest {
-            context: Some(flare_proto::hooks::HookInvocationContext {
-                request_context: Some(flare_proto::common::RequestContext {
-                    request_id: ctx.trace_id.clone().unwrap_or_default(),
-                    ..Default::default()
-                }),
-                tenant: Some(flare_proto::common::TenantContext {
-                    tenant_id: ctx.tenant_id.clone(),
-                    ..Default::default()
-                }),
-                conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
-                conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
-                corridor: "messaging".to_string(), // 或根据实际情况设置
-                tags: ctx.tags.clone(),
-                attributes: ctx.attributes.clone(),
-            }),
+            context: Some(context_to_proto(ctx)),
             record: Some(flare_proto::hooks::HookPushRecord {
                 task_id: record.message_id.clone(),
                 user_id: record.sender_id.clone(),

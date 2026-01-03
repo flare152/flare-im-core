@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use tracing::{error, info};
 
 use crate::service::wire::{self, ApplicationContext};
@@ -26,7 +26,7 @@ impl ApplicationBootstrap {
             &service_config.runtime,
             "flare-signaling-online",
         )
-        .context("invalid signaling online server address")?;
+        .with_context(|| "invalid signaling online server address")?;
         info!(address = %address, "Server address parsed successfully");
 
         // 使用 Wire 风格的依赖注入构建应用上下文
@@ -55,9 +55,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("signaling-online", address)
             .add_spawn_with_shutdown("signaling-online-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let online_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(OnlineServiceServer::new(online_handler));
+                
                 Server::builder()
-                    // 注册 OnlineService（合并了 SignalingService 和 UserService）
-                    .add_service(OnlineServiceServer::new(online_handler))
+                    .add_service(online_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

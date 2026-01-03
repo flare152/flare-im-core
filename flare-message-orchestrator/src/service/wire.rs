@@ -13,7 +13,7 @@ use crate::config::MessageOrchestratorConfig;
 use crate::domain::repository::{
     MessageEventPublisherItem, ConversationRepositoryItem, WalRepositoryItem,
 };
-use crate::domain::service::{MessageDomainService, SequenceAllocator};
+use crate::domain::service::{MessageDomainService, MessageTemporaryService, SequenceAllocator};
 use crate::infrastructure::external::session_client::GrpcConversationClient;
 use crate::infrastructure::messaging::kafka_publisher::KafkaMessagePublisher;
 use crate::infrastructure::persistence::noop_wal::NoopWalRepository;
@@ -77,7 +77,7 @@ pub async fn initialize(
     // 9. 构建领域服务
     let domain_service = Arc::new(MessageDomainService::new(
         Arc::clone(&publisher), // 使用 Arc::clone 避免移动
-        wal_repository,
+        wal_repository.clone(), // 先 clone，后续还需要使用
         conversation_repository,
         sequence_allocator,
         config.defaults(),
@@ -93,15 +93,65 @@ pub async fn initialize(
         reader_client.clone().map(|client| Arc::new(client)),
     ));
 
-    // 12. 构建命令处理器
-    let command_handler = Arc::new(MessageCommandHandler::new(domain_service, metrics));
+    // 12. 构建消息操作服务（总是创建，如果没有 reader_client 则使用 Noop MessageRepository）
+    use crate::domain::service::message_operation_service::{MessageOperationService, EventPublisher, MessageRepository};
+    use crate::domain::model::Message;
+    
+    let message_repo: Arc<dyn MessageRepository> = if let Some(ref reader_client) = reader_client {
+        use crate::infrastructure::persistence::message_repository_adapter::StorageReaderMessageRepository;
+        Arc::new(StorageReaderMessageRepository::new(Arc::new(reader_client.clone())))
+    } else {
+        // 创建 Noop MessageRepository（当 reader_client 不存在时）
+        struct NoopMessageRepository;
+        #[async_trait::async_trait]
+        impl MessageRepository for NoopMessageRepository {
+            async fn find_by_id(&self, _message_id: &str) -> Result<Option<Message>> {
+                Ok(None) // 总是返回 None，表示消息不存在
+            }
+            async fn save(&self, _message: &Message) -> Result<()> {
+                Ok(()) // Noop，不保存
+            }
+        }
+        Arc::new(NoopMessageRepository)
+    };
+    
+    struct NoopEventPublisher;
+    #[async_trait::async_trait]
+    impl EventPublisher for NoopEventPublisher {
+        async fn publish_recalled(&self, _: &crate::domain::event::MessageRecalledEvent) -> Result<()> { Ok(()) }
+        async fn publish_edited(&self, _: &crate::domain::event::MessageEditedEvent) -> Result<()> { Ok(()) }
+        async fn publish_deleted(&self, _: &crate::domain::event::MessageDeletedEvent) -> Result<()> { Ok(()) }
+        async fn publish_read(&self, _: &crate::domain::event::MessageReadEvent) -> Result<()> { Ok(()) }
+        async fn publish_reaction_added(&self, _: &crate::domain::event::MessageReactionAddedEvent) -> Result<()> { Ok(()) }
+        async fn publish_reaction_removed(&self, _: &crate::domain::event::MessageReactionRemovedEvent) -> Result<()> { Ok(()) }
+        async fn publish_pinned(&self, _: &crate::domain::event::MessagePinnedEvent) -> Result<()> { Ok(()) }
+        async fn publish_unpinned(&self, _: &crate::domain::event::MessageUnpinnedEvent) -> Result<()> { Ok(()) }
+        async fn publish_favorited(&self, _: &crate::domain::event::MessageFavoritedEvent) -> Result<()> { Ok(()) }
+        async fn publish_unfavorited(&self, _: &crate::domain::event::MessageUnfavoritedEvent) -> Result<()> { Ok(()) }
+    }
+    
+    let operation_service = Arc::new(MessageOperationService::new(
+        message_repo,
+        Arc::new(NoopEventPublisher),
+        publisher.clone(),
+        Some(wal_repository.clone()), // 注入 WAL Repository 用于 fallback 查询
+    ));
 
-    // 13. 构建 gRPC 处理器
+    // 13. 构建临时消息处理服务
+    let temporary_service = Arc::new(MessageTemporaryService::new(publisher.clone()));
+
+    // 14. 构建命令处理器
+    let command_handler = Arc::new(MessageCommandHandler::new(
+        domain_service,
+        operation_service.clone(),
+        Some(temporary_service.clone()),
+        metrics,
+    ));
+
+    // 15. 构建 gRPC 处理器（只依赖 command_handler 和 query_handler）
     let handler = MessageGrpcHandler::new(
         command_handler,
         query_handler,
-        reader_client,
-        publisher, // 现在可以安全地移动，因为 domain_service 使用的是 clone
     );
 
     Ok(ApplicationContext {

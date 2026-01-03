@@ -164,13 +164,22 @@ impl ServiceManager {
 
         // 启动 gRPC 服务器任务
         let grpc_server_handle = tokio::spawn(async move {
+            // 添加上下文中间件（自动提取和注入 TenantContext 和 RequestContext）
+            use flare_server_core::middleware::ContextLayer;
+            
             // 使用 graceful_shutdown 支持优雅停机
-            let server_result = Server::builder()
-                .add_service(
+            // 使用 ContextLayer 包裹 Service
+            
+            let access_gateway_service = ContextLayer::new()
+                .allow_missing()
+                .layer(
                     flare_proto::access_gateway::access_gateway_server::AccessGatewayServer::new(
                         (*access_gateway_handler).clone(),
                     ),
-                )
+                );
+            
+            let server_result = Server::builder()
+                .add_service(access_gateway_service)
                 .serve_with_shutdown(grpc_addr, async {
                     shutdown_rx.await.ok();
                     info!("收到停止信号，正在停止 gRPC 服务器...");

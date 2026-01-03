@@ -15,7 +15,3 @@ pub struct RouteContext {
     pub login_gateway: Option<String>,
 }
 
-// 重新导出旧的领域服务（用于向后兼容）
-#[deprecated(note = "Use RouteDomainService instead")]
-pub use route_domain_service::RouteDomainService as RouteDomainServiceLegacy;
-

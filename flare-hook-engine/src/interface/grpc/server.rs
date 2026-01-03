@@ -13,14 +13,15 @@ use crate::application::handlers::HookCommandHandler;
 use crate::domain::model::HookExecutionPlan;
 use crate::infrastructure::adapters::HookAdapterFactory;
 use crate::infrastructure::adapters::conversion::{
-    delivery_event_to_proto, hook_context_to_proto, message_draft_to_proto,
+    context_to_proto, delivery_event_to_proto, message_draft_to_proto,
     message_record_to_proto, proto_to_message_draft, proto_to_pre_send_decision,
     proto_to_recall_decision, recall_event_to_proto, timestamp_to_system_time,
 };
 use crate::service::registry::CoreHookRegistry;
 use flare_im_core::{
-    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+    DeliveryEvent, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
+use flare_server_core::context::Context;
 
 /// HookExtension gRPC服务实现
 pub struct HookExtensionServer {
@@ -42,34 +43,9 @@ impl HookExtensionServer {
         }
     }
 
-    /// 将 protobuf HookInvocationContext 转换为 HookContext
-    fn proto_to_hook_context(proto: &HookInvocationContext) -> HookContext {
-        let mut ctx = HookContext::new(
-            proto
-                .tenant
-                .as_ref()
-                .map(|t| t.tenant_id.clone())
-                .unwrap_or_default(),
-        );
-
-        if !proto.conversation_id.is_empty() {
-            ctx = ctx.with_session(proto.conversation_id.clone());
-        }
-        if !proto.conversation_type.is_empty() {
-            ctx = ctx.with_conversation_type(proto.conversation_type.clone());
-        }
-
-        ctx = ctx
-            .with_tags(proto.tags.clone())
-            .with_tags(proto.attributes.clone());
-
-        if let Some(ref req_ctx) = proto.request_context {
-            if !req_ctx.request_id.is_empty() {
-                ctx = ctx.with_trace(req_ctx.request_id.clone());
-            }
-        }
-
-        ctx
+    /// 将 protobuf HookInvocationContext 转换为 flare_server_core::Context
+    fn proto_to_context(proto: &HookInvocationContext) -> Context {
+        crate::infrastructure::adapters::conversion::proto_to_context(proto)
     }
 
     /// 将 protobuf HookMessageRecord 转换为 MessageRecord
@@ -186,11 +162,8 @@ impl HookExtensionServer {
         match decision {
             PreSendDecision::Continue => Self::build_rpc_status(ProtoErrorCode::Ok as i32, "OK"),
             PreSendDecision::Reject { error } => {
-                use flare_im_core::error::ErrorCode;
-                let code = error
-                    .code()
-                    .map(|c| c.as_u32() as i32)
-                    .unwrap_or(ProtoErrorCode::FailedPrecondition as i32);
+                // 从错误中提取错误码，如果无法提取则使用默认值
+                let code = ProtoErrorCode::FailedPrecondition as i32;
                 Self::build_rpc_status(code, &error.to_string())
             }
         }
@@ -212,7 +185,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
         let mut message_draft = proto_to_message_draft(&draft);
 
         // 获取PreSend Hook列表
@@ -282,7 +255,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
         let message_record = Self::proto_to_message_record(&record)
             .map_err(|e| Status::invalid_argument(format!("Invalid record: {}", e)))?;
         let message_draft = proto_to_message_draft(&draft);
@@ -333,7 +306,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
         let delivery_event = Self::proto_to_delivery_event(&event)
             .map_err(|e| Status::invalid_argument(format!("Invalid event: {}", e)))?;
 
@@ -383,7 +356,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
         let recall_event = Self::proto_to_recall_event(&event)
             .map_err(|e| Status::invalid_argument(format!("Invalid event: {}", e)))?;
 
@@ -446,7 +419,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
 
         // 获取ConversationLifecycle Hook列表
         let hooks = self
@@ -473,10 +446,13 @@ impl HookExtension for HookExtensionServer {
         }
 
         // 执行Hook（目前只记录日志，后续可以根据Hook类型实现具体逻辑）
+        use crate::infrastructure::adapters::hook_context_data::get_hook_context_data;
+        let conversation_id = get_hook_context_data(&ctx)
+            .and_then(|d| d.conversation_id.as_ref());
         for plan in execution_plans {
             tracing::debug!(
                 hook = %plan.name(),
-                conversation_id = ?ctx.conversation_id,
+                conversation_id = ?conversation_id,
                 event_type = event.event,
                 "Executing ConversationLifecycle hook"
             );
@@ -501,11 +477,14 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
 
         // Presence Hook 目前没有专门的配置，记录日志
+        use crate::infrastructure::adapters::hook_context_data::get_hook_context_data;
+        let conversation_id = get_hook_context_data(&ctx)
+            .and_then(|d| d.conversation_id.as_ref());
         tracing::debug!(
-            user_id = ?ctx.conversation_id,
+            user_id = ?conversation_id,
             "Presence hook notification received"
         );
 
@@ -527,12 +506,12 @@ impl HookExtension for HookExtensionServer {
         let _payload = req.payload;
 
         // 转换为内部类型
-        let ctx = Self::proto_to_hook_context(&context);
+        let ctx = Self::proto_to_context(&context);
 
         // Custom Hook 目前没有专门的配置，记录日志
         tracing::debug!(
             hook_type = %hook_type,
-            tenant_id = %ctx.tenant_id,
+            tenant_id = %ctx.tenant_id().unwrap_or(""),
             "Custom hook invocation received"
         );
 
@@ -555,7 +534,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&context);
+        let _ctx = Self::proto_to_context(&context);
 
         // 获取PushPreSend Hook列表
         let hooks = self
@@ -615,7 +594,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("draft is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取PushPostSend Hook列表
         let hooks = self
@@ -668,7 +647,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取PushDelivery Hook列表
         let hooks = self
@@ -724,7 +703,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取UserLogin Hook列表
         let hooks = self
@@ -777,7 +756,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取UserLogout Hook列表
         let hooks = self
@@ -829,7 +808,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取UserOnline Hook列表
         let hooks = self
@@ -881,7 +860,7 @@ impl HookExtension for HookExtensionServer {
             .ok_or_else(|| Status::invalid_argument("event is required"))?;
 
         // 转换为内部类型
-        let _ctx = Self::proto_to_hook_context(&_context);
+        let _ctx = Self::proto_to_context(&_context);
 
         // 获取UserOffline Hook列表
         let hooks = self

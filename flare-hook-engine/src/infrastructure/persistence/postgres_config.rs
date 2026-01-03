@@ -3,14 +3,13 @@
 //! 提供Hook配置的数据库存储和查询能力
 
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{FromRow, PgPool, Row};
+use sqlx::{FromRow, PgPool};
 
 use crate::domain::model::{HookConfig, HookConfigItem, HookSelectorConfig, HookTransportConfig};
 
@@ -95,61 +94,6 @@ impl PostgresHookConfigRepository {
         Ok(Self {
             pool: Arc::new(pool),
         })
-    }
-
-    /// 初始化数据库表
-    pub async fn init_schema(&self) -> Result<()> {
-        // sqlx 不支持在一个 prepared statement 中执行多个命令，需要分开执行
-
-        // 创建表
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS hook_configs (
-                id BIGSERIAL PRIMARY KEY,
-                tenant_id TEXT,
-                hook_type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                version TEXT,
-                description TEXT,
-                enabled BOOLEAN NOT NULL DEFAULT true,
-                priority INTEGER NOT NULL DEFAULT 100,
-                group_name TEXT,
-                timeout_ms BIGINT NOT NULL DEFAULT 1000,
-                max_retries INTEGER NOT NULL DEFAULT 0,
-                error_policy TEXT NOT NULL DEFAULT 'fail_fast',
-                require_success BOOLEAN NOT NULL DEFAULT true,
-                selector_config JSONB NOT NULL DEFAULT '{}',
-                transport_config JSONB NOT NULL,
-                metadata JSONB,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                created_by TEXT,
-                
-                -- 唯一约束：同一租户下同一类型的Hook名称唯一
-                UNIQUE(tenant_id, hook_type, name)
-            )
-            "#,
-        )
-        .execute(&*self.pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to create hook_configs table: {}", e))?;
-
-        // 创建索引（分开执行）
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_hook_configs_tenant_type ON hook_configs(tenant_id, hook_type, enabled)"
-        )
-        .execute(&*self.pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to create index idx_hook_configs_tenant_type: {}", e))?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_hook_configs_priority ON hook_configs(priority)",
-        )
-        .execute(&*self.pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to create index idx_hook_configs_priority: {}", e))?;
-
-        Ok(())
     }
 
     /// 加载所有启用的Hook配置

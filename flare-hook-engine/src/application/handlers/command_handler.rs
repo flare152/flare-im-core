@@ -9,8 +9,9 @@ use anyhow::Result;
 use crate::domain::model::HookExecutionPlan;
 use crate::domain::service::HookOrchestrationService;
 use flare_im_core::{
-    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+    DeliveryEvent, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
+use flare_server_core::context::Context;
 
 /// Hook命令处理器（编排层）
 pub struct HookCommandHandler {
@@ -27,7 +28,7 @@ impl HookCommandHandler {
     /// 处理PreSend Hook命令
     pub async fn handle_pre_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         draft: &mut MessageDraft,
         hooks: Vec<HookExecutionPlan>,
     ) -> Result<PreSendDecision> {
@@ -39,7 +40,7 @@ impl HookCommandHandler {
     /// 处理PostSend Hook命令
     pub async fn handle_post_send(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         record: &MessageRecord,
         draft: &MessageDraft,
         hooks: Vec<HookExecutionPlan>,
@@ -52,7 +53,7 @@ impl HookCommandHandler {
     /// 处理Delivery Hook命令
     pub async fn handle_delivery(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &DeliveryEvent,
         hooks: Vec<HookExecutionPlan>,
     ) -> Result<()> {
@@ -64,7 +65,7 @@ impl HookCommandHandler {
     /// 处理Recall Hook命令
     pub async fn handle_recall(
         &self,
-        ctx: &HookContext,
+        ctx: &Context,
         event: &RecallEvent,
         hooks: Vec<HookExecutionPlan>,
     ) -> Result<PreSendDecision> {

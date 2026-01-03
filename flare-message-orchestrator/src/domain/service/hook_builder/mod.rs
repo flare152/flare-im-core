@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
+use flare_im_core::hooks::{MessageDraft, MessageRecord};
+use flare_im_core::hooks::hook_context_data::{set_hook_context_data, HookContextData};
+use flare_server_core::context::{Context, ContextExt};
 use flare_proto::common::Message;
 use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::storage::StoreMessageRequest;
@@ -36,66 +38,90 @@ fn extract_client_message_id(message: &Message) -> Option<String> {
 pub fn build_hook_context(
     request: &StoreMessageRequest,
     default_tenant: Option<&String>,
-) -> HookContext {
-    let mut ctx = HookContext::new(tenant_id(&request.tenant, default_tenant));
-
-    ctx.conversation_id = non_empty(request.conversation_id.clone());
-    ctx.tags = request.tags.clone();
+) -> Context {
+    let tenant_id_str = tenant_id(&request.tenant, default_tenant);
+    
+    // 创建 Context
+    let request_id = request
+        .context
+        .as_ref()
+        .map(|c| c.request_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    
+    let request_id_clone = request_id.clone();
+    let mut ctx = Context::with_request_id(request_id);
+    
+    // 设置租户ID
+    if !tenant_id_str.is_empty() {
+        ctx = ctx.with_tenant_id(tenant_id_str);
+    }
+    
+    // 创建 HookContextData
+    let mut hook_data = HookContextData::new();
+    hook_data.conversation_id = non_empty(request.conversation_id.clone());
+    hook_data.tags = request.tags.clone();
 
     if let Some(RequestContext {
-        request_id,
+        request_id: _,
         trace,
-        actor: _,
+        actor,
         device,
         channel: _,
         user_agent,
         attributes,
     }) = request.context.as_ref()
     {
-        ctx.request_metadata
-            .insert("request_id".into(), request_id.clone());
+        hook_data.request_metadata
+            .insert("request_id".into(), request_id_clone);
 
         if let Some(trace_ctx) = trace.as_ref() {
-            ctx.request_metadata
+            hook_data.request_metadata
                 .insert("span_id".into(), trace_ctx.span_id.clone());
             if !trace_ctx.trace_id.is_empty() {
-                ctx.trace_id = Some(trace_ctx.trace_id.clone());
+                ctx = ctx.with_trace_id(trace_ctx.trace_id.clone());
             }
-            // 将 trace tags 添加到 ctx.tags
+            // 将 trace tags 添加到 hook_data.tags
             for (k, v) in &trace_ctx.tags {
-                ctx.tags.insert(k.clone(), v.clone());
+                hook_data.tags.insert(k.clone(), v.clone());
             }
         }
 
         if let Some(device_ctx) = device.as_ref() {
-            ctx.request_metadata
+            hook_data.request_metadata
                 .insert("client_ip".into(), device_ctx.ip_address.clone());
         }
 
         if !user_agent.is_empty() {
-            ctx.request_metadata
+            hook_data.request_metadata
                 .insert("user_agent".into(), user_agent.clone());
         }
 
-        // 将 attributes 添加到 ctx.tags
+        // 将 attributes 添加到 hook_data.tags
         for (k, v) in attributes {
-            ctx.tags.insert(k.clone(), v.clone());
+            hook_data.tags.insert(k.clone(), v.clone());
+        }
+        
+        // 设置用户ID（从 actor 中提取）
+        if let Some(actor_ctx) = actor.as_ref() {
+            if actor_ctx.r#type == flare_proto::common::ActorType::User as i32 {
+                ctx = ctx.with_user_id(actor_ctx.actor_id.clone());
+            }
         }
     }
 
     if let Some(tenant) = request.tenant.as_ref() {
-        ctx.attributes
+        hook_data.attributes
             .entry("tenant_business_type".into())
             .or_insert(tenant.business_type.clone());
-        ctx.attributes
+        hook_data.attributes
             .entry("tenant_environment".into())
             .or_insert(tenant.environment.clone());
-        ctx.attributes.extend(tenant.attributes.clone());
+        hook_data.attributes.extend(tenant.attributes.clone());
     }
 
     if let Some(message) = request.message.as_ref() {
         let message_type_label = detect_message_type(message);
-        ctx.sender_id = non_empty(message.sender_id.clone());
+        hook_data.sender_id = non_empty(message.sender_id.clone());
         // conversation_type 是 i32 枚举，转换为字符串
         let conversation_type_str =
             match flare_proto::common::ConversationType::try_from(message.conversation_type) {
@@ -104,13 +130,18 @@ pub fn build_hook_context(
                 Ok(flare_proto::common::ConversationType::Channel) => "channel".to_string(),
                 _ => "unknown".to_string(),
             };
-        ctx.conversation_type = non_empty(conversation_type_str.clone());
-        ctx.message_type = Some(message_type_label.to_string());
+        hook_data.conversation_type = non_empty(conversation_type_str.clone());
+        hook_data.message_type = Some(message_type_label.to_string());
+        
+        // 设置会话ID
+        if let Some(conv_id) = &hook_data.conversation_id {
+            ctx = ctx.with_session_id(conv_id.clone());
+        }
 
-        ctx.attributes
+        hook_data.attributes
             .entry("business_type".into())
             .or_insert(message.business_type.clone());
-        ctx.attributes
+        hook_data.attributes
             .entry("conversation_type".into())
             .or_insert(conversation_type_str.clone());
 
@@ -118,30 +149,35 @@ pub fn build_hook_context(
         // 单聊：使用 receiver_id
         if message.conversation_type == flare_proto::common::ConversationType::Single as i32 {
             if !message.receiver_id.is_empty() {
-                ctx.attributes
+                hook_data.attributes
                     .entry("receiver_id".into())
                     .or_insert(message.receiver_id.clone());
             }
         }
         // 群聊/频道：使用 channel_id
         if !message.channel_id.is_empty() {
-            ctx.attributes
+            hook_data.attributes
                 .entry("channel_id".into())
                 .or_insert(message.channel_id.clone());
         }
         if let Some(client_msg_id) = extract_client_message_id(message) {
-            ctx.attributes
+            hook_data.attributes
                 .entry("client_message_id".into())
                 .or_insert(client_msg_id);
         }
-        ctx.attributes
+        hook_data.attributes
             .entry("message_type_label".into())
             .or_insert(message_type_label.to_string());
     }
 
-    ctx.attributes
+    hook_data.attributes
         .entry("sync".into())
         .or_insert(request.sync.to_string());
+    
+    let hook_data = hook_data.occurred_now();
+
+    // 将 HookContextData 存储到 Context
+    ctx = set_hook_context_data(ctx, hook_data);
 
     ctx
 }
@@ -213,8 +249,10 @@ pub fn build_draft_from_request(request: &StoreMessageRequest) -> anyhow::Result
             Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
             // 富交互类型（注意：Vote、Task、Schedule、Announcement 在新版 protobuf 中已移除）
             Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
-            Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
+            // Quote 已废弃：现在通过 Message.quote 字段处理
             Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
+            Some(flare_proto::common::message_content::Content::Thread(_)) => "thread",
+            Some(flare_proto::common::message_content::Content::Operation(_)) => "operation",
             None => "unspecified",
         })
         .unwrap_or("unspecified");
@@ -373,10 +411,12 @@ pub fn build_message_record(
             Some(flare_proto::common::message_content::Content::Custom(_)) => "application/custom",
             Some(flare_proto::common::message_content::Content::Forward(_)) => "forward",
             Some(flare_proto::common::message_content::Content::Typing(_)) => "typing",
-            // 富交互类型（注意：这些类型在新版 protobuf 中可能已移除）
+            Some(flare_proto::common::message_content::Content::Thread(_)) => "thread",
+            
             Some(flare_proto::common::message_content::Content::SystemEvent(_)) => "system_event",
-            Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
+            // Quote 已废弃：现在通过 Message.quote 字段处理
             Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
+            Some(flare_proto::common::message_content::Content::Operation(_)) => "operation",
             None => "application/unknown",
         })
         .unwrap_or("application/unknown");
@@ -410,40 +450,50 @@ pub fn draft_from_submission(submission: &MessageSubmission) -> anyhow::Result<M
     build_draft_from_request(&submission.kafka_payload)
 }
 
-pub fn merge_context(original: &HookContext, mut updated: HookContext) -> HookContext {
-    if updated.trace_id.is_none() {
-        updated.trace_id = original.trace_id.clone();
+pub fn merge_context(original: &Context, updated: Context) -> Context {
+    use flare_im_core::hooks::hook_context_data::{get_hook_context_data, set_hook_context_data};
+    
+    let original_data = get_hook_context_data(original).cloned().unwrap_or_default();
+    let mut updated_data = get_hook_context_data(&updated).cloned().unwrap_or_default();
+    
+    // 合并 trace_id（如果 updated 没有）
+    let mut merged_ctx = updated;
+    if merged_ctx.trace_id().is_empty() && !original.trace_id().is_empty() {
+        merged_ctx = merged_ctx.with_trace_id(original.trace_id().to_string());
     }
-    if updated.sender_id.is_none() {
-        updated.sender_id = original.sender_id.clone();
+    
+    // 合并 HookContextData
+    if updated_data.sender_id.is_none() {
+        updated_data.sender_id = original_data.sender_id.clone();
     }
-    if updated.conversation_type.is_none() {
-        updated.conversation_type = original.conversation_type.clone();
+    if updated_data.conversation_type.is_none() {
+        updated_data.conversation_type = original_data.conversation_type.clone();
     }
-    if updated.message_type.is_none() {
-        updated.message_type = original.message_type.clone();
+    if updated_data.message_type.is_none() {
+        updated_data.message_type = original_data.message_type.clone();
     }
 
-    if updated.tags.is_empty() {
-        updated.tags = original.tags.clone();
+    if updated_data.tags.is_empty() {
+        updated_data.tags = original_data.tags.clone();
     }
 
-    if updated.attributes.is_empty() {
-        updated.attributes = original.attributes.clone();
+    if updated_data.attributes.is_empty() {
+        updated_data.attributes = original_data.attributes.clone();
     } else {
-        for (key, value) in &original.attributes {
-            updated
+        for (key, value) in &original_data.attributes {
+            updated_data
                 .attributes
                 .entry(key.clone())
                 .or_insert(value.clone());
         }
     }
 
-    if updated.request_metadata.is_empty() {
-        updated.request_metadata = original.request_metadata.clone();
+    if updated_data.request_metadata.is_empty() {
+        updated_data.request_metadata = original_data.request_metadata.clone();
     }
 
-    updated
+    // 将合并后的 HookContextData 存储到 Context
+    set_hook_context_data(merged_ctx, updated_data)
 }
 
 fn detect_message_type(message: &Message) -> &'static str {
@@ -484,21 +534,22 @@ fn detect_message_type(message: &Message) -> &'static str {
         Ok(MessageType::Notification) => "notification",
         // 功能消息类型
         Ok(MessageType::Typing) => "typing",
-        Ok(MessageType::Recall) => "recall",
-        Ok(MessageType::Read) => "read",
-        Ok(MessageType::Forward) => "forward",
+        Ok(MessageType::Operation) => "operation", // 统一操作类型（包含 recall/read/edit 等）
+        Ok(MessageType::MergeForward) => "forward",
         // 业务扩展消息类型
         Ok(MessageType::Vote) => "vote",
         Ok(MessageType::Task) => "task",
         Ok(MessageType::Schedule) => "schedule",
         Ok(MessageType::Announcement) => "announcement",
         // 扩展消息类型
-        Ok(MessageType::Quote) => "quote",
+        // MessageType::Quote 已废弃：现在通过 Message.quote 字段处理
         Ok(MessageType::LinkCard) => "link_card",
         Ok(MessageType::MergeForward) => "merge_forward",
         Ok(MessageType::MiniProgram) => "mini_program",
         // 系统消息类型
         Ok(MessageType::SystemEvent) => "system_event",
+        // Thread 类型（如果存在）
+        Ok(MessageType::Thread) => "thread",
         // 未知或错误情况
         Ok(MessageType::Unspecified) | Err(_) => {
             // 从 MessageContent 推断类型
@@ -520,8 +571,10 @@ fn detect_message_type(message: &Message) -> &'static str {
                     Some(flare_proto::common::message_content::Content::SystemEvent(_)) => {
                         "system_event"
                     }
-                    Some(flare_proto::common::message_content::Content::Quote(_)) => "quote",
+                    // Quote 已废弃：现在通过 Message.quote 字段处理
                     Some(flare_proto::common::message_content::Content::LinkCard(_)) => "link_card",
+                    Some(flare_proto::common::message_content::Content::Thread(_)) => "thread",
+                    Some(flare_proto::common::message_content::Content::Operation(_)) => "operation",
                     None => "unknown",
                 }
             } else {

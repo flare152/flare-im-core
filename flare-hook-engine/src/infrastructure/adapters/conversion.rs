@@ -6,19 +6,27 @@ use prost_types::Timestamp;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use flare_im_core::{
-    DeliveryEvent, HookContext, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
+    DeliveryEvent, MessageDraft, MessageRecord, PreSendDecision, RecallEvent,
 };
 use flare_proto::common::{RequestContext, TenantContext};
 use flare_proto::hooks::{
     HookDeliveryEvent, HookInvocationContext, HookMessageDraft, HookMessageRecord, HookRecallEvent,
     PreSendHookResponse, RecallHookResponse,
 };
+use flare_server_core::context::Context;
+use crate::infrastructure::adapters::hook_context_data::{
+    HookContextData, set_hook_context_data,
+};
 
-/// 将 HookContext 转换为 HookInvocationContext
-pub fn hook_context_to_proto(ctx: &HookContext) -> HookInvocationContext {
+/// 将 flare_server_core::Context 转换为 HookInvocationContext
+pub fn context_to_proto(ctx: &Context) -> HookInvocationContext {
+    use crate::infrastructure::adapters::hook_context_data::get_hook_context_data;
+
+    let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
+
     HookInvocationContext {
         request_context: Some(RequestContext {
-            request_id: ctx.trace_id.clone().unwrap_or_default(),
+            request_id: ctx.request_id().to_string(),
             trace: None,
             actor: None,
             device: None,
@@ -26,25 +34,27 @@ pub fn hook_context_to_proto(ctx: &HookContext) -> HookInvocationContext {
             user_agent: String::new(),
             attributes: std::collections::HashMap::new(),
         }),
-        tenant: Some(TenantContext {
-            tenant_id: ctx.tenant_id.clone(),
+        tenant: ctx.tenant_id().map(|tid| TenantContext {
+            tenant_id: tid.to_string(),
             business_type: String::new(),
             environment: String::new(),
             organization_id: String::new(),
             labels: std::collections::HashMap::new(),
             attributes: std::collections::HashMap::new(),
         }),
-        conversation_id: ctx.conversation_id.clone().unwrap_or_default(),
-        conversation_type: ctx.conversation_type.clone().unwrap_or_default(),
-        corridor: ctx
+        conversation_id: hook_data.conversation_id.clone().unwrap_or_default(),
+        conversation_type: hook_data.conversation_type.clone().unwrap_or_default(),
+        corridor: hook_data
             .attributes
             .get("corridor")
             .cloned()
             .unwrap_or_else(|| "messaging".to_string()),
-        tags: ctx.tags.clone(),
-        attributes: ctx.attributes.clone(),
+        tags: hook_data.tags.clone(),
+        attributes: hook_data.attributes.clone(),
     }
 }
+
+// 使用 Context 和 HookContextData 进行转换
 
 /// 将 MessageDraft 转换为 HookMessageDraft
 pub fn message_draft_to_proto(draft: &MessageDraft) -> HookMessageDraft {
@@ -89,6 +99,7 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
         source: 1,
         seq: 0,
         timestamp: Some(ts.clone()),
+        quote: None, // 从数据库读取：quote 可能为空（旧数据）
         conversation_type: record
             .conversation_type
             .as_deref()
@@ -122,6 +133,8 @@ pub fn message_record_to_proto(record: &MessageRecord) -> HookMessageRecord {
         read_by: vec![],
         reactions: vec![],
         edit_history: vec![],
+        current_edit_version: 0, // 未编辑
+        last_edited_at: None,    // 未编辑
         tenant: None,
         audit: None,
         tags: vec![],
@@ -220,4 +233,58 @@ pub fn timestamp_to_system_time(ts: &Timestamp) -> SystemTime {
     UNIX_EPOCH
         + std::time::Duration::from_secs(ts.seconds as u64)
         + std::time::Duration::from_nanos(ts.nanos as u64)
+}
+
+/// 将 protobuf HookInvocationContext 转换为 flare_server_core::Context
+pub fn proto_to_context(proto: &HookInvocationContext) -> Context {
+    let request_id = proto
+        .request_context
+        .as_ref()
+        .map(|r| r.request_id.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let mut ctx = Context::with_request_id(request_id);
+
+    // 设置租户ID
+    if let Some(tenant) = &proto.tenant {
+        if !tenant.tenant_id.is_empty() {
+            ctx = ctx.with_tenant_id(tenant.tenant_id.clone());
+        }
+    }
+
+    // 设置 trace_id（从 request_context 中提取）
+    if let Some(req_ctx) = &proto.request_context {
+        if !req_ctx.request_id.is_empty() {
+            ctx = ctx.with_trace_id(req_ctx.request_id.clone());
+        }
+    }
+
+    // 设置会话ID（从 conversation_id 中提取）
+    if !proto.conversation_id.is_empty() {
+        ctx = ctx.with_session_id(proto.conversation_id.clone());
+    }
+
+    // 创建 HookContextData 并存储到 Context
+    let hook_data = HookContextData {
+        conversation_id: if proto.conversation_id.is_empty() {
+            None
+        } else {
+            Some(proto.conversation_id.clone())
+        },
+        conversation_type: if proto.conversation_type.is_empty() {
+            None
+        } else {
+            Some(proto.conversation_type.clone())
+        },
+        message_type: None,
+        sender_id: None,
+        tags: proto.tags.clone(),
+        attributes: proto.attributes.clone(),
+        request_metadata: std::collections::HashMap::new(),
+        occurred_at: None,
+    };
+
+    ctx = set_hook_context_data(ctx, hook_data);
+
+    ctx
 }

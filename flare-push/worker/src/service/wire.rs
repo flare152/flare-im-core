@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 
 use crate::application::handlers::PushCommandHandler;
 use crate::config::PushWorkerConfig;
@@ -132,7 +132,7 @@ pub async fn initialize(
             metrics.clone(),
         )
         .await
-        .context("Failed to create Push Worker consumer")?,
+        .with_context(|| "Failed to create Push Worker consumer")?,
     );
 
     tracing::info!(

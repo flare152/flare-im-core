@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use uuid::Uuid;
 
 use crate::application::handlers::{
@@ -17,13 +17,11 @@ use crate::domain::repository::{ConnectionQuery, SignalingGateway};
 use crate::domain::service::{GatewayService, PushDomainService, ConversationDomainService, MessageDomainService};
 use crate::infrastructure::auth::TokenAuthenticator;
 use crate::infrastructure::connection_query::ManagerConnectionQuery;
-use crate::infrastructure::messaging::ack_sender::AckSender;
 use crate::infrastructure::signaling::grpc::GrpcSignalingGateway;
 use crate::infrastructure::{AckPublisher, GrpcAckPublisher};
 use crate::interface::handler::LongConnectionHandler;
 use crate::interface::grpc::handler::AccessGatewayHandler;
 use crate::service::service_manager::PortConfig;
-use tokio::sync::Mutex;
 
 // 注意：最新的 Flare 模式不再需要在 FlareServerBuilder 中配置中间件
 // 中间件是客户端特性，服务端通过 ServerEventHandler 处理消息
@@ -170,6 +168,7 @@ pub async fn initialize(
                     default_tenant_id,
                     default_svid,
                 )
+                .with_connection_manager(Arc::new(tokio::sync::Mutex::new(Some(connection_manager.clone() as Arc<dyn flare_core::server::connection::ConnectionManagerTrait>))))
             )
         } else {
             // 降级：使用服务名称（如果没有配置服务发现）
@@ -206,12 +205,15 @@ pub async fn initialize(
         Some(router)
     };
 
+    let message_router_arc = message_router
+        .ok_or_else(|| anyhow::anyhow!("Message Router not configured"))?;
+    
     // 11. 构建连接处理器（提前构建，用于后续服务）
     let connection_handler = Arc::new(LongConnectionHandler::new_with_placeholders(
         signaling_gateway.clone(),
         gateway_id.clone(),
         ack_publisher.clone(),
-        message_router.clone(),
+        Some(message_router_arc.clone()),
         metrics.clone(),
     ));
 
@@ -250,14 +252,10 @@ pub async fn initialize(
         metrics.clone(),
     ));
 
-    let ack_sender = Arc::new(AckSender::new(Arc::new(Mutex::new(None))));
     let message_handler_app = Arc::new(MessageHandler::new(
         message_domain_service,
-        message_router.clone(),
-        ack_sender.clone(),
+        message_router_arc.clone(),
         ack_publisher.clone(),
-        session_domain_service.clone(),
-        None, // conversation_service_client
         gateway_id.clone(),
     ));
 
@@ -266,7 +264,7 @@ pub async fn initialize(
         signaling_gateway.clone(),
         gateway_id.clone(),
         ack_publisher.clone(),
-        message_router.clone(),
+        Some(message_router_arc.clone()),
         metrics.clone(),
         connection_handler_app.clone(),
         message_handler_app.clone(),
@@ -302,7 +300,7 @@ pub async fn initialize(
         access_config.clone(),
     )
     .await
-    .context("Failed to build long connection server")?;
+    .with_context(|| "Failed to build long connection server")?;
 
     info!("Long connection server built successfully");
 
@@ -324,7 +322,7 @@ pub async fn initialize(
         runtime_config.server.address, port_config.grpc_port
     )
     .parse::<std::net::SocketAddr>()
-    .context("Invalid gRPC address")?;
+    .with_context(|| "Invalid gRPC address")?;
 
     info!("Application context initialized successfully");
     Ok(ApplicationContext {

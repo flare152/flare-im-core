@@ -10,19 +10,16 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use flare_im_core::utils::{datetime_to_timestamp, timestamp_to_datetime};
-use flare_proto::common::{
-    ContentType, Message, MessageOperation, MessageReadRecord, MessageSource, MessageStatus,
-    MessageType, Reaction, VisibilityStatus,
-};
+use flare_proto::common::{Message, MessageStatus, VisibilityStatus};
 use prost::Message as ProstMessage;
-use prost_types::Timestamp;
 use serde_json::{Value, from_value};
 use sqlx::{Pool, Postgres, Row, postgres::PgPoolOptions};
 
 use crate::config::StorageReaderConfig;
 use crate::domain::model::MessageUpdate;
 use crate::domain::repository::{MessageStorage, VisibilityStorage};
-use crate::infrastructure::cache::RedisMessageCache;
+use crate::infrastructure::persistence::redis_cache::RedisMessageCache;
+use crate::infrastructure::persistence::helpers::*;
 
 /// PostgreSQL 消息存储实现（带 Redis 缓存）
 pub struct PostgresMessageStorage {
@@ -107,9 +104,13 @@ impl PostgresMessageStorage {
     }
 
     /// 确保必要的索引存在（用于优化查询性能）
+    /// 注意：索引定义与 init.sql 保持一致
     async fn ensure_indexes(&self) -> Result<()> {
-        // 索引列表（与 Writer 保持一致，但使用 IF NOT EXISTS 避免冲突）
         let indexes = vec![
+            (
+                "idx_messages_server_id_unique",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_server_id_unique ON messages(server_id)",
+            ),
             (
                 "idx_messages_conversation_id",
                 "CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)",
@@ -119,36 +120,60 @@ impl PostgresMessageStorage {
                 "CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)",
             ),
             (
-                "idx_messages_session_timestamp",
-                "CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages(conversation_id, timestamp DESC)",
+                "idx_messages_conversation_timestamp",
+                "CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversation_id, timestamp DESC)",
             ),
             (
-                "idx_messages_id_unique",
-                "CREATE INDEX IF NOT EXISTS idx_messages_server_id_unique ON messages(server_id)",
+                "idx_messages_client_msg_id",
+                "CREATE INDEX IF NOT EXISTS idx_messages_client_msg_id ON messages(client_msg_id) WHERE client_msg_id IS NOT NULL",
+            ),
+            (
+                "idx_messages_sender_client_msg_id",
+                "CREATE INDEX IF NOT EXISTS idx_messages_sender_client_msg_id ON messages(sender_id, client_msg_id) WHERE client_msg_id IS NOT NULL",
             ),
             (
                 "idx_messages_business_type",
-                "CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type)",
+                "CREATE INDEX IF NOT EXISTS idx_messages_business_type ON messages(business_type) WHERE business_type IS NOT NULL",
             ),
             (
                 "idx_messages_message_type",
                 "CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type)",
             ),
             (
-                "idx_messages_status",
-                "CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status)",
+                "idx_messages_fsm_state",
+                "CREATE INDEX IF NOT EXISTS idx_messages_fsm_state ON messages(status)",
             ),
             (
-                "idx_messages_is_recalled",
-                "CREATE INDEX IF NOT EXISTS idx_messages_is_recalled ON messages(is_recalled)",
+                "idx_messages_fsm_state_changed_at",
+                "CREATE INDEX IF NOT EXISTS idx_messages_fsm_state_changed_at ON messages(fsm_state_changed_at) WHERE fsm_state_changed_at IS NOT NULL",
             ),
             (
-                "idx_messages_session_seq",
-                "CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(conversation_id, seq)",
+                "idx_messages_current_edit_version",
+                "CREATE INDEX IF NOT EXISTS idx_messages_current_edit_version ON messages(current_edit_version) WHERE current_edit_version > 0",
             ),
             (
-                "idx_messages_timestamp",
-                "CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC)",
+                "idx_messages_last_edited_at",
+                "CREATE INDEX IF NOT EXISTS idx_messages_last_edited_at ON messages(last_edited_at) WHERE last_edited_at IS NOT NULL",
+            ),
+            (
+                "idx_messages_conversation_seq",
+                "CREATE INDEX IF NOT EXISTS idx_messages_conversation_seq ON messages(conversation_id, seq) WHERE seq IS NOT NULL",
+            ),
+            (
+                "idx_messages_seq",
+                "CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(seq) WHERE seq IS NOT NULL",
+            ),
+            (
+                "idx_messages_expire_at",
+                "CREATE INDEX IF NOT EXISTS idx_messages_expire_at ON messages(expire_at) WHERE expire_at IS NOT NULL",
+            ),
+            (
+                "idx_messages_source",
+                "CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source)",
+            ),
+            (
+                "idx_messages_tenant_id",
+                "CREATE INDEX IF NOT EXISTS idx_messages_tenant_id ON messages(tenant_id) WHERE tenant_id IS NOT NULL",
             ),
         ];
 
@@ -206,7 +231,6 @@ impl PostgresMessageStorage {
         let _updated_at: Option<DateTime<Utc>> = row.get("updated_at");
         let visibility: Option<Value> = row.get("visibility");
         let read_by: Option<Value> = row.get("read_by");
-        let operations: Option<Value> = row.get("operations");
 
         // 解析 content (MessageContent protobuf)
         let content_proto = content.and_then(|bytes| ProstMessage::decode(&bytes[..]).ok());
@@ -221,68 +245,11 @@ impl PostgresMessageStorage {
             }
         }
 
-        // 从 extra 中提取租户信息
-        let tenant = extra_map.get("tenant_id").map(|tenant_id| {
-            let mut labels = HashMap::new();
-            if let Some(labels_str) = extra_map.get("labels") {
-                if let Ok(labels_obj) = serde_json::from_str::<HashMap<String, String>>(labels_str)
-                {
-                    labels = labels_obj;
-                }
-            }
-            let mut tenant_attributes = HashMap::new();
-            if let Some(attrs_str) = extra_map.get("tenant_attributes") {
-                if let Ok(attrs_obj) = serde_json::from_str::<HashMap<String, String>>(attrs_str) {
-                    tenant_attributes = attrs_obj;
-                }
-            }
-            flare_proto::common::TenantContext {
-                tenant_id: tenant_id.clone(),
-                business_type: extra_map.get("business_type").cloned().unwrap_or_default(),
-                environment: extra_map.get("environment").cloned().unwrap_or_default(),
-                organization_id: extra_map
-                    .get("organization_id")
-                    .cloned()
-                    .unwrap_or_default(),
-                labels,
-                attributes: tenant_attributes,
-            }
-        });
-
-        // 从 extra 中提取其他字段
-        // receiver_id 已废弃，通过 conversation_id 确定接收者
-        let _conversation_type = extra_map.get("conversation_type").cloned().unwrap_or_default();
-        let source_str = extra_map.get("sender_type").cloned().unwrap_or_default();
-        let source = match source_str.as_str() {
-            "user" => MessageSource::User as i32,
-            "system" => MessageSource::System as i32,
-            "bot" => MessageSource::Bot as i32,
-            "admin" => MessageSource::Admin as i32,
-            _ => MessageSource::Unspecified as i32,
-        };
-
-        // 解析 tags
-        let tags: Vec<String> = extra_map
-            .get("tags")
-            .and_then(|tags_str| serde_json::from_str::<Vec<String>>(tags_str).ok())
-            .unwrap_or_default();
-
-        // 解析 attributes（从 extra 中提取，排除系统字段）
-        let mut attributes = HashMap::new();
-        for (k, v) in &extra_map {
-            if !matches!(
-                k.as_str(),
-                "tenant_id"
-                    | "business_id"
-                    | "receiver_id"
-                    | "conversation_type"
-                    | "sender_type"
-                    | "tags"
-                    | "seq"
-            ) {
-                attributes.insert(k.clone(), v.clone());
-            }
-        }
+        // 使用 helpers 模块中的函数解析 extra 字段
+        let tenant = parse_tenant_from_extra(&extra_map);
+        let source = parse_message_source_from_extra(&extra_map);
+        let tags = parse_tags_from_extra(&extra_map);
+        let attributes = parse_attributes_from_extra(&extra_map);
 
         // 解析 visibility
         let mut visibility_map = HashMap::new();
@@ -294,173 +261,12 @@ impl PostgresMessageStorage {
             }
         }
 
-        // 解析 read_by
-        let read_by_vec: Vec<MessageReadRecord> = read_by
-            .and_then(|v| {
-                // 尝试解析为 Vec<MessageReadRecord>
-                // 注意：需要从 JSON 转换为 protobuf 结构
-                from_value::<Vec<serde_json::Value>>(v)
-                    .ok()
-                    .and_then(|records| {
-                        let mut result = Vec::new();
-                        for record in records {
-                            if let (Some(user_id), read_at_opt, burned_at_opt) = (
-                                record.get("user_id").and_then(|v| v.as_str()),
-                                record.get("read_at"),
-                                record.get("burned_at"),
-                            ) {
-                                let read_at =
-                                    read_at_opt.and_then(|v| v.as_object()).and_then(|obj| {
-                                        let seconds = obj.get("seconds")?.as_i64()?;
-                                        let nanos = obj.get("nanos")?.as_i64()?;
-                                        Some(Timestamp {
-                                            seconds,
-                                            nanos: nanos as i32,
-                                        })
-                                    });
-                                let burned_at =
-                                    burned_at_opt.and_then(|v| v.as_object()).and_then(|obj| {
-                                        let seconds = obj.get("seconds")?.as_i64()?;
-                                        let nanos = obj.get("nanos")?.as_i64()?;
-                                        Some(Timestamp {
-                                            seconds,
-                                            nanos: nanos as i32,
-                                        })
-                                    });
-                                result.push(MessageReadRecord {
-                                    user_id: user_id.to_string(),
-                                    read_at,
-                                    burned_at,
-                                });
-                            }
-                        }
-                        Some(result)
-                    })
-            })
-            .unwrap_or_default();
+        // 使用 helpers 模块中的函数解析 read_by
+        let read_by_vec = parse_read_by_from_jsonb(read_by);
 
-        // 解析 operations（从 JSONB 转换为 protobuf）
-        let operations_vec: Vec<MessageOperation> = operations
-            .and_then(|v| {
-                // 尝试解析为 Vec<serde_json::Value>
-                from_value::<Vec<serde_json::Value>>(v)
-                    .ok()
-                    .and_then(|ops_json| {
-                        let mut result = Vec::new();
-                        for op_json in ops_json {
-                            if let (
-                                Some(operation_type),
-                                Some(target_message_id),
-                                Some(operator_id),
-                                timestamp_opt,
-                                show_notice,
-                                notice_text,
-                            ) = (
-                                op_json
-                                    .get("operation_type")
-                                    .and_then(|v| v.as_i64())
-                                    .map(|v| v as i32),
-                                op_json.get("target_message_id").and_then(|v| v.as_str()),
-                                op_json.get("operator_id").and_then(|v| v.as_str()),
-                                op_json.get("timestamp"),
-                                op_json
-                                    .get("show_notice")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(true),
-                                op_json
-                                    .get("notice_text")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(""),
-                            ) {
-                                let timestamp = timestamp_opt
-                                    .and_then(|ts_obj| ts_obj.as_object())
-                                    .and_then(|obj| {
-                                        let seconds = obj.get("seconds")?.as_i64()?;
-                                        let nanos = obj.get("nanos")?.as_i64()?;
-                                        Some(Timestamp {
-                                            seconds,
-                                            nanos: nanos as i32,
-                                        })
-                                    });
-
-                                // operation_data 是 oneof，需要根据实际类型解析
-                                // 这里暂时设为 None，后续可以根据 operation_type 解析具体类型
-                                let operation_data =
-                                    op_json.get("operation_data").and_then(|_od| {
-                                        // 简化：operation_data 的解析需要根据 operation_type 判断具体类型
-                                        // 这里暂时返回 None，后续可以完善
-                                        None
-                                    });
-
-                                // 解析 metadata（可选）
-                                let mut metadata = HashMap::new();
-                                if let Some(metadata_obj) =
-                                    op_json.get("metadata").and_then(|v| v.as_object())
-                                {
-                                    for (k, v) in metadata_obj {
-                                        if let Some(v_str) = v.as_str() {
-                                            metadata.insert(k.clone(), v_str.to_string());
-                                        }
-                                    }
-                                }
-
-                                result.push(MessageOperation {
-                                    operation_type,
-                                    target_message_id: target_message_id.to_string(),
-                                    operator_id: operator_id.to_string(),
-                                    timestamp,
-                                    show_notice,
-                                    notice_text: notice_text.to_string(),
-                                    target_user_id: op_json
-                                        .get("target_user_id")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string())
-                                        .unwrap_or_default(),
-                                    operation_data,
-                                    metadata,
-                                    extensions: Vec::new(), // 添加必填字段 (prost_types::Any)
-                                });
-                            }
-                        }
-                        Some(result)
-                    })
-            })
-            .unwrap_or_default();
-
-        // 转换 message_type
-        let message_type_enum = message_type
-            .as_deref()
-            .and_then(|s| match s {
-                "text" => Some(MessageType::Text as i32),
-                "image" => Some(MessageType::Image as i32),
-                "video" => Some(MessageType::Video as i32),
-                "audio" => Some(MessageType::Audio as i32),
-                "file" => Some(MessageType::File as i32),
-                "location" => Some(MessageType::Location as i32),
-                "card" => Some(MessageType::Card as i32),
-                "custom" => Some(MessageType::Custom as i32),
-                "notification" => Some(MessageType::Notification as i32),
-                "typing" => Some(MessageType::Typing as i32),
-                "recall" => Some(MessageType::Recall as i32),
-                "read" => Some(MessageType::Read as i32),
-                "forward" => Some(MessageType::Forward as i32),
-                _ => None,
-            })
-            .unwrap_or(MessageType::Unspecified as i32);
-
-        // 转换 content_type
-        let content_type_enum = content_type
-            .as_deref()
-            .and_then(|s| match s {
-                "text/plain" => Some(ContentType::PlainText as i32),
-                "text/html" => Some(ContentType::Html as i32),
-                "text/markdown" => Some(ContentType::Markdown as i32),
-                "application/json" => Some(ContentType::Json as i32),
-                _ => None,
-            })
-            .unwrap_or(ContentType::Unspecified as i32);
-
-        // 转换 status
+        // 使用 helpers 模块中的函数转换枚举类型
+        let message_type_enum = string_to_message_type(message_type.as_deref());
+        let content_type_enum = string_to_content_type(content_type.as_deref());
         let status_enum = match status.as_str() {
             "created" => MessageStatus::Created as i32,
             "sent" => MessageStatus::Sent as i32,
@@ -715,7 +521,7 @@ impl MessageStorage for PostgresMessageStorage {
             r#"
             SELECT timestamp
             FROM messages
-            WHERE id = $1
+            WHERE server_id = $1
             LIMIT 1
             "#,
         )
@@ -898,7 +704,7 @@ impl MessageStorage for PostgresMessageStorage {
         separated.push("updated_at = CURRENT_TIMESTAMP");
 
         // 添加 WHERE 子句
-        query.push(" WHERE id = ");
+        query.push(" WHERE server_id = ");
         query.push_bind(message_id);
 
         query
@@ -941,7 +747,7 @@ impl MessageStorage for PostgresMessageStorage {
             SET 
                 visibility = COALESCE(visibility, '{}'::jsonb) || $1::jsonb,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ANY($2)
+            WHERE server_id = ANY($2)
             "#,
         )
         .bind(serde_json::to_value(&vis_json)?)
@@ -1000,7 +806,7 @@ impl MessageStorage for PostgresMessageStorage {
         let mut query = sqlx::QueryBuilder::new(
             r#"
             SELECT 
-                id, conversation_id, client_msg_id, sender_id, content, timestamp,
+                server_id, conversation_id, client_msg_id, sender_id, content, timestamp,
                 extra, created_at, message_type, content_type, business_type,
                 status, is_recalled, recalled_at, is_burn_after_read, burn_after_seconds,
                 seq, updated_at, visibility, read_by, operations
@@ -1095,7 +901,7 @@ impl MessageStorage for PostgresMessageStorage {
             SET 
                 extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
+            WHERE server_id = $2
             "#,
         )
         .bind(serde_json::to_value(&extra_updates)?)
@@ -1149,7 +955,7 @@ impl VisibilityStorage for PostgresMessageStorage {
             SET 
                 visibility = COALESCE(visibility, '{}'::jsonb) || $1::jsonb,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
+            WHERE server_id = $2
             "#,
         )
         .bind(serde_json::to_value(&vis_json)?)
@@ -1170,7 +976,7 @@ impl VisibilityStorage for PostgresMessageStorage {
             r#"
             SELECT visibility->$1 as vis_status
             FROM messages
-            WHERE id = $2
+            WHERE server_id = $2
             "#,
         )
         .bind(user_id)
@@ -1215,7 +1021,7 @@ impl VisibilityStorage for PostgresMessageStorage {
 
         let rows = sqlx::query(
             r#"
-            SELECT id
+            SELECT server_id
             FROM messages
             WHERE conversation_id = $1
             AND (visibility->$2)::int = $3
@@ -1230,7 +1036,7 @@ impl VisibilityStorage for PostgresMessageStorage {
 
         let mut message_ids = Vec::new();
         for row in rows {
-            message_ids.push(row.get::<String, _>("id"));
+            message_ids.push(row.get::<String, _>("server_id"));
         }
 
         Ok(message_ids)

@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use flare_proto::media::media_service_client::MediaServiceClient;
-use flare_proto::{GetFileInfoRequest, RequestContext, TenantContext};
+use flare_proto::media::{media_service_client::MediaServiceClient, GetFileInfoRequest};
+use flare_server_core::context::{Context, ContextExt};
 use tonic::transport::Channel;
-use tracing::warn;
+use tracing::{warn, instrument};
 
 use crate::domain::model::MediaAttachmentMetadata;
 use crate::domain::repository::MediaAttachmentVerifier;
@@ -38,15 +38,58 @@ impl MediaAttachmentClient {
 
 #[async_trait]
 impl MediaAttachmentVerifier for MediaAttachmentClient {
-    async fn fetch_metadata(&self, file_ids: &[String]) -> Result<Vec<MediaAttachmentMetadata>> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        file_count = file_ids.len(),
+    ))]
+    async fn fetch_metadata(&self, ctx: &Context, file_ids: &[String]) -> Result<Vec<MediaAttachmentMetadata>> {
+        ctx.ensure_not_cancelled().map_err(|e| {
+            anyhow!("Request cancelled: {}", e)
+        })?;
         let mut client = self.ensure_client().await?;
         let mut result = Vec::with_capacity(file_ids.len());
+
+        // 从 Context 中提取 RequestContext 和 TenantContext（用于 protobuf 兼容性）
+        let request_context: flare_proto::common::RequestContext = ctx.request()
+            .cloned()
+            .map(|req_ctx| req_ctx.into())
+            .unwrap_or_else(|| {
+                let request_id = if ctx.request_id().is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    ctx.request_id().to_string()
+                };
+                flare_proto::common::RequestContext {
+                    request_id,
+                    trace: None,
+                    actor: None,
+                    device: None,
+                    channel: String::new(),
+                    user_agent: String::new(),
+                    attributes: std::collections::HashMap::new(),
+                }
+            });
+
+        let tenant: flare_proto::common::TenantContext = ctx.tenant()
+            .cloned()
+            .map(|t| t.into())
+            .or_else(|| {
+                ctx.tenant_id().map(|tenant_id| {
+                    let tenant: flare_server_core::context::TenantContext = 
+                        flare_server_core::context::TenantContext::new(tenant_id);
+                    tenant.into()
+                })
+            })
+            .unwrap_or_else(|| {
+                flare_proto::common::TenantContext::default()
+            });
 
         for file_id in file_ids {
             let request = GetFileInfoRequest {
                 file_id: file_id.clone(),
-                context: Some(RequestContext::default()),
-                tenant: Some(TenantContext::default()),
+                context: Some(request_context.clone()),
+                tenant: Some(tenant.clone()),
             };
 
             match client.get_file_info(tonic::Request::new(request)).await {

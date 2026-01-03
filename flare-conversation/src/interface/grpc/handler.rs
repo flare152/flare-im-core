@@ -16,7 +16,9 @@ use flare_proto::conversation::{
     UpdateCursorRequest, UpdateCursorResponse, UpdatePresenceRequest, UpdatePresenceResponse,
     UpdateConversationRequest, UpdateConversationResponse,
 };
+use flare_server_core::context::Context;
 use flare_server_core::error;
+use flare_im_core::utils::context::require_context;
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
@@ -62,6 +64,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<ConversationBootstrapRequest>,
     ) -> Result<Response<ConversationBootstrapResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let cursor_map = req.client_cursor_map;
 
@@ -74,12 +77,14 @@ impl ConversationService for ConversationGrpcHandler {
 
         let bootstrap = self
             .query_handler
-            .handle_conversation_bootstrap(ConversationBootstrapQuery {
-                user_id: req.user_id.clone(),
-                client_cursor: cursor_map.clone(),
-                include_recent,
-                recent_limit,
-            })
+            .handle_conversation_bootstrap(
+                &ctx,
+                ConversationBootstrapQuery {
+                    client_cursor: cursor_map.clone(),
+                    include_recent,
+                    recent_limit,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -99,18 +104,21 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<ListConversationsRequest>,
     ) -> Result<Response<ListConversationsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let (summaries, next_cursor, has_more) = self
             .query_handler
-            .handle_list_conversations(ListConversationsQuery {
-                user_id: req.user_id.clone(),
-                cursor: if req.cursor.is_empty() {
-                    None
-                } else {
-                    Some(req.cursor)
+            .handle_list_conversations(
+                &ctx,
+                ListConversationsQuery {
+                    cursor: if req.cursor.is_empty() {
+                        None
+                    } else {
+                        Some(req.cursor)
+                    },
+                    limit: if req.limit > 0 { req.limit } else { 20 },
                 },
-                limit: if req.limit > 0 { req.limit } else { 20 },
-            })
+            )
             .await
             .map_err(internal_error)?;
 
@@ -128,20 +136,24 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<SyncMessagesRequest>,
     ) -> Result<Response<SyncMessagesResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let result = self
             .query_handler
-            .handle_sync_messages(SyncMessagesQuery {
-                conversation_id: req.conversation_id.clone(),
-                since_ts: req.since_ts,
-                cursor: if req.cursor.is_empty() {
-                    None
-                } else {
-                    Some(req.cursor)
+            .handle_sync_messages(
+                &ctx,
+                SyncMessagesQuery {
+                    conversation_id: req.conversation_id.clone(),
+                    since_ts: req.since_ts,
+                    cursor: if req.cursor.is_empty() {
+                        None
+                    } else {
+                        Some(req.cursor)
+                    },
+                    limit: if req.limit > 0 { req.limit } else { 50 },
                 },
-                limit: if req.limit > 0 { req.limit } else { 50 },
-            })
+            )
             .await
             .map_err(|err| {
                 if err.to_string().contains("message provider not configured") {
@@ -165,13 +177,16 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<UpdateCursorRequest>,
     ) -> Result<Response<UpdateCursorResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         self.command_handler
-            .handle_update_cursor(UpdateCursorCommand {
-                user_id: req.user_id.clone(),
-                conversation_id: req.conversation_id.clone(),
-                message_ts: req.message_ts,
-            })
+            .handle_update_cursor(
+                &ctx,
+                UpdateCursorCommand {
+                    conversation_id: req.conversation_id.clone(),
+                    message_ts: req.message_ts,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -184,6 +199,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<UpdatePresenceRequest>,
     ) -> Result<Response<UpdatePresenceResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let state = match ProtoDeviceState::try_from(req.state).ok() {
             Some(ProtoDeviceState::Unspecified) | None => DeviceState::Unspecified,
@@ -200,23 +216,25 @@ impl ConversationService for ConversationGrpcHandler {
         };
 
         self.command_handler
-            .handle_update_presence(UpdatePresenceCommand {
-                user_id: req.user_id.clone(),
-                device_id: req.device_id.clone(),
-                device_platform: if req.device_platform.is_empty() {
-                    None
-                } else {
-                    Some(req.device_platform)
+            .handle_update_presence(
+                &ctx,
+                UpdatePresenceCommand {
+                    device_id: req.device_id.clone(),
+                    device_platform: if req.device_platform.is_empty() {
+                        None
+                    } else {
+                        Some(req.device_platform)
+                    },
+                    state,
+                    conflict_resolution: resolution,
+                    notify_conflict: req.notify_conflict,
+                    conflict_reason: if req.conflict_reason.is_empty() {
+                        None
+                    } else {
+                        Some(req.conflict_reason)
+                    },
                 },
-                state,
-                conflict_resolution: resolution,
-                notify_conflict: req.notify_conflict,
-                conflict_reason: if req.conflict_reason.is_empty() {
-                    None
-                } else {
-                    Some(req.conflict_reason)
-                },
-            })
+            )
             .await
             .map_err(internal_error)?;
 
@@ -229,18 +247,21 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<ForceConversationSyncRequest>,
     ) -> Result<Response<ForceConversationSyncResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let missing = self
             .command_handler
-            .handle_force_conversation_sync(ForceConversationSyncCommand {
-                user_id: req.user_id.clone(),
-                conversation_ids: req.conversation_ids.clone(),
-                reason: if req.reason.is_empty() {
-                    None
-                } else {
-                    Some(req.reason)
+            .handle_force_conversation_sync(
+                &ctx,
+                ForceConversationSyncCommand {
+                    conversation_ids: req.conversation_ids.clone(),
+                    reason: if req.reason.is_empty() {
+                        None
+                    } else {
+                        Some(req.reason)
+                    },
                 },
-            })
+            )
             .await
             .map_err(internal_error)?;
 
@@ -260,6 +281,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<CreateConversationRequest>,
     ) -> Result<Response<CreateConversationResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let participants: Vec<ConversationParticipant> = req
@@ -278,13 +300,16 @@ impl ConversationService for ConversationGrpcHandler {
 
         let conversation = self
             .command_handler
-            .handle_create_conversation(CreateConversationCommand {
-                conversation_type: req.conversation_type,
-                business_type: req.business_type,
-                participants,
-                attributes: req.attributes,
-                visibility,
-            })
+            .handle_create_conversation(
+                &ctx,
+                CreateConversationCommand {
+                    conversation_type: req.conversation_type,
+                    business_type: req.business_type,
+                    participants,
+                    attributes: req.attributes,
+                    visibility,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -298,6 +323,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<UpdateConversationRequest>,
     ) -> Result<Response<UpdateConversationResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let display_name = if req.display_name.is_empty() {
@@ -320,17 +346,20 @@ impl ConversationService for ConversationGrpcHandler {
 
         let conversation = self
             .command_handler
-            .handle_update_conversation(UpdateConversationCommand {
-                conversation_id: req.conversation_id.clone(),
-                display_name,
-                attributes: if req.attributes.is_empty() {
-                    None
-                } else {
-                    Some(req.attributes)
+            .handle_update_conversation(
+                &ctx,
+                UpdateConversationCommand {
+                    conversation_id: req.conversation_id.clone(),
+                    display_name,
+                    attributes: if req.attributes.is_empty() {
+                        None
+                    } else {
+                        Some(req.attributes)
+                    },
+                    visibility,
+                    lifecycle_state,
                 },
-                visibility,
-                lifecycle_state,
-            })
+            )
             .await
             .map_err(internal_error)?;
 
@@ -344,13 +373,17 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<DeleteConversationRequest>,
     ) -> Result<Response<DeleteConversationResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         self.command_handler
-            .handle_delete_conversation(DeleteConversationCommand {
-                conversation_id: req.conversation_id.clone(),
-                hard_delete: req.hard_delete,
-            })
+            .handle_delete_conversation(
+                &ctx,
+                DeleteConversationCommand {
+                    conversation_id: req.conversation_id.clone(),
+                    hard_delete: req.hard_delete,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -363,6 +396,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<ManageParticipantsRequest>,
     ) -> Result<Response<ManageParticipantsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let to_add: Vec<ConversationParticipant> = req
@@ -385,12 +419,15 @@ impl ConversationService for ConversationGrpcHandler {
 
         let participants = self
             .command_handler
-            .handle_manage_participants(ManageParticipantsCommand {
-                conversation_id: req.conversation_id.clone(),
-                to_add,
-                to_remove: req.to_remove,
-                role_updates,
-            })
+            .handle_manage_participants(
+                &ctx,
+                ManageParticipantsCommand {
+                    conversation_id: req.conversation_id.clone(),
+                    to_add,
+                    to_remove: req.to_remove,
+                    role_updates,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -413,6 +450,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<BatchAcknowledgeRequest>,
     ) -> Result<Response<BatchAcknowledgeResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let cursors: Vec<(String, i64)> = req
@@ -422,10 +460,12 @@ impl ConversationService for ConversationGrpcHandler {
             .collect();
 
         self.command_handler
-            .handle_batch_acknowledge(BatchAcknowledgeCommand {
-                user_id: req.user_id.clone(),
-                cursors,
-            })
+            .handle_batch_acknowledge(
+                &ctx,
+                BatchAcknowledgeCommand {
+                    cursors,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -438,6 +478,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<SearchConversationsRequest>,
     ) -> Result<Response<SearchConversationsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         // 从protobuf FilterExpression转换为domain models
@@ -551,13 +592,15 @@ impl ConversationService for ConversationGrpcHandler {
 
         let (summaries, total) = self
             .query_handler
-            .handle_search_conversations(SearchConversationsQuery {
-                user_id: None,
-                filters,
-                sort,
-                limit,
-                offset,
-            })
+            .handle_search_conversations(
+                &ctx,
+                SearchConversationsQuery {
+                    filters,
+                    sort,
+                    limit,
+                    offset,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -577,21 +620,19 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::conversation::CreateThreadRequest>,
     ) -> Result<Response<flare_proto::conversation::CreateThreadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let thread_service = self
             .thread_service
             .as_ref()
             .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
-        let operator_id = req
-            .context
-            .as_ref()
-            .and_then(|ctx| ctx.actor.as_ref())
-            .map(|actor| actor.actor_id.clone())
-            .ok_or_else(|| Status::invalid_argument("operator_id required"))?;
+        let operator_id = ctx.user_id()
+            .ok_or_else(|| Status::invalid_argument("user_id required in context"))?;
 
         let thread = thread_service
             .create_thread(
+                &ctx,
                 &req.conversation_id,
                 &req.root_message_id,
                 if req.title.is_empty() {
@@ -599,7 +640,7 @@ impl ConversationService for ConversationGrpcHandler {
                 } else {
                     Some(&req.title)
                 },
-                &operator_id,
+                operator_id,
             )
             .await
             .map_err(internal_error)?;
@@ -614,6 +655,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::conversation::ListThreadsRequest>,
     ) -> Result<Response<flare_proto::conversation::ListThreadsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let thread_service = self
             .thread_service
@@ -629,6 +671,7 @@ impl ConversationService for ConversationGrpcHandler {
 
         let (threads, total_count) = thread_service
             .list_threads(
+                &ctx,
                 &req.conversation_id,
                 if req.limit > 0 { req.limit } else { 50 },
                 req.offset,
@@ -653,6 +696,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::conversation::GetThreadRequest>,
     ) -> Result<Response<flare_proto::conversation::GetThreadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let thread_service = self
             .thread_service
@@ -660,7 +704,7 @@ impl ConversationService for ConversationGrpcHandler {
             .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         let thread = thread_service
-            .get_thread(&req.thread_id)
+            .get_thread(&ctx, &req.thread_id)
             .await
             .map_err(internal_error)?
             .ok_or_else(|| Status::not_found("Thread not found"))?;
@@ -675,6 +719,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::common::SyncConversationsRequest>,
     ) -> Result<Response<flare_proto::common::SyncConversationsResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let client_ms = req
@@ -687,12 +732,14 @@ impl ConversationService for ConversationGrpcHandler {
 
         let bootstrap = self
             .query_handler
-            .handle_conversation_bootstrap(ConversationBootstrapQuery {
-                user_id: req.user_id.clone(),
-                client_cursor: HashMap::new(),
-                include_recent: false,
-                recent_limit: None,
-            })
+            .handle_conversation_bootstrap(
+                &ctx,
+                ConversationBootstrapQuery {
+                    client_cursor: HashMap::new(),
+                    include_recent: false,
+                    recent_limit: None,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -748,16 +795,19 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::common::ConversationSyncAllRequest>,
     ) -> Result<Response<flare_proto::common::ConversationSyncAllResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
         let bootstrap = self
             .query_handler
-            .handle_conversation_bootstrap(ConversationBootstrapQuery {
-                user_id: req.user_id.clone(),
-                client_cursor: HashMap::new(),
-                include_recent: false,
-                recent_limit: None,
-            })
+            .handle_conversation_bootstrap(
+                &ctx,
+                ConversationBootstrapQuery {
+                    client_cursor: HashMap::new(),
+                    include_recent: false,
+                    recent_limit: None,
+                },
+            )
             .await
             .map_err(internal_error)?;
 
@@ -788,6 +838,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::conversation::UpdateThreadRequest>,
     ) -> Result<Response<flare_proto::conversation::UpdateThreadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let thread_service = self
             .thread_service
@@ -796,6 +847,7 @@ impl ConversationService for ConversationGrpcHandler {
 
         let thread = thread_service
             .update_thread(
+                &ctx,
                 &req.thread_id,
                 if req.title.is_some() && !req.title.as_ref().unwrap().is_empty() {
                     req.title.as_deref()
@@ -819,6 +871,7 @@ impl ConversationService for ConversationGrpcHandler {
         &self,
         request: Request<flare_proto::conversation::DeleteThreadRequest>,
     ) -> Result<Response<flare_proto::conversation::DeleteThreadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
         let thread_service = self
             .thread_service
@@ -826,7 +879,7 @@ impl ConversationService for ConversationGrpcHandler {
             .ok_or_else(|| Status::failed_precondition("Thread service not configured"))?;
 
         thread_service
-            .delete_thread(&req.thread_id)
+            .delete_thread(&ctx, &req.thread_id)
             .await
             .map_err(internal_error)?;
 

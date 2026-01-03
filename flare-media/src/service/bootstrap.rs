@@ -56,8 +56,15 @@ impl ApplicationBootstrap {
         let address_clone = address;
         let runtime = ServiceRuntime::new("media", address)
             .add_spawn_with_shutdown("media-grpc", move |shutdown_rx| async move {
+                // 使用 ContextLayer 包裹 Service
+                use flare_server_core::middleware::ContextLayer;
+                
+                let media_service = ContextLayer::new()
+                    .allow_missing()
+                    .layer(MediaServiceServer::new(handler));
+                
                 Server::builder()
-                    .add_service(MediaServiceServer::new(handler))
+                    .add_service(media_service)
                     .serve_with_shutdown(address_clone, async move {
                         info!(
                             address = %address_clone,

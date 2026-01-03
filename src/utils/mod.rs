@@ -2,9 +2,18 @@
 //!
 //! 提供时间戳转换、时间线提取、seq 操作、未读数计算等通用工具函数
 
+pub mod context;
 pub mod helpers;
 
 pub use helpers::ServiceHelper;
+
+// 重新导出 context 工具函数
+pub use context::{
+    require_context, extract_context_opt,
+    require_tenant_id_from_context, require_user_id_from_context,
+    extract_session_id_from_context, require_request_id_from_context,
+    require_tenant_id, require_user_id, extract_session_id, require_request_id,
+};
 
 #[cfg(test)]
 mod seq_utils_tests;

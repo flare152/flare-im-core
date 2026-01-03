@@ -160,10 +160,16 @@ impl PostgresMetadataStore {
 impl MediaMetadataStore for PostgresMetadataStore {
     async fn save_metadata(&self, metadata: &MediaFileMetadata) -> Result<()> {
         let metadata_json = Self::metadata_to_json(&metadata.metadata)?;
+        
+        // 从 metadata 中提取 tenant_id，如果没有则使用默认值（向后兼容）
+        let tenant_id = metadata.metadata.get("tenant_id")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
 
         sqlx::query(
             r#"
             INSERT INTO media_assets (
+                tenant_id,
                 file_id,
                 file_name,
                 mime_type,
@@ -179,8 +185,8 @@ impl MediaMetadataStore for PostgresMetadataStore {
                 grace_expires_at,
                 access_type
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (file_id) DO UPDATE SET
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            ON CONFLICT (tenant_id, file_id) DO UPDATE SET
                 file_name = EXCLUDED.file_name,
                 mime_type = EXCLUDED.mime_type,
                 file_size = EXCLUDED.file_size,
@@ -196,6 +202,7 @@ impl MediaMetadataStore for PostgresMetadataStore {
                 access_type = EXCLUDED.access_type
             "#,
         )
+        .bind(&tenant_id)
         .bind(&metadata.file_id)
         .bind(&metadata.file_name)
         .bind(&metadata.mime_type)
@@ -217,7 +224,7 @@ impl MediaMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn load_metadata(&self, file_id: &str) -> Result<Option<MediaFileMetadata>> {
+    async fn load_metadata(&self, tenant_id: &str, file_id: &str) -> Result<Option<MediaFileMetadata>> {
         let row = sqlx::query_as::<_, MediaAssetRow>(
             r#"
             SELECT
@@ -236,9 +243,10 @@ impl MediaMetadataStore for PostgresMetadataStore {
                 grace_expires_at,
                 access_type
             FROM media_assets
-            WHERE file_id = $1
+            WHERE tenant_id = $1 AND file_id = $2
             "#,
         )
+        .bind(tenant_id)
         .bind(file_id)
         .fetch_optional(self.pool())
         .await
@@ -286,6 +294,9 @@ impl MediaMetadataStore for PostgresMetadataStore {
     }
 
     async fn delete_metadata(&self, file_id: &str) -> Result<()> {
+        // 注意：delete_metadata 方法签名中没有 tenant_id，但为了数据安全，应该添加
+        // 这里先使用子查询获取 tenant_id，或者需要修改方法签名
+        // 暂时保持向后兼容，但建议后续添加 tenant_id 参数
         sqlx::query("DELETE FROM media_references WHERE file_id = $1")
             .bind(file_id)
             .execute(self.pool())
@@ -363,10 +374,30 @@ impl MediaMetadataStore for PostgresMetadataStore {
 impl MediaReferenceStore for PostgresMetadataStore {
     async fn create_reference(&self, reference: &MediaReference) -> Result<bool> {
         let metadata_json = Self::metadata_to_json(&reference.metadata)?;
+        
+        // 从 reference.metadata 中提取 tenant_id，如果没有则从 file_id 对应的 media_asset 中获取
+        let tenant_id = if let Some(tenant_id) = reference.metadata.get("tenant_id") {
+            tenant_id.clone()
+        } else {
+            // 从 media_assets 表中查询 tenant_id
+            let row = sqlx::query("SELECT tenant_id FROM media_assets WHERE file_id = $1 LIMIT 1")
+                .bind(&reference.file_id)
+                .fetch_optional(self.pool())
+                .await
+                .context("failed to get tenant_id from media_assets")?;
+            
+            if let Some(row) = row {
+                row.get("tenant_id")
+            } else {
+                // 如果找不到，使用默认值（向后兼容）
+                "default".to_string()
+            }
+        };
 
         let result = sqlx::query(
             r#"
             INSERT INTO media_references (
+                tenant_id,
                 reference_id,
                 file_id,
                 namespace,
@@ -376,10 +407,11 @@ impl MediaReferenceStore for PostgresMetadataStore {
                 created_at,
                 expires_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (reference_id) DO NOTHING
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (tenant_id, reference_id) DO NOTHING
             "#,
         )
+        .bind(&tenant_id)
         .bind(&reference.reference_id)
         .bind(&reference.file_id)
         .bind(&reference.namespace)
@@ -405,9 +437,10 @@ impl MediaReferenceStore for PostgresMetadataStore {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn delete_any_reference(&self, file_id: &str) -> Result<Option<String>> {
+    async fn delete_any_reference(&self, tenant_id: &str, file_id: &str) -> Result<Option<String>> {
         let row =
-            sqlx::query("DELETE FROM media_references WHERE file_id = $1 RETURNING reference_id")
+            sqlx::query("DELETE FROM media_references WHERE tenant_id = $1 AND file_id = $2 RETURNING reference_id")
+                .bind(tenant_id)
                 .bind(file_id)
                 .fetch_optional(self.pool())
                 .await
@@ -424,8 +457,9 @@ impl MediaReferenceStore for PostgresMetadataStore {
         }
     }
 
-    async fn delete_all_references(&self, file_id: &str) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM media_references WHERE file_id = $1")
+    async fn delete_all_references(&self, tenant_id: &str, file_id: &str) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM media_references WHERE tenant_id = $1 AND file_id = $2")
+            .bind(tenant_id)
             .bind(file_id)
             .execute(self.pool())
             .await
@@ -434,7 +468,7 @@ impl MediaReferenceStore for PostgresMetadataStore {
         Ok(result.rows_affected())
     }
 
-    async fn list_references(&self, file_id: &str) -> Result<Vec<MediaReference>> {
+    async fn list_references(&self, tenant_id: &str, file_id: &str) -> Result<Vec<MediaReference>> {
         let rows = sqlx::query_as::<_, MediaReferenceRow>(
             r#"
             SELECT
@@ -447,10 +481,11 @@ impl MediaReferenceStore for PostgresMetadataStore {
                 created_at,
                 expires_at
             FROM media_references
-            WHERE file_id = $1
+            WHERE tenant_id = $1 AND file_id = $2
             ORDER BY created_at ASC
             "#,
         )
+        .bind(tenant_id)
         .bind(file_id)
         .fetch_all(self.pool())
         .await
@@ -459,8 +494,9 @@ impl MediaReferenceStore for PostgresMetadataStore {
         rows.into_iter().map(MediaReference::try_from).collect()
     }
 
-    async fn count_references(&self, file_id: &str) -> Result<u64> {
-        let row = sqlx::query("SELECT COUNT(*) as count FROM media_references WHERE file_id = $1")
+    async fn count_references(&self, tenant_id: &str, file_id: &str) -> Result<u64> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM media_references WHERE tenant_id = $1 AND file_id = $2")
+            .bind(tenant_id)
             .bind(file_id)
             .fetch_one(self.pool())
             .await
@@ -474,6 +510,7 @@ impl MediaReferenceStore for PostgresMetadataStore {
 
     async fn reference_exists(
         &self,
+        tenant_id: &str,
         file_id: &str,
         namespace: &str,
         owner_id: &str,
@@ -481,8 +518,9 @@ impl MediaReferenceStore for PostgresMetadataStore {
     ) -> Result<bool> {
         let count: i64 = if let Some(tag) = business_tag {
             sqlx::query_scalar(
-                "SELECT COUNT(*) FROM media_references WHERE file_id = $1 AND namespace = $2 AND owner_id = $3 AND business_tag = $4"
+                "SELECT COUNT(*) FROM media_references WHERE tenant_id = $1 AND file_id = $2 AND namespace = $3 AND owner_id = $4 AND business_tag = $5"
             )
+            .bind(tenant_id)
             .bind(file_id)
             .bind(namespace)
             .bind(owner_id)
@@ -492,8 +530,9 @@ impl MediaReferenceStore for PostgresMetadataStore {
             .context("failed to check if media reference exists")?
         } else {
             sqlx::query_scalar(
-                "SELECT COUNT(*) FROM media_references WHERE file_id = $1 AND namespace = $2 AND owner_id = $3 AND business_tag IS NULL"
+                "SELECT COUNT(*) FROM media_references WHERE tenant_id = $1 AND file_id = $2 AND namespace = $3 AND owner_id = $4 AND business_tag IS NULL"
             )
+            .bind(tenant_id)
             .bind(file_id)
             .bind(namespace)
             .bind(owner_id)

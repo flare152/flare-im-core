@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use flare_im_core::hooks::{HookContext, MessageDraft, MessageRecord};
+use anyhow::{Context as AnyhowContext, Result};
+use flare_im_core::hooks::{MessageDraft, MessageRecord};
+use flare_im_core::hooks::hook_context_data::{HookContextData, set_hook_context_data};
+use flare_server_core::context::{Context, ContextExt};
 use flare_proto::flare::push::v1::{PushAckRequest, PushAckResponse};
 use flare_proto::push::{
     PushFailure, PushMessageRequest, PushMessageResponse, PushNotificationRequest,
@@ -37,15 +39,22 @@ impl PushDomainService {
     }
 
     /// 入队推送消息（业务逻辑）
-    #[instrument(skip(self), fields(user_count = request.user_ids.len()))]
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        user_count = request.user_ids.len()
+    ))]
     pub async fn enqueue_message(
         &self,
+        ctx: &Context,
         request: PushMessageRequest,
     ) -> Result<PushMessageResponse> {
+        ctx.ensure_not_cancelled()?;
+        
         // 1. 入参校验
         self.validator
             .validate_message_request(&request)
-            .context("Request validation failed")?;
+            .with_context(|| "Request validation failed")?;
 
         let user_ids = request.user_ids.clone();
         let task_id = Uuid::new_v4().to_string();
@@ -76,40 +85,51 @@ impl PushDomainService {
                             .map(|t| t.tenant_id.clone())
                             .unwrap_or_else(|| "default".to_string());
 
-                        let ctx = HookContext {
-                            tenant_id,
-                            conversation_id: request.message.as_ref().map(|m| m.conversation_id.clone()),
-                            conversation_type: request.message.as_ref().map(|m| {
-                                let conversation_type_str = match m.conversation_type {
-                                    1 => "single".to_string(),
-                                    2 => "group".to_string(),
-                                    3 => "broadcast".to_string(),
-                                    _ => "unknown".to_string(),
-                                };
-                                conversation_type_str
-                            }),
-                            message_type: request.message.as_ref().map(|m| {
-                                let message_type_str = match m.message_type {
-                                    1 => "text".to_string(),
-                                    2 => "image".to_string(),
-                                    3 => "audio".to_string(),
-                                    4 => "video".to_string(),
-                                    5 => "file".to_string(),
-                                    6 => "location".to_string(),
-                                    7 => "contact".to_string(),
-                                    8 => "system".to_string(),
-                                    9 => "custom".to_string(),
-                                    _ => "unknown".to_string(),
-                                };
-                                message_type_str
-                            }),
-                            sender_id: request.message.as_ref().map(|m| m.sender_id.clone()),
-                            trace_id: Some(task_id.clone()),
-                            tags: std::collections::HashMap::new(),
-                            attributes: std::collections::HashMap::new(),
-                            request_metadata: std::collections::HashMap::new(),
-                            occurred_at: Some(std::time::SystemTime::now()),
-                        };
+                        // 创建 Context
+                        let mut ctx = Context::with_request_id(task_id.clone());
+                        ctx = ctx.with_trace_id(task_id.clone());
+                        if !tenant_id.is_empty() {
+                            ctx = ctx.with_tenant_id(tenant_id);
+                        }
+                        
+                        // 创建 HookContextData
+                        let conversation_id = request.message.as_ref().map(|m| m.conversation_id.clone());
+                        let conversation_type = request.message.as_ref().map(|m| {
+                            match m.conversation_type {
+                                1 => "single".to_string(),
+                                2 => "group".to_string(),
+                                3 => "broadcast".to_string(),
+                                _ => "unknown".to_string(),
+                            }
+                        });
+                        let message_type = request.message.as_ref().map(|m| {
+                            match m.message_type {
+                                1 => "text".to_string(),
+                                2 => "image".to_string(),
+                                3 => "audio".to_string(),
+                                4 => "video".to_string(),
+                                5 => "file".to_string(),
+                                6 => "location".to_string(),
+                                7 => "contact".to_string(),
+                                8 => "system".to_string(),
+                                9 => "custom".to_string(),
+                                _ => "unknown".to_string(),
+                            }
+                        });
+                        let sender_id = request.message.as_ref().map(|m| m.sender_id.clone());
+                        
+                        if let Some(conv_id) = &conversation_id {
+                            ctx = ctx.with_session_id(conv_id.clone());
+                        }
+                        
+                        let hook_data = HookContextData::new()
+                            .with_conversation_id(conversation_id.unwrap_or_default())
+                            .with_conversation_type(conversation_type.unwrap_or_default())
+                            .with_message_type(message_type.unwrap_or_default())
+                            .with_sender_id(sender_id.unwrap_or_default())
+                            .occurred_now();
+                        
+                        ctx = set_hook_context_data(ctx, hook_data);
 
                         let payload = Vec::new();
                         let mut draft = MessageDraft::new(payload);
@@ -234,15 +254,21 @@ impl PushDomainService {
     }
 
     /// 入队推送通知（业务逻辑）
-    #[instrument(skip(self), fields(user_count = request.user_ids.len()))]
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        user_count = request.user_ids.len()
+    ))]
     pub async fn enqueue_notification(
         &self,
+        ctx: &Context,
         request: PushNotificationRequest,
     ) -> Result<PushNotificationResponse> {
+        ctx.ensure_not_cancelled()?;
         // 1. 入参校验
         self.validator
             .validate_notification_request(&request)
-            .context("Request validation failed")?;
+            .with_context(|| "Request validation failed")?;
 
         let user_ids = request.user_ids.clone();
         let task_id = Uuid::new_v4().to_string();
@@ -271,18 +297,19 @@ impl PushDomainService {
                             .map(|t| t.tenant_id.clone())
                             .unwrap_or_else(|| "default".to_string());
 
-                        let ctx = HookContext {
-                            tenant_id,
-                            conversation_id: None,
-                            conversation_type: None,
-                            message_type: Some("notification".to_string()),
-                            sender_id: None, // 通知推送没有明确的发送者
-                            trace_id: Some(task_id.clone()),
-                            tags: std::collections::HashMap::new(),
-                            attributes: std::collections::HashMap::new(),
-                            request_metadata: std::collections::HashMap::new(),
-                            occurred_at: Some(std::time::SystemTime::now()),
-                        };
+                        // 创建 Context
+                        let mut ctx = Context::with_request_id(task_id.clone());
+                        ctx = ctx.with_trace_id(task_id.clone());
+                        if !tenant_id.is_empty() {
+                            ctx = ctx.with_tenant_id(tenant_id);
+                        }
+                        
+                        // 创建 HookContextData
+                        let hook_data = HookContextData::new()
+                            .with_message_type("notification".to_string())
+                            .occurred_now();
+                        
+                        ctx = set_hook_context_data(ctx, hook_data);
 
                         let content = if let Some(notification) = &request.notification {
                             notification.title.clone() + ": " + &notification.body
@@ -365,8 +392,14 @@ impl PushDomainService {
     }
 
     /// 入队 ACK（业务逻辑）
-    #[instrument(skip(self), fields(message_id = %request.ack.as_ref().map(|a| a.server_msg_id.as_str()).unwrap_or("")))]
-    pub async fn enqueue_ack(&self, request: PushAckRequest) -> Result<PushAckResponse> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        message_id = %request.ack.as_ref().map(|a| a.server_msg_id.as_str()).unwrap_or("")
+    ))]
+    pub async fn enqueue_ack(&self, ctx: &Context, request: PushAckRequest) -> Result<PushAckResponse> {
+        ctx.ensure_not_cancelled()?;
+        
         // 1. 入参校验
         if request.ack.is_none() {
             return Err(anyhow::anyhow!("ack is required"));

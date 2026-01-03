@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use redis::Client;
 
 use crate::application::handlers::{OnlineCommandHandler, OnlineQueryHandler};
@@ -40,12 +40,12 @@ pub async fn initialize(
     // 1. 加载在线服务配置
     let online_config = Arc::new(
         OnlineConfig::from_app_config(app_config)
-            .context("Failed to load online service configuration")?,
+            .with_context(|| "Failed to load online service configuration")?,
     );
 
     // 2. 创建 Redis 客户端
     let redis_client = Arc::new(
-        Client::open(online_config.redis_url.as_str()).context("Failed to create Redis client")?,
+        Client::open(online_config.redis_url.as_str()).with_context(|| "Failed to create Redis client")?,
     );
 
     // 3. 构建仓储

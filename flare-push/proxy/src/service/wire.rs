@@ -56,13 +56,10 @@ pub async fn initialize(
     ));
 
     // 6. 构建命令处理器
-    let command_handler = Arc::new(PushCommandHandler::new(
-        domain_service,
-        hook_dispatcher.clone(),
-    ));
+    let command_handler = Arc::new(PushCommandHandler::new(domain_service));
 
     // 7. 构建 gRPC 处理器
-    let handler = PushGrpcHandler::new(command_handler, hook_dispatcher.clone());
+    let handler = PushGrpcHandler::new(command_handler);
 
     Ok(ApplicationContext {
         handler,

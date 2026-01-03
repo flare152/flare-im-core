@@ -26,10 +26,10 @@ impl TokenAuthenticator {
 
     /// 验证 token（调用核心 TokenService）
     ///
-    /// 返回用户ID，如果验证失败则返回 None
-    fn verify_token(&self, token: &str) -> Option<String> {
+    /// 返回完整的 TokenClaims，如果验证失败则返回 None
+    fn verify_token(&self, token: &str) -> Option<flare_server_core::TokenClaims> {
         match self.token_service.validate_token(token) {
-            Ok(claims) => Some(claims.sub),
+            Ok(claims) => Some(claims),
             Err(err) => {
                 warn!(?err, "Token validation failed");
                 None
@@ -71,13 +71,29 @@ impl Authenticator for TokenAuthenticator {
         );
 
         match self.verify_token(token) {
-            Some(user_id) => {
+            Some(claims) => {
+                let user_id = claims.sub.clone();
+                
+                // 构建用户元数据（包含 tenant_id、device_id 等信息）
+                let mut user_metadata = std::collections::HashMap::new();
+                user_metadata.insert("user_id".to_string(), user_id.clone());
+                if let Some(tenant_id) = claims.tenant_id {
+                    user_metadata.insert("tenant_id".to_string(), tenant_id);
+                }
+                if let Some(device_id) = claims.device_id {
+                    user_metadata.insert("device_id".to_string(), device_id);
+                }
+                
                 debug!(
                     connection_id = %connection_id,
                     user_id = %user_id,
+                    tenant_id = ?user_metadata.get("tenant_id"),
                     "✅ Token 验证成功"
                 );
-                Ok(AuthResult::success(Some(user_id)))
+                Ok(AuthResult::success_with_metadata(
+                    Some(user_id),
+                    user_metadata,
+                ))
             }
             None => {
                 warn!(
