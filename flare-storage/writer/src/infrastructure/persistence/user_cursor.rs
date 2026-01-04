@@ -22,7 +22,8 @@ impl RedisUserCursorRepository {
 
 #[async_trait]
 impl UserSyncCursorRepository for RedisUserCursorRepository {
-    async fn advance_cursor(&self, conversation_id: &str, user_id: &str, message_ts: i64) -> Result<()> {
+    async fn advance_cursor(&self, ctx: &flare_server_core::context::Context, conversation_id: &str, message_ts: i64) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let mut conn = self.connection().await?;
         let cursor_key = format!("storage:user:cursor:{}", user_id);
         let _: () = conn

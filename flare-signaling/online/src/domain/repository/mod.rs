@@ -30,11 +30,11 @@ pub trait ConversationRepository: Send + Sync {
         user_id: &UserId,
         device_id: &DeviceId,
     ) -> Result<Option<Connection>>;
-    async fn list_user_devices(&self, user_id: &str) -> Result<Vec<DeviceInfo>>;
-    async fn get_device(&self, user_id: &str, device_id: &str) -> Result<Option<DeviceInfo>>;
+    async fn list_user_devices(&self, ctx: &flare_server_core::context::Context) -> Result<Vec<DeviceInfo>>;
+    async fn get_device(&self, ctx: &flare_server_core::context::Context, device_id: &str) -> Result<Option<DeviceInfo>>;
 
-    // 新增方法：获取带有完整Connection信息的设备列表
-    async fn list_user_connections(&self, user_id: &str) -> Result<Vec<Connection>> {
+    async fn list_user_connections(&self, ctx: &flare_server_core::context::Context) -> Result<Vec<Connection>> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let user_id_vo = UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?;
         self.get_user_connections(&user_id_vo).await
     }
@@ -50,12 +50,10 @@ pub trait SubscriptionRepository: Send + Sync {
         topic: &str,
         params: &HashMap<String, String>,
     ) -> Result<()>;
-    /// 移除订阅
-    async fn remove_subscription(&self, user_id: &str, topics: &[String]) -> Result<()>;
-    /// 获取用户的所有订阅
+    async fn remove_subscription(&self, ctx: &flare_server_core::context::Context, topics: &[String]) -> Result<()>;
     async fn get_user_subscriptions(
         &self,
-        user_id: &str,
+        ctx: &flare_server_core::context::Context,
     ) -> Result<Vec<(String, HashMap<String, String>)>>;
     /// 获取主题的所有订阅者
     async fn get_topic_subscribers(&self, topic: &str) -> Result<Vec<String>>;

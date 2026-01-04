@@ -135,10 +135,7 @@ fn prepare_envelope(
     _default_content_type: &str,
     mut extra_metadata: HashMap<String, String>,
 ) -> (PushHookEnvelope, MessageDraft) {
-    // 从 Context 中提取 tenant_id
-    let tenant_id = ctx.tenant_id()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "default".to_string());
+    let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
     let conversation_id = format!("{SESSION_TYPE_PUSH}:{user_id}");
 
     // 从 Context 中提取 trace 信息

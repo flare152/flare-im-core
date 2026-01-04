@@ -201,7 +201,7 @@ pub trait ConversationStateRepository: Send + Sync {
 
 #[async_trait]
 pub trait UserSyncCursorRepository: Send + Sync {
-    async fn advance_cursor(&self, conversation_id: &str, user_id: &str, message_ts: i64) -> Result<()>;
+    async fn advance_cursor(&self, ctx: &flare_server_core::context::Context, conversation_id: &str, message_ts: i64) -> Result<()>;
 }
 
 #[async_trait]

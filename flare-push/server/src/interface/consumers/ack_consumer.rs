@@ -182,9 +182,11 @@ impl AckKafkaConsumer {
 
                                     // 为每个用户处理 ACK
                                     for user_id in &request.target_user_ids {
+                                        let ctx = flare_server_core::context::Context::root()
+                                            .with_user_id(user_id.clone());
                                         match self
                                             .domain_service
-                                            .handle_client_ack(user_id, ack)
+                                            .handle_client_ack(&ctx, ack)
                                             .await
                                         {
                                             Ok(_) => {

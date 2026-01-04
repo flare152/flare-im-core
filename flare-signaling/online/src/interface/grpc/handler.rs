@@ -266,9 +266,10 @@ impl OnlineHandler {
         &self,
         request: Request<ListUserDevicesRequest>,
     ) -> std::result::Result<Response<ListUserDevicesResponse>, Status> {
+        let ctx = flare_im_core::utils::context::require_context(&request)?;
         match self
             .user_domain_service
-            .list_user_devices(request.into_inner())
+            .list_user_devices(&ctx, request.into_inner())
             .await
         {
             Ok(response) => Ok(Response::new(response)),
@@ -296,7 +297,8 @@ impl OnlineHandler {
         &self,
         request: Request<GetDeviceRequest>,
     ) -> std::result::Result<Response<GetDeviceResponse>, Status> {
-        match self.user_domain_service.get_device(request.into_inner()).await {
+        let ctx = flare_im_core::utils::context::require_context(&request)?;
+        match self.user_domain_service.get_device(&ctx, request.into_inner()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 error!(?err, "get_device failed");

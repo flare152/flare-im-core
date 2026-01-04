@@ -23,8 +23,9 @@ impl PostgresMessageStateRepository {
 
 #[async_trait]
 impl MessageStateRepository for PostgresMessageStateRepository {
-    #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_read(&self, message_id: &str, user_id: &str) -> Result<()> {
+    #[instrument(skip(self), fields(message_id = %message_id))]
+    async fn mark_as_read(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_read, read_at, updated_at)
@@ -51,8 +52,9 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_deleted(&self, message_id: &str, user_id: &str) -> Result<()> {
+    #[instrument(skip(self), fields(message_id = %message_id))]
+    async fn mark_as_deleted(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, is_deleted, deleted_at, updated_at)
@@ -79,8 +81,9 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
-    async fn mark_as_burned(&self, message_id: &str, user_id: &str) -> Result<()> {
+    #[instrument(skip(self), fields(message_id = %message_id))]
+    async fn mark_as_burned(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         sqlx::query(
             r#"
             INSERT INTO message_state (message_id, user_id, burn_after_read, burned_at, updated_at)
@@ -107,13 +110,13 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(user_id = %user_id, message_count = message_ids.len()))]
-    async fn batch_mark_as_read(&self, user_id: &str, message_ids: &[String]) -> Result<()> {
+    #[instrument(skip(self), fields(message_count = message_ids.len()))]
+    async fn batch_mark_as_read(&self, ctx: &flare_server_core::context::Context, message_ids: &[String]) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         if message_ids.is_empty() {
             return Ok(());
         }
 
-        // 使用 PostgreSQL 的批量插入/更新
         for message_id in message_ids {
             sqlx::query(
                 r#"
@@ -142,13 +145,13 @@ impl MessageStateRepository for PostgresMessageStateRepository {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(user_id = %user_id, message_count = message_ids.len()))]
-    async fn batch_mark_as_deleted(&self, user_id: &str, message_ids: &[String]) -> Result<()> {
+    #[instrument(skip(self), fields(message_count = message_ids.len()))]
+    async fn batch_mark_as_deleted(&self, ctx: &flare_server_core::context::Context, message_ids: &[String]) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         if message_ids.is_empty() {
             return Ok(());
         }
 
-        // 使用 PostgreSQL 的批量插入/更新
         for message_id in message_ids {
             sqlx::query(
                 r#"

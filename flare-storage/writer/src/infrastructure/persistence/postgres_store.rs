@@ -154,7 +154,7 @@ impl PostgresMessageStore {
         });
 
         // 解析 tenant_id
-        let tenant = Some(flare_proto::common::TenantContext {
+        let _tenant = Some(flare_proto::common::TenantContext {
             tenant_id: row.tenant_id.clone(),
                 business_type: String::new(),
                 environment: String::new(),

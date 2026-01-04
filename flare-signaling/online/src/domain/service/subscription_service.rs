@@ -77,9 +77,8 @@ impl SubscriptionService {
         })
     }
 
-    /// 取消订阅
-    pub async fn unsubscribe(&self, request: UnsubscribeRequest) -> Result<UnsubscribeResponse> {
-        let user_id = &request.user_id;
+    pub async fn unsubscribe(&self, ctx: &flare_server_core::context::Context, request: UnsubscribeRequest) -> Result<UnsubscribeResponse> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let topics = &request.topics;
 
         if topics.is_empty() {
@@ -93,7 +92,7 @@ impl SubscriptionService {
 
         if let Err(err) = self
             .subscription_repo
-            .remove_subscription(user_id, topics)
+            .remove_subscription(ctx, topics)
             .await
         {
             warn!(user_id = %user_id, error = %err, "failed to remove subscriptions");

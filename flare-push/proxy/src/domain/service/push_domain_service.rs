@@ -70,6 +70,7 @@ impl PushDomainService {
                     let request = request.clone();
                     let task_id = task_id.clone();
                     let user_count = user_ids.len();
+                    let ctx = ctx.clone();
                     async move {
                         // 调用 PostSend Hook（审计日志）
                         tracing::info!(
@@ -78,18 +79,21 @@ impl PushDomainService {
                             "Push message enqueued successfully"
                         );
 
-                        // 构造 Hook 上下文和消息记录
-                        let tenant_id = request
-                            .tenant
-                            .as_ref()
-                            .map(|t| t.tenant_id.clone())
-                            .unwrap_or_else(|| "default".to_string());
-
-                        // 创建 Context
-                        let mut ctx = Context::with_request_id(task_id.clone());
-                        ctx = ctx.with_trace_id(task_id.clone());
-                        if !tenant_id.is_empty() {
-                            ctx = ctx.with_tenant_id(tenant_id);
+                        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
+                        
+                        // 创建新的Context用于hook（保留原始Context的tenant_id）
+                        let mut hook_ctx = ctx.clone();
+                        if hook_ctx.request_id() != task_id {
+                            hook_ctx = Context::with_request_id(task_id.clone());
+                            if let Some(tenant_id) = ctx.tenant_id() {
+                                hook_ctx = hook_ctx.with_tenant_id(tenant_id.to_string());
+                            }
+                            if let Some(user_id) = ctx.user_id() {
+                                hook_ctx = hook_ctx.with_user_id(user_id.to_string());
+                            }
+                        }
+                        if hook_ctx.trace_id() != task_id {
+                            hook_ctx = hook_ctx.with_trace_id(task_id.clone());
                         }
                         
                         // 创建 HookContextData
@@ -119,7 +123,7 @@ impl PushDomainService {
                         let sender_id = request.message.as_ref().map(|m| m.sender_id.clone());
                         
                         if let Some(conv_id) = &conversation_id {
-                            ctx = ctx.with_session_id(conv_id.clone());
+                            hook_ctx = hook_ctx.with_session_id(conv_id.clone());
                         }
                         
                         let hook_data = HookContextData::new()
@@ -129,7 +133,7 @@ impl PushDomainService {
                             .with_sender_id(sender_id.unwrap_or_default())
                             .occurred_now();
                         
-                        ctx = set_hook_context_data(ctx, hook_data);
+                        hook_ctx = set_hook_context_data(hook_ctx, hook_data);
 
                         let payload = Vec::new();
                         let mut draft = MessageDraft::new(payload);
@@ -200,7 +204,7 @@ impl PushDomainService {
                         };
 
                         // 执行 PostSend Hook
-                        if let Err(e) = hook_dispatcher.post_send(&ctx, &record, &draft).await {
+                        if let Err(e) = hook_dispatcher.post_send(&hook_ctx, &record, &draft).await {
                             tracing::warn!(
                                 task_id = %task_id,
                                 error = %e,
@@ -282,34 +286,35 @@ impl PushDomainService {
                     let request = request.clone();
                     let task_id = task_id.clone();
                     let user_count = user_ids.len();
+                    let ctx = ctx.clone();
                     async move {
-                        // 调用 PostSend Hook（审计日志）
                         tracing::info!(
                             task_id = %task_id,
                             user_count = user_count,
                             "Push notification enqueued successfully"
                         );
 
-                        // 构造 Hook 上下文和消息记录
-                        let tenant_id = request
-                            .tenant
-                            .as_ref()
-                            .map(|t| t.tenant_id.clone())
-                            .unwrap_or_else(|| "default".to_string());
-
-                        // 创建 Context
-                        let mut ctx = Context::with_request_id(task_id.clone());
-                        ctx = ctx.with_trace_id(task_id.clone());
-                        if !tenant_id.is_empty() {
-                            ctx = ctx.with_tenant_id(tenant_id);
+                        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
+                        
+                        let mut hook_ctx = ctx.clone();
+                        if hook_ctx.request_id() != task_id {
+                            hook_ctx = Context::with_request_id(task_id.clone());
+                            if let Some(tenant_id) = ctx.tenant_id() {
+                                hook_ctx = hook_ctx.with_tenant_id(tenant_id.to_string());
+                            }
+                            if let Some(user_id) = ctx.user_id() {
+                                hook_ctx = hook_ctx.with_user_id(user_id.to_string());
+                            }
+                        }
+                        if hook_ctx.trace_id() != task_id {
+                            hook_ctx = hook_ctx.with_trace_id(task_id.clone());
                         }
                         
-                        // 创建 HookContextData
                         let hook_data = HookContextData::new()
                             .with_message_type("notification".to_string())
                             .occurred_now();
                         
-                        ctx = set_hook_context_data(ctx, hook_data);
+                        hook_ctx = set_hook_context_data(hook_ctx, hook_data);
 
                         let content = if let Some(notification) = &request.notification {
                             notification.title.clone() + ": " + &notification.body
@@ -340,7 +345,7 @@ impl PushDomainService {
                         };
 
                         // 执行 PostSend Hook
-                        if let Err(e) = hook_dispatcher.post_send(&ctx, &record, &draft).await {
+                        if let Err(e) = hook_dispatcher.post_send(&hook_ctx, &record, &draft).await {
                             tracing::warn!(
                                 task_id = %task_id,
                                 error = %e,

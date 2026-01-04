@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
+use flare_server_core::context::Context;
 use flare_im_core::hooks::HookDispatcher;
 use flare_im_core::tracing::create_span;
 use flare_proto::push::{PushMessageRequest, PushOptions};
@@ -18,6 +19,7 @@ use crate::domain::repository::{
     WalRepository, WalRepositoryItem,
 };
 use crate::domain::service::hook_builder::{
+    build_hook_context_from_ctx,
     apply_draft_to_request, build_draft_from_request, build_hook_context, build_message_record,
     draft_from_submission, merge_context,
 };
@@ -58,28 +60,19 @@ impl MessageDomainService {
     #[instrument(skip(self), fields(tenant_id, message_id, message_type))]
     pub async fn orchestrate_message_storage(
         &self,
+        ctx: &Context,
         mut request: StoreMessageRequest,
         execute_pre_send: bool,
     ) -> Result<(String, u64)> {
-        let _start = Instant::now(); // 添加下划线前缀表示故意未使用
-        let _span = Span::current(); // 添加下划线前缀表示故意未使用
+        let _start = Instant::now();
+        let _span = Span::current();
 
-        // 先提取租户ID（在借用request之前）
-        let tenant_id = request
-            .tenant
-            .as_ref()
-            .map(|t| t.tenant_id.as_str())
-            .or_else(|| self.defaults.default_tenant_id.as_deref())
-            .unwrap_or("unknown")
-            .to_string();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         // 设置追踪属性
         {
-            // 由于缺少相应的追踪函数，暂时注释掉这些调用
-            // set_tenant_id(&_span, &tenant_id);
             if let Some(message) = &request.message {
                 if !message.server_id.is_empty() {
-                    // set_message_id(&_span, &message.server_id);
                     _span.record("message_id", &message.server_id);
                 }
                 if !message.sender_id.is_empty() {
@@ -89,10 +82,10 @@ impl MessageDomainService {
             }
         }
 
-        let original_context =
-            build_hook_context(&request, self.defaults.default_tenant_id.as_ref());
+        // 从Context构建hook_context（确保tenant_id从Context获取）
+        let original_context = build_hook_context_from_ctx(ctx, &request);
         let mut draft =
-            build_draft_from_request(&request).context("Failed to build draft from request")?;
+            build_draft_from_request(&request).with_context(|| "Failed to build draft from request")?;
 
         // 执行 PreSend Hook（如果启用）
         if execute_pre_send {
@@ -101,7 +94,7 @@ impl MessageDomainService {
             self.hooks
                 .pre_send(&original_context, &mut draft)
                 .await
-                .context("PreSend hook failed")?;
+                .with_context(|| "PreSend hook failed")?;
 
             // 让 _hook_span 离开作用域以结束 span
 
@@ -204,21 +197,47 @@ impl MessageDomainService {
                     Err(_) => "unknown".to_string(),
                 };
             let business_type = submission.message.business_type.clone();
-            let tenant_id = submission
-                .kafka_payload
-                .tenant
-                .as_ref()
-                .map(|t| t.tenant_id.clone());
+
+            // 确保 Context 有 tenant_id 和 request_id（从 request 或默认值获取）
+            let mut ensure_ctx = ctx.clone();
+            
+            // 如果 ctx 没有 tenant_id，从 request.tenant 或默认值获取
+            if ensure_ctx.tenant_id().is_none() {
+                if let Some(tenant) = &submission.message.tenant {
+                    ensure_ctx = ensure_ctx.with_tenant_id(tenant.tenant_id.clone());
+                } else {
+                    ensure_ctx = ensure_ctx.with_tenant_id(tenant_id.clone());
+                }
+            }
+            
+            // 如果 ctx 没有 request_id，生成一个（保留原有的 trace_id 等信息）
+            if ensure_ctx.request_id().is_empty() {
+                use uuid::Uuid;
+                let new_request_id = Uuid::new_v4().to_string();
+                let trace_id = ensure_ctx.trace_id().to_string();
+                ensure_ctx = Context::with_request_id(new_request_id);
+                if !trace_id.is_empty() {
+                    ensure_ctx = ensure_ctx.with_trace_id(trace_id);
+                }
+                if let Some(tenant_id) = ctx.tenant_id() {
+                    ensure_ctx = ensure_ctx.with_tenant_id(tenant_id.to_string());
+                } else if let Some(tenant) = &submission.message.tenant {
+                    ensure_ctx = ensure_ctx.with_tenant_id(tenant.tenant_id.clone());
+                } else {
+                    ensure_ctx = ensure_ctx.with_tenant_id(tenant_id.clone());
+                }
+            }
 
             // 同步确保会话存在（带超时和降级处理）
+            // 增加超时时间到 2 秒，确保有足够时间完成事务提交
             let ensure_result = tokio::time::timeout(
-                std::time::Duration::from_millis(500), // 500ms 超时
+                std::time::Duration::from_secs(2), // 2 秒超时
                 conversation_repo.ensure_conversation(
+                    &ensure_ctx,
                     &conversation_id,
                     &conversation_type,
                     &business_type,
                     participants,
-                    tenant_id.as_deref(),
                 ),
             )
             .await;
@@ -242,7 +261,7 @@ impl MessageDomainService {
                     // 超时，记录警告但继续（Storage Writer 会使用 UPSERT 兜底）
                     tracing::warn!(
                         conversation_id = %conversation_id,
-                        "Timeout ensuring conversation (500ms), Storage Writer will use UPSERT as fallback"
+                        "Timeout ensuring conversation (2s), Storage Writer will use UPSERT as fallback"
                     );
                 }
             }
@@ -277,7 +296,7 @@ impl MessageDomainService {
         let post_draft =
             draft_from_submission(&submission).context("Failed to build draft from submission")?;
 
-        // 执行 PostSend Hook（系统消息也需要执行，用于通知业务系统）
+        // 执行 PostSend Hook（使用hook_context，确保tenant_id正确）
         self.hooks
             .post_send(&hook_context, &record, &post_draft)
             .await

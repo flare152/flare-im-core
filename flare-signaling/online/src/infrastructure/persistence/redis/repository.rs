@@ -267,10 +267,11 @@ impl ConversationRepository for RedisConversationRepository {
 
     async fn list_user_devices(
         &self,
-        user_id: &str,
+        ctx: &flare_server_core::context::Context,
     ) -> Result<Vec<crate::domain::model::DeviceInfo>> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let sessions = self
-            .get_user_connections(&UserId::new(user_id.to_string()).unwrap())
+            .get_user_connections(&UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?)
             .await?;
         let devices: Vec<crate::domain::model::DeviceInfo> = sessions
             .into_iter()
@@ -287,13 +288,14 @@ impl ConversationRepository for RedisConversationRepository {
 
     async fn get_device(
         &self,
-        user_id: &str,
+        ctx: &flare_server_core::context::Context,
         device_id: &str,
     ) -> Result<Option<crate::domain::model::DeviceInfo>> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let session = self
             .get_connection_by_device(
-                &UserId::new(user_id.to_string()).unwrap(),
-                &DeviceId::new(device_id.to_string()).unwrap(),
+                &UserId::new(user_id.to_string()).map_err(|e| anyhow::anyhow!(e))?,
+                &DeviceId::new(device_id.to_string()).map_err(|e| anyhow::anyhow!(e))?,
             )
             .await?;
         Ok(session.map(|s| crate::domain::model::DeviceInfo {

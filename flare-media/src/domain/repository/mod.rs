@@ -26,7 +26,7 @@ pub trait MediaObjectRepository: Send + Sync {
 #[async_trait::async_trait]
 pub trait MediaMetadataStore: Send + Sync {
     async fn save_metadata(&self, metadata: &MediaFileMetadata) -> Result<()>;
-    async fn load_metadata(&self, tenant_id: &str, file_id: &str) -> Result<Option<MediaFileMetadata>>;
+    async fn load_metadata(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Option<MediaFileMetadata>>;
     async fn load_by_hash(&self, sha256: &str) -> Result<Option<MediaFileMetadata>>;
     async fn delete_metadata(&self, file_id: &str) -> Result<()>;
     async fn list_orphaned_assets(&self, before: DateTime<Utc>) -> Result<Vec<MediaFileMetadata>>;
@@ -56,13 +56,13 @@ pub trait MediaLocalStore: Send + Sync {
 pub trait MediaReferenceStore: Send + Sync {
     async fn create_reference(&self, reference: &MediaReference) -> Result<bool>;
     async fn delete_reference(&self, reference_id: &str) -> Result<bool>;
-    async fn delete_any_reference(&self, tenant_id: &str, file_id: &str) -> Result<Option<String>>;
-    async fn delete_all_references(&self, tenant_id: &str, file_id: &str) -> Result<u64>;
-    async fn list_references(&self, tenant_id: &str, file_id: &str) -> Result<Vec<MediaReference>>;
-    async fn count_references(&self, tenant_id: &str, file_id: &str) -> Result<u64>;
+    async fn delete_any_reference(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Option<String>>;
+    async fn delete_all_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<u64>;
+    async fn list_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Vec<MediaReference>>;
+    async fn count_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<u64>;
     async fn reference_exists(
         &self,
-        tenant_id: &str,
+        ctx: &flare_server_core::context::Context,
         file_id: &str,
         namespace: &str,
         owner_id: &str,

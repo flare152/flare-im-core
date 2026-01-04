@@ -16,7 +16,7 @@ fn tenant_id(tenant: &Option<TenantContext>, default: Option<&String>) -> String
         .as_ref()
         .and_then(|ctx| non_empty(ctx.tenant_id.clone()))
         .or_else(|| default.cloned())
-        .unwrap_or_else(|| "default".to_string())
+        .unwrap_or_else(|| "0".to_string())
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -35,6 +35,91 @@ fn extract_client_message_id(message: &Message) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+/// 从Context构建hook_context（统一入口）
+pub fn build_hook_context_from_ctx(
+    ctx: &Context,
+    request: &StoreMessageRequest,
+) -> Context {
+    use flare_im_core::hooks::hook_context_data::{get_hook_context_data, set_hook_context_data};
+    
+    let mut hook_ctx = ctx.clone();
+    
+    // 从request中提取request_id（如果Context中没有）
+    if hook_ctx.request_id().is_empty() {
+        if let Some(request_id) = request
+            .context
+            .as_ref()
+            .map(|c| c.request_id.clone())
+            .filter(|id| !id.is_empty())
+        {
+            let mut new_ctx = Context::with_request_id(request_id);
+            if let Some(tenant_id) = ctx.tenant_id() {
+                new_ctx = new_ctx.with_tenant_id(tenant_id.to_string());
+            }
+            if let Some(user_id) = ctx.user_id() {
+                new_ctx = new_ctx.with_user_id(user_id.to_string());
+            }
+            hook_ctx = new_ctx;
+        }
+    }
+    
+    // 创建或更新 HookContextData
+    let mut hook_data = get_hook_context_data(&hook_ctx).cloned().unwrap_or_default();
+    hook_data.conversation_id = non_empty(request.conversation_id.clone());
+    hook_data.tags = request.tags.clone();
+
+    if let Some(RequestContext {
+        request_id: _,
+        trace,
+        actor,
+        device: _,
+        channel: _,
+        user_agent,
+        attributes,
+    }) = request.context.as_ref()
+    {
+        if let Some(trace_ctx) = trace.as_ref() {
+            if !trace_ctx.trace_id.is_empty() {
+                hook_ctx = hook_ctx.with_trace_id(trace_ctx.trace_id.clone());
+            }
+            for (k, v) in &trace_ctx.tags {
+                hook_data.tags.insert(k.clone(), v.clone());
+            }
+        }
+
+        if let Some(actor_ctx) = actor.as_ref() {
+            if actor_ctx.r#type == flare_proto::common::ActorType::User as i32 {
+                hook_ctx = hook_ctx.with_user_id(actor_ctx.actor_id.clone());
+            }
+        }
+    }
+
+    if let Some(message) = request.message.as_ref() {
+        hook_data.sender_id = non_empty(message.sender_id.clone());
+        let conversation_type_str =
+            match flare_proto::common::ConversationType::try_from(message.conversation_type) {
+                Ok(flare_proto::common::ConversationType::Single) => "single".to_string(),
+                Ok(flare_proto::common::ConversationType::Group) => "group".to_string(),
+                Ok(flare_proto::common::ConversationType::Channel) => "channel".to_string(),
+                _ => "unknown".to_string(),
+            };
+        hook_data.conversation_type = Some(conversation_type_str);
+        
+        let message_type_str = match message.message_type {
+            1 => "text",
+            2 => "image",
+            3 => "video",
+            4 => "audio",
+            5 => "file",
+            _ => "unknown",
+        };
+        hook_data.message_type = Some(message_type_str.to_string());
+    }
+
+    set_hook_context_data(hook_ctx, hook_data)
+}
+
+/// 从request构建hook_context（向后兼容）
 pub fn build_hook_context(
     request: &StoreMessageRequest,
     default_tenant: Option<&String>,
@@ -51,10 +136,13 @@ pub fn build_hook_context(
     let request_id_clone = request_id.clone();
     let mut ctx = Context::with_request_id(request_id);
     
-    // 设置租户ID
-    if !tenant_id_str.is_empty() {
-        ctx = ctx.with_tenant_id(tenant_id_str);
-    }
+    // 设置租户ID（确保总是有值，即使为空字符串也使用默认值）
+    let final_tenant_id = if tenant_id_str.is_empty() {
+        default_tenant.cloned().unwrap_or_else(|| "0".to_string())
+    } else {
+        tenant_id_str
+    };
+    ctx = ctx.with_tenant_id(final_tenant_id);
     
     // 创建 HookContextData
     let mut hook_data = HookContextData::new();
@@ -460,6 +548,15 @@ pub fn merge_context(original: &Context, updated: Context) -> Context {
     let mut merged_ctx = updated;
     if merged_ctx.trace_id().is_empty() && !original.trace_id().is_empty() {
         merged_ctx = merged_ctx.with_trace_id(original.trace_id().to_string());
+    }
+    
+    // 合并 tenant_id（如果 updated 没有）
+    if merged_ctx.tenant_id().is_none() || merged_ctx.tenant_id().unwrap().is_empty() {
+        if let Some(tenant_id) = original.tenant_id() {
+            if !tenant_id.is_empty() {
+                merged_ctx = merged_ctx.with_tenant_id(tenant_id.to_string());
+            }
+        }
     }
     
     // 合并 HookContextData

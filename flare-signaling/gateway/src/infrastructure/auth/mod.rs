@@ -75,11 +75,19 @@ impl Authenticator for TokenAuthenticator {
                 let user_id = claims.sub.clone();
                 
                 // 构建用户元数据（包含 tenant_id、device_id 等信息）
+                // 关键：确保 tenant_id 总是存在，如果没有则使用默认值 "0"
                 let mut user_metadata = std::collections::HashMap::new();
                 user_metadata.insert("user_id".to_string(), user_id.clone());
-                if let Some(tenant_id) = claims.tenant_id {
-                    user_metadata.insert("tenant_id".to_string(), tenant_id);
-                }
+                
+                // 从 token claims 提取 tenant_id，如果没有则使用默认值 "0"
+                let tenant_id = claims.tenant_id.unwrap_or_else(|| {
+                    // 从环境变量或配置中获取默认值，如果没有则使用 "0"
+                    std::env::var("ACCESS_GATEWAY_DEFAULT_TENANT_ID")
+                        .ok()
+                        .unwrap_or_else(|| "0".to_string())
+                });
+                user_metadata.insert("tenant_id".to_string(), tenant_id.clone());
+                
                 if let Some(device_id) = claims.device_id {
                     user_metadata.insert("device_id".to_string(), device_id);
                 }
@@ -87,8 +95,8 @@ impl Authenticator for TokenAuthenticator {
                 debug!(
                     connection_id = %connection_id,
                     user_id = %user_id,
-                    tenant_id = ?user_metadata.get("tenant_id"),
-                    "✅ Token 验证成功"
+                    tenant_id = %tenant_id,
+                    "✅ Token 验证成功，租户ID已设置"
                 );
                 Ok(AuthResult::success_with_metadata(
                     Some(user_id),

@@ -334,7 +334,7 @@ impl MediaService {
                 );
                 if let Some(scope) = scope.as_ref() {
                     tracing::debug!(file_id = context.file_id, "为已存在的文件创建引用");
-                    self.ensure_reference(&mut existing, &context, scope)
+                    self.ensure_reference(ctx, &mut existing, &context, scope)
                         .await?;
                 } else {
                     tracing::debug!(file_id = context.file_id, "增加已存在文件的引用计数");
@@ -505,7 +505,7 @@ impl MediaService {
 
         if let (Some(scope), Some(_)) = (scope, self.reference_store.as_ref()) {
             tracing::debug!(file_id = context.file_id, "为新文件创建引用");
-            self.ensure_reference(&mut metadata, &context, &scope)
+            self.ensure_reference(ctx, &mut metadata, &context, &scope)
                 .await?;
             tracing::debug!(file_id = context.file_id, "文件引用已创建");
         }
@@ -516,14 +516,13 @@ impl MediaService {
 
     #[instrument(skip(self, ctx))]
     pub async fn delete_media_file(&self, ctx: &Context, file_id: &str) -> Result<()> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         let mut metadata = self.get_metadata(ctx, file_id).await?;
 
         if metadata.reference_count > 1 {
             if let Some(reference_store) = &self.reference_store {
-                let _ = reference_store.delete_any_reference(tenant_id, file_id).await;
+                let _ = reference_store.delete_any_reference(ctx, file_id).await;
                 let updated_count = reference_store
-                    .count_references(tenant_id, file_id)
+                    .count_references(ctx, file_id)
                     .await
                     .unwrap_or(metadata.reference_count.saturating_sub(1));
                 metadata.reference_count = updated_count;
@@ -563,7 +562,7 @@ impl MediaService {
         }
 
         if let Some(reference_store) = &self.reference_store {
-            let _ = reference_store.delete_all_references(tenant_id, file_id).await;
+            let _ = reference_store.delete_all_references(ctx, file_id).await;
         }
 
         if let Some(store) = &self.metadata_store {
@@ -578,7 +577,6 @@ impl MediaService {
     }
 
     pub async fn get_metadata(&self, ctx: &Context, file_id: &str) -> Result<MediaFileMetadata> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         if let Some(cache) = &self.metadata_cache {
             if let Some(metadata) = cache.get_cached_metadata(file_id).await? {
                 return Ok(metadata);
@@ -586,7 +584,7 @@ impl MediaService {
         }
 
         if let Some(store) = &self.metadata_store {
-            if let Some(metadata) = store.load_metadata(tenant_id, file_id).await? {
+            if let Some(metadata) = store.load_metadata(ctx, file_id).await? {
                 if let Some(cache) = &self.metadata_cache {
                     cache.cache_metadata(&metadata).await.ok();
                 }
@@ -720,13 +718,13 @@ impl MediaService {
         scope: MediaReferenceScope,
         metadata: HashMap<String, String>,
     ) -> Result<MediaFileMetadata> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let mut file_metadata = self.get_metadata(ctx, file_id).await?;
 
         if let Some(reference_store) = &self.reference_store {
             if reference_store
                 .reference_exists(
-                    tenant_id,
+                    ctx,
                     file_id,
                     &scope.namespace,
                     &scope.owner_id,
@@ -749,7 +747,7 @@ impl MediaService {
             };
 
             if reference_store.create_reference(&reference).await? {
-                file_metadata.reference_count = reference_store.count_references(tenant_id, file_id).await?;
+                file_metadata.reference_count = reference_store.count_references(ctx, file_id).await?;
             }
         } else {
             file_metadata.reference_count = file_metadata.reference_count.saturating_add(1);
@@ -769,7 +767,7 @@ impl MediaService {
         file_id: &str,
         reference_id: Option<&str>,
     ) -> Result<MediaFileMetadata> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let mut file_metadata = self.get_metadata(ctx, file_id).await?;
 
         if let Some(reference_store) = &self.reference_store {
@@ -777,13 +775,13 @@ impl MediaService {
                 reference_store.delete_reference(reference_id).await?
             } else {
                 reference_store
-                    .delete_any_reference(tenant_id, file_id)
+                    .delete_any_reference(ctx, file_id)
                     .await?
                     .is_some()
             };
 
             if removed {
-                file_metadata.reference_count = reference_store.count_references(tenant_id, file_id).await?;
+                file_metadata.reference_count = reference_store.count_references(ctx, file_id).await?;
             }
         } else {
             file_metadata.reference_count = file_metadata.reference_count.saturating_sub(1);
@@ -804,9 +802,8 @@ impl MediaService {
     }
 
     pub async fn list_references(&self, ctx: &Context, file_id: &str) -> Result<Vec<MediaReference>> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         if let Some(reference_store) = &self.reference_store {
-            reference_store.list_references(tenant_id, file_id).await
+            reference_store.list_references(ctx, file_id).await
         } else {
             Ok(vec![])
         }
@@ -838,7 +835,7 @@ impl MediaService {
             // 从 metadata 中提取 tenant_id，如果没有则使用默认值
             let tenant_id = asset.metadata.get("tenant_id")
                 .map(|s| s.as_str())
-                .unwrap_or("default");
+                .unwrap_or("0");
 
             if let Some(repo) = &self.object_repo {
                 let _ = repo.delete_object(&storage_path).await;
@@ -847,7 +844,7 @@ impl MediaService {
                 let _ = local.delete(&storage_path).await;
             }
             if let Some(reference_store) = &self.reference_store {
-                let _ = reference_store.delete_all_references(tenant_id, &asset.file_id).await;
+                let _ = reference_store.delete_all_references(ctx, &asset.file_id).await;
             }
             let _ = store.delete_metadata(&asset.file_id).await;
             if let Some(cache) = &self.metadata_cache {
@@ -992,6 +989,7 @@ impl MediaService {
 
     async fn ensure_reference(
         &self,
+        ctx: &Context,
         metadata: &mut MediaFileMetadata,
         context: &UploadContext<'_>,
         scope: &MediaReferenceScope,
@@ -1003,15 +1001,10 @@ impl MediaService {
             self.save_and_cache(metadata).await?;
             return Ok(());
         };
-
-        // 从 metadata 中提取 tenant_id
-        let tenant_id = metadata.metadata.get("tenant_id")
-            .cloned()
-            .unwrap_or_else(|| "default".to_string());
         
         if reference_store
             .reference_exists(
-                &tenant_id,
+                ctx,
                 &metadata.file_id,
                 &scope.namespace,
                 &scope.owner_id,
@@ -1019,7 +1012,7 @@ impl MediaService {
             )
             .await?
         {
-            metadata.reference_count = reference_store.count_references(&tenant_id, &metadata.file_id).await?;
+            metadata.reference_count = reference_store.count_references(ctx, &metadata.file_id).await?;
             metadata.status = MediaAssetStatus::Active;
             metadata.grace_expires_at = None;
             self.save_and_cache(metadata).await?;
@@ -1038,7 +1031,7 @@ impl MediaService {
         };
 
         if reference_store.create_reference(&reference).await? {
-            metadata.reference_count = reference_store.count_references(tenant_id.as_str(), &metadata.file_id).await?;
+            metadata.reference_count = reference_store.count_references(ctx, &metadata.file_id).await?;
         }
 
         metadata.status = if metadata.reference_count > 0 {

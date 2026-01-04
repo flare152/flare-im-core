@@ -553,17 +553,11 @@ impl MessageGrpcHandler {
         &self,
         request: Request<MessageBatchMarkMessageReadRequest>,
     ) -> Result<Response<MessageBatchMarkMessageReadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
-            // 从请求上下文提取操作者ID
             let operator_id = req.user_id.clone();
-
-            // 从租户上下文提取租户ID
-            let tenant_id = req
-                .tenant
-            .as_ref()
-                .map(|t| t.tenant_id.clone())
-                .unwrap_or_else(|| "default".to_string());
+            let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let read_at = req
             .read_at
@@ -622,14 +616,10 @@ impl MessageGrpcHandler {
         &self,
         request: Request<MessageMarkConversationReadRequest>,
     ) -> Result<Response<MessageMarkConversationReadResponse>, Status> {
+        let ctx = require_context(&request)?;
         let req = request.into_inner();
 
-            // 从租户上下文提取租户ID
-            let tenant_id = req
-                .tenant
-            .as_ref()
-                .map(|t| t.tenant_id.clone())
-                .unwrap_or_else(|| "default".to_string());
+            let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
             let read_at = req
                 .read_at

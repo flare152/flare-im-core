@@ -6,6 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 use flare_im_core::metrics::MessageOrchestratorMetrics;
 use flare_server_core::context::{Context, ContextExt};
+use flare_im_core::utils::context::require_context;
 use tracing::instrument;
 
 use crate::application::commands::{
@@ -44,18 +45,16 @@ impl MessageCommandHandler {
     }
 
     /// 处理存储消息命令
-    #[instrument(skip(self))]
-    pub async fn handle_store_message(&self, command: StoreMessageCommand) -> Result<(String, u64)> {
+    #[instrument(skip(self, ctx), fields(
+        request_id = %ctx.request_id(),
+        trace_id = %ctx.trace_id(),
+        tenant_id = %ctx.tenant_id().unwrap_or("0"),
+    ))]
+    pub async fn handle_store_message(&self, ctx: &Context, command: StoreMessageCommand) -> Result<(String, u64)> {
+        ctx.ensure_not_cancelled()?;
         let start = Instant::now();
 
-        // 提取租户ID和消息类型用于指标标签（在移动之前）
-        let tenant_id = command
-            .request
-            .tenant
-            .as_ref()
-            .map(|t| t.tenant_id.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let message_type = command
             .request
@@ -68,9 +67,11 @@ impl MessageCommandHandler {
             .unwrap_or("normal")
             .to_string();
 
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
+        
         let result = self
             .domain_service
-            .orchestrate_message_storage(command.request, true)
+            .orchestrate_message_storage(ctx, command.request, true)
             .await;
 
         // 记录指标
@@ -117,9 +118,15 @@ impl MessageCommandHandler {
             .unwrap_or("normal")
             .to_string();
 
+        // 从 command.request 构建 Context
+        let ctx = if let Some(tenant) = &command.request.tenant {
+            Context::root().with_tenant_id(tenant.tenant_id.clone())
+        } else {
+            Context::root()
+        };
         let result = self
             .domain_service
-            .orchestrate_message_storage(command.request, false)
+            .orchestrate_message_storage(&ctx, command.request, false)
             .await;
 
         // 记录指标
@@ -142,13 +149,20 @@ impl MessageCommandHandler {
     #[instrument(skip(self), fields(batch_size = command.requests.len()))]
     pub async fn handle_batch_store_message(
         &self,
+        ctx: &Context,
         command: BatchStoreMessageCommand,
     ) -> Result<Vec<String>> {
         let mut message_ids = Vec::new();
         for request in command.requests {
+            // 从 request 构建 Context
+            let request_ctx = if let Some(tenant) = &request.tenant {
+                Context::root().with_tenant_id(tenant.tenant_id.clone())
+            } else {
+                ctx.clone()
+            };
             match self
                 .domain_service
-                .orchestrate_message_storage(request, true)
+                .orchestrate_message_storage(&request_ctx, request, true)
                 .await
             {
                 Ok((message_id, _seq)) => message_ids.push(message_id),
@@ -255,9 +269,26 @@ impl MessageCommandHandler {
     pub async fn handle_send_message(
         &self,
         ctx: &Context,
-        cmd: SendMessageCommand,
+        mut cmd: SendMessageCommand,
     ) -> Result<(String, u64)> {
         ctx.ensure_not_cancelled()?;
+        
+        // 如果 cmd.tenant 为空，从 ctx 中提取 tenant_id 并设置
+        if cmd.tenant.is_none() || cmd.tenant.as_ref().map(|t| t.tenant_id.is_empty()).unwrap_or(true) {
+            if let Some(tenant_id) = ctx.tenant_id() {
+                if !tenant_id.is_empty() {
+                    cmd.tenant = Some(flare_proto::common::TenantContext {
+                        tenant_id: tenant_id.to_string(),
+                        business_type: String::new(),
+                        environment: String::new(),
+                        organization_id: String::new(),
+                        labels: std::collections::HashMap::new(),
+                        attributes: std::collections::HashMap::new(),
+                    });
+                }
+            }
+        }
+        
         use crate::domain::model::message_kind::MessageProfile;
 
         let mut message = cmd.message.clone();
@@ -329,7 +360,26 @@ impl MessageCommandHandler {
 
         // 从 Context 中提取 RequestContext 和 TenantContext
         let context = ctx.request().cloned().map(|rc| rc.into());
-        let tenant = ctx.tenant().cloned().map(|tc| tc.into());
+        
+        // 优先从 Context 中提取 tenant，如果 Context 中没有，则使用 cmd.tenant
+        let tenant = ctx.tenant().cloned()
+            .map(|tc| tc.into())
+            .or_else(|| {
+                // 如果 Context 中没有完整的 TenantContext，但 ctx.tenant_id() 有值，则构建 TenantContext
+                ctx.tenant_id()
+                    .filter(|id| !id.is_empty())
+                    .map(|tenant_id| {
+                        flare_proto::common::TenantContext {
+                            tenant_id: tenant_id.to_string(),
+                            business_type: String::new(),
+                            environment: String::new(),
+                            organization_id: String::new(),
+                            labels: std::collections::HashMap::new(),
+                            attributes: std::collections::HashMap::new(),
+                        }
+                    })
+            })
+            .or(cmd.tenant.clone());
         
         // 将 SendMessageCommand 转换为 StoreMessageRequest
         let store_request = flare_proto::storage::StoreMessageRequest {
@@ -343,7 +393,7 @@ impl MessageCommandHandler {
         };
 
         // 调用存储消息命令处理
-        self.handle_store_message(StoreMessageCommand {
+        self.handle_store_message(ctx, StoreMessageCommand {
             request: store_request,
         })
         .await
@@ -419,9 +469,7 @@ impl MessageCommandHandler {
             MessageOperationCommand,
         };
 
-        let tenant_id = ctx.tenant_id()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "default".to_string());
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let base_cmd = MessageOperationCommand {
             message_id: operation.target_message_id.clone(),

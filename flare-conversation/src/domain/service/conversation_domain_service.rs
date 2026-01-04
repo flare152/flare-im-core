@@ -63,11 +63,9 @@ impl ConversationDomainService {
         include_recent: bool,
         recent_limit: Option<i32>,
     ) -> Result<ConversationBootstrapOutput> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
-        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let bootstrap = self
             .conversation_repo
-            .load_bootstrap(tenant_id, user_id, &client_cursor)
+            .load_bootstrap(ctx, &client_cursor)
             .await?;
 
         let mut summaries = bootstrap.summaries;
@@ -211,6 +209,7 @@ impl ConversationDomainService {
             }
         }
 
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let devices = self
             .presence_repo
             .list_devices(user_id)
@@ -233,11 +232,9 @@ impl ConversationDomainService {
         cursor: Option<&str>,
         limit: i32,
     ) -> Result<(Vec<ConversationSummary>, Option<String>, bool)> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
-        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let bootstrap = self
             .conversation_repo
-            .load_bootstrap(tenant_id, user_id, &HashMap::new())
+            .load_bootstrap(ctx, &HashMap::new())
             .await?;
 
         let mut summaries = bootstrap.summaries;
@@ -290,9 +287,8 @@ impl ConversationDomainService {
         conversation_id: &str,
         message_ts: i64,
     ) -> Result<()> {
-        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         self.conversation_repo
-            .update_cursor(user_id, conversation_id, message_ts)
+            .update_cursor(ctx, conversation_id, message_ts)
             .await
     }
 
@@ -331,14 +327,9 @@ impl ConversationDomainService {
             return Ok(Vec::new());
         }
 
-        let tenant_id = ctx.tenant_id()
-            .ok_or_else(|| anyhow!("Tenant ID is required in context"))?;
-        let user_id = ctx.user_id()
-            .ok_or_else(|| anyhow!("User ID is required in context"))?;
-        
         let bootstrap = self
             .conversation_repo
-            .load_bootstrap(tenant_id, user_id, &HashMap::new())
+            .load_bootstrap(ctx, &HashMap::new())
             .await?;
 
         let known: HashSet<String> = bootstrap
@@ -353,6 +344,7 @@ impl ConversationDomainService {
             .cloned()
             .collect();
 
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         if missing.is_empty() {
             info!(
                 user_id = %user_id,
@@ -387,7 +379,7 @@ impl ConversationDomainService {
         mut attributes: HashMap<String, String>,
         visibility: ConversationVisibility,
     ) -> Result<Conversation> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         // 尝试从 attributes 中提取指定的 conversation_id
         if let Some(requested_conversation_id) = attributes.remove("conversation_id") {
             // 验证会话ID格式（如果格式不正确，记录警告但继续处理，保持向后兼容）
@@ -401,7 +393,7 @@ impl ConversationDomainService {
 
             // 检查会话是否已存在
             if let Ok(Some(existing_session)) =
-                self.conversation_repo.get_conversation(tenant_id, &requested_conversation_id).await
+                self.conversation_repo.get_conversation(ctx, &requested_conversation_id).await
             {
                 // 会话已存在，更新参与者（确保所有参与者都在会话中）
                 debug!(
@@ -429,7 +421,7 @@ impl ConversationDomainService {
                         "Adding new participants to existing session"
                     );
                     self.conversation_repo
-                        .manage_participants(tenant_id, &requested_conversation_id, &participants_to_add, &[], &[])
+                        .manage_participants(ctx, &requested_conversation_id, &participants_to_add, &[], &[])
                         .await?;
                 }
 
@@ -456,7 +448,7 @@ impl ConversationDomainService {
                     updated_at: chrono::Utc::now(),
                 };
 
-                self.conversation_repo.create_conversation(tenant_id, &session).await?;
+                self.conversation_repo.create_conversation(ctx, &session).await?;
                 info!(conversation_id = %requested_conversation_id, "Conversation created with provided conversation_id");
                 Ok(session)
             }
@@ -493,7 +485,7 @@ impl ConversationDomainService {
                     let ai_scope = attributes
                         .get("ai_scope")
                         .map(|s| s.as_str())
-                        .unwrap_or("default");
+                        .unwrap_or("0");
                     generate_ai_conversation_id(user_id, ai_scope)
                 }
                 "system" => {
@@ -502,7 +494,7 @@ impl ConversationDomainService {
                         .get("system_id")
                         .cloned()
                         .or_else(|| ctx.tenant_id().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "system".to_string());
+                        .unwrap_or_else(|| "0".to_string());
                     let scope = attributes.get("scope").cloned();
                     generate_system_conversation_id(&system_id, scope)
                 }
@@ -515,7 +507,7 @@ impl ConversationDomainService {
                     let channel = attributes
                         .get("channel")
                         .cloned()
-                        .unwrap_or_else(|| "default".to_string());
+                        .unwrap_or_else(|| "0".to_string());
                     generate_customer_conversation_id(&customer_id, &channel)
                 }
                 "temp" => generate_temp_conversation_id(),
@@ -544,7 +536,7 @@ impl ConversationDomainService {
                 updated_at: chrono::Utc::now(),
             };
 
-            self.conversation_repo.create_conversation(tenant_id, &session).await?;
+            self.conversation_repo.create_conversation(ctx, &session).await?;
             info!(
                 conversation_id = %conversation_id,
                 "Conversation created with generated conversation_id"
@@ -555,8 +547,7 @@ impl ConversationDomainService {
 
     /// 获取会话（业务逻辑）
     pub async fn get_conversation(&self, ctx: &Context, conversation_id: &str) -> Result<Option<Conversation>> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
-        self.conversation_repo.get_conversation(tenant_id, conversation_id).await
+        self.conversation_repo.get_conversation(ctx, conversation_id).await
     }
 
     /// 更新会话（业务逻辑）
@@ -569,10 +560,9 @@ impl ConversationDomainService {
         visibility: Option<ConversationVisibility>,
         lifecycle_state: Option<ConversationLifecycleState>,
     ) -> Result<Conversation> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         let mut conversation = self
             .conversation_repo
-            .get_conversation(tenant_id, conversation_id)
+            .get_conversation(ctx, conversation_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Conversation not found: {}", conversation_id))?;
 
@@ -590,7 +580,7 @@ impl ConversationDomainService {
         }
         conversation.updated_at = chrono::Utc::now();
 
-        self.conversation_repo.update_conversation(tenant_id, &conversation).await?;
+        self.conversation_repo.update_conversation(ctx, &conversation).await?;
         info!(conversation_id = %conversation_id, "Conversation updated");
         Ok(conversation)
     }
@@ -602,9 +592,8 @@ impl ConversationDomainService {
         conversation_id: &str,
         hard_delete: bool,
     ) -> Result<()> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         self.conversation_repo
-            .delete_conversation(tenant_id, conversation_id, hard_delete)
+            .delete_conversation(ctx, conversation_id, hard_delete)
             .await?;
         info!(conversation_id = %conversation_id, hard_delete = hard_delete, "Conversation deleted");
         Ok(())
@@ -619,10 +608,9 @@ impl ConversationDomainService {
         to_remove: Vec<String>,
         role_updates: Vec<(String, Vec<String>)>,
     ) -> Result<Vec<ConversationParticipant>> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         let participants = self
             .conversation_repo
-            .manage_participants(tenant_id, conversation_id, &to_add, &to_remove, &role_updates)
+            .manage_participants(ctx, conversation_id, &to_add, &to_remove, &role_updates)
             .await?;
         info!(
             conversation_id = %conversation_id,
@@ -640,10 +628,9 @@ impl ConversationDomainService {
         ctx: &Context,
         cursors: Vec<(String, i64)>,
     ) -> Result<()> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
         let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         self.conversation_repo
-            .batch_acknowledge(tenant_id, user_id, &cursors)
+            .batch_acknowledge(ctx, &cursors)
             .await?;
         info!(user_id = %user_id, count = cursors.len(), "Batch acknowledge completed");
         Ok(())
@@ -652,9 +639,10 @@ impl ConversationDomainService {
     /// 标记消息为已读（业务逻辑）
     ///
     /// 更新用户的 last_read_msg_seq，并重新计算未读数
-    pub async fn mark_as_read(&self, tenant_id: &str, user_id: &str, conversation_id: &str, seq: i64) -> Result<()> {
+    pub async fn mark_as_read(&self, ctx: &Context, conversation_id: &str, seq: i64) -> Result<()> {
+        let user_id = ctx.user_id().unwrap_or("0");
         self.conversation_repo
-            .mark_as_read(tenant_id, user_id, conversation_id, seq)
+            .mark_as_read(ctx, conversation_id, seq)
             .await?;
         info!(
             user_id = %user_id,
@@ -665,10 +653,9 @@ impl ConversationDomainService {
         Ok(())
     }
 
-    /// 获取未读数（业务逻辑）
-    pub async fn get_unread_count(&self, tenant_id: &str, user_id: &str, conversation_id: &str) -> Result<i32> {
+    pub async fn get_unread_count(&self, ctx: &Context, conversation_id: &str) -> Result<i32> {
         self.conversation_repo
-            .get_unread_count(tenant_id, user_id, conversation_id)
+            .get_unread_count(ctx, conversation_id)
             .await
     }
 
@@ -681,10 +668,8 @@ impl ConversationDomainService {
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<ConversationSummary>, usize)> {
-        let tenant_id = ctx.tenant_id().ok_or_else(|| anyhow::anyhow!("tenant_id is required in context"))?;
-        let user_id = ctx.user_id();
         self.conversation_repo
-            .search_conversations(tenant_id, user_id, &filters, &sort, limit, offset)
+            .search_conversations(ctx, &filters, &sort, limit, offset)
             .await
     }
 }

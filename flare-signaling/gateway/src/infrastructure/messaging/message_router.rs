@@ -178,9 +178,6 @@ impl MessageRouter {
             anyhow::anyhow!("Route Service client not available after initialization")
         })?;
 
-        // 构建请求上下文（包含追踪信息）
-        let request_context = self.build_request_context_with_trace(user_id, conversation_id);
-        
         // 从 connection_id 获取 metadata（如果可用）
         let connection_metadata = if let Some(conn_id) = connection_id {
             self.get_connection_metadata(conn_id).await
@@ -188,8 +185,42 @@ impl MessageRouter {
             None
         };
         
-        // 构建租户上下文（从连接 metadata 中提取，如果没有则使用默认值）
-        let tenant_context = self.build_tenant_context(connection_metadata.as_ref());
+        // 使用统一的Context构建函数（确保tenant_id总是存在）
+        use crate::infrastructure::connection_context::build_context_from_connection;
+        let ctx = build_context_from_connection(
+            connection_metadata.as_ref(),
+            Some(user_id),
+            &self.default_tenant_id,
+        );
+        
+        // 从Context转换为protobuf类型
+        let mut request_context = RequestContext::default();
+        request_context.request_id = ctx.request_id().to_string();
+        if !ctx.trace_id().is_empty() {
+            request_context.trace = Some(TraceContext {
+                trace_id: ctx.trace_id().to_string(),
+                span_id: String::new(),
+                parent_span_id: String::new(),
+                sampled: String::new(),
+                tags: std::collections::HashMap::new(),
+            });
+        }
+        
+        // 构建租户上下文（从Context中提取，确保总是存在）
+        let tenant_context = if let Some(tenant) = ctx.tenant() {
+            flare_proto::common::TenantContext::from(tenant.clone())
+        } else {
+            // 如果Context中没有TenantContext，从tenant_id构建
+            let tenant_id = ctx.tenant_id().unwrap_or(&self.default_tenant_id);
+            flare_proto::common::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                business_type: "im".to_string(),
+                environment: String::new(),
+                organization_id: String::new(),
+                labels: std::collections::HashMap::new(),
+                attributes: std::collections::HashMap::new(),
+            }
+        };
 
         // 构建路由选项（使用默认值或提供的选项）
         let route_options = options.unwrap_or_else(|| RouteOptions {

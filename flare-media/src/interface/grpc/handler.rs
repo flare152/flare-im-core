@@ -52,9 +52,7 @@ impl MediaService for MediaGrpcHandler {
         request: Request<tonic::Streaming<UploadFileRequest>>,
     ) -> Result<Response<UploadFileResponse>, Status> {
         let ctx = require_context(&request)?;
-        let tenant_id = ctx.tenant_id()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
         
         let mut stream = request.into_inner();
         let first = stream
@@ -224,9 +222,7 @@ impl MediaService for MediaGrpcHandler {
         request: Request<CreateReferenceRequest>,
     ) -> Result<Response<CreateReferenceResponse>, Status> {
         let ctx = require_context(&request)?;
-        let tenant_id = ctx.tenant_id()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
         let req = request.into_inner();
         
         // 将 tenant_id 添加到 metadata 中（如果未设置）

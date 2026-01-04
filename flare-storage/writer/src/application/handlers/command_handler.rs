@@ -165,7 +165,7 @@ impl MessagePersistenceCommandHandler {
             let db_span = create_span("storage-writer", "db_write");
 
             let db_start = Instant::now();
-            match self.domain_service.persist_message(prepared).await {
+            match self.domain_service.persist_message(&ctx, prepared).await {
                 Ok(_) => {
                     let db_duration = db_start.elapsed();
 
@@ -184,7 +184,7 @@ impl MessagePersistenceCommandHandler {
                         .observe(total_duration.as_secs_f64());
                     self.metrics
                         .messages_persisted_total
-                        .with_label_values(&[tenant_id.as_deref().unwrap_or("default")])
+                        .with_label_values(&[tenant_id.as_deref().unwrap_or("0")])
                         .inc();
 
                     tracing::info!(
@@ -292,10 +292,16 @@ impl MessagePersistenceCommandHandler {
 
         // 3. 批量持久化新消息
         if !new_messages.is_empty() {
+            // 使用第一个命令的 Context（批量操作使用统一的 Context）
+            let ctx = if let Some(tenant) = &commands.first().and_then(|c| c.request.tenant.as_ref()) {
+                Context::root().with_tenant_id(tenant.tenant_id.clone())
+            } else {
+                Context::root()
+            };
             let db_start = Instant::now();
             match self
                 .domain_service
-                .persist_batch(new_messages.clone())
+                .persist_batch(&ctx, new_messages.clone())
                 .await
             {
                 Ok(_) => {

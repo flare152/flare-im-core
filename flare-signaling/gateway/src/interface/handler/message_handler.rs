@@ -207,7 +207,7 @@ impl LongConnectionHandler {
         let tenant_id = self.get_tenant_id_for_connection(connection_id).await;
 
         self.message_handler
-            .handle_message_send(connection_id, &user_id, msg_cmd, tenant_id.as_deref())
+            .handle_message_send(connection_id, &user_id, msg_cmd, Some(&tenant_id))
             .await
             .map_err(|e| CoreFlareError::system(format!("Failed to handle message send: {}", e)))
     }

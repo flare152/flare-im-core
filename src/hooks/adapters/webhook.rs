@@ -197,7 +197,7 @@ fn webhook_context(ctx: &Context) -> WebhookContextPayload {
     use crate::hooks::hook_context_data::get_hook_context_data;
     
     let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
-    let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+    let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
     let trace_id = {
         let trace_id = ctx.trace_id();
         if trace_id.is_empty() {

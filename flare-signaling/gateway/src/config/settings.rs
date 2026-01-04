@@ -8,6 +8,7 @@ pub struct AccessGatewayConfig {
     pub push_service: String,
     pub default_svid: String,    // 默认 SVID（新增，默认 "svid.im"）
     pub use_route_service: bool, // 是否使用 Route 服务（新增，默认 true）
+    pub default_tenant_id: String, // 默认租户ID（新增，默认 "0"）
     pub token_secret: String,
     pub token_issuer: String,
     pub token_ttl_seconds: u64,
@@ -76,6 +77,11 @@ impl AccessGatewayConfig {
             .or_else(|| std::env::var("ACCESS_GATEWAY_DEFAULT_SVID").ok())
             .unwrap_or_else(|| "svid.im".to_string());
 
+        // 默认租户ID（新增，默认 "0"）
+        let default_tenant_id = std::env::var("ACCESS_GATEWAY_DEFAULT_TENANT_ID")
+            .ok()
+            .unwrap_or_else(|| "0".to_string());
+
         // 是否使用 Route 服务（新增，默认 true）
         let use_route_service = if let Some(use_route) =
             std::env::var("ACCESS_GATEWAY_USE_ROUTE_SERVICE")
@@ -135,6 +141,7 @@ impl AccessGatewayConfig {
             push_service,
             default_svid,
             use_route_service,
+            default_tenant_id,
             token_secret,
             token_issuer,
             token_ttl_seconds,

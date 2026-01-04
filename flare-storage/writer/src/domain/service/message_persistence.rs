@@ -212,8 +212,8 @@ impl MessagePersistenceDomainService {
     }
 
     /// 持久化消息到存储
-    #[instrument(skip(self), fields(message_id = %prepared.message_id))]
-    pub async fn persist_message(&self, prepared: PreparedMessage) -> Result<()> {
+    #[instrument(skip(self, ctx), fields(message_id = %prepared.message_id))]
+    pub async fn persist_message(&self, ctx: &flare_server_core::context::Context, prepared: PreparedMessage) -> Result<()> {
         let seq = if prepared.message.seq > 0 {
             Some(prepared.message.seq as i64)
         } else {
@@ -249,8 +249,8 @@ impl MessagePersistenceDomainService {
         if let Some(cursor_repo) = &self.user_cursor_repo {
             cursor_repo
                 .advance_cursor(
+                    ctx,
                     &conversation_id,
-                    &prepared.message.sender_id,
                     timeline.ingestion_ts, // 使用克隆的 timeline
                 )
                 .await?;
@@ -273,8 +273,8 @@ impl MessagePersistenceDomainService {
     }
 
     /// 批量持久化消息到存储（优化性能）
-    #[instrument(skip(self), fields(batch_size = prepared.len()))]
-    pub async fn persist_batch(&self, prepared: Vec<PreparedMessage>) -> Result<()> {
+    #[instrument(skip(self, ctx), fields(batch_size = prepared.len()))]
+    pub async fn persist_batch(&self, ctx: &flare_server_core::context::Context, prepared: Vec<PreparedMessage>) -> Result<()> {
         if prepared.is_empty() {
             return Ok(());
         }
@@ -327,21 +327,20 @@ impl MessagePersistenceDomainService {
             }
         }
 
-        // 批量更新游标（按用户分组）
+        // 批量更新游标（按会话分组，每个会话只更新一次）
         if let Some(cursor_repo) = &self.user_cursor_repo {
-            let mut user_cursors: std::collections::HashMap<(String, String), i64> =
+            let mut conversation_cursors: std::collections::HashMap<String, i64> =
                 std::collections::HashMap::new();
 
             for p in &prepared {
-                let key = (p.conversation_id.clone(), p.message.sender_id.clone());
                 let ts = p.timeline.ingestion_ts;
-                user_cursors.entry(key).or_insert(ts);
+                conversation_cursors.entry(p.conversation_id.clone()).or_insert(ts);
             }
 
             // 批量更新游标
-            for ((conversation_id, user_id), ts) in user_cursors {
+            for (conversation_id, ts) in conversation_cursors {
                 cursor_repo
-                    .advance_cursor(&conversation_id, &user_id, ts)
+                    .advance_cursor(ctx, &conversation_id, ts)
                     .await?;
             }
         }
@@ -483,7 +482,7 @@ impl MessagePersistenceDomainService {
         let timeline = prepared.timeline.clone();
 
         // 3. 持久化消息到存储
-        self.persist_message(prepared).await?;
+        self.persist_message(ctx, prepared).await?;
 
         // 4. 清理 WAL 条目
         self.cleanup_wal(&message_id).await?;
@@ -540,7 +539,7 @@ impl MessagePersistenceDomainService {
         }
 
         // 2. 批量持久化消息
-        self.persist_batch(new_messages.clone()).await?;
+        self.persist_batch(ctx, new_messages.clone()).await?;
 
         // 3. 批量清理 WAL 条目
         for msg in &new_messages {

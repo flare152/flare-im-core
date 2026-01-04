@@ -27,6 +27,7 @@ use crate::infrastructure::messaging::message_router::MessageRouter;
 pub struct LongConnectionHandler {
     pub(crate) signaling_gateway: Arc<dyn SignalingGateway>,
     pub(crate) gateway_id: String,
+    pub(crate) default_tenant_id: String, // 默认租户ID（确保总是存在）
     pub(crate) server_handle: Arc<Mutex<Option<Arc<dyn ServerHandle>>>>,
     pub(crate) manager_trait: Arc<Mutex<Option<Arc<dyn ConnectionManagerTrait>>>>,
     pub(crate) ack_publisher: Option<Arc<dyn AckPublisher>>,
@@ -52,6 +53,7 @@ impl LongConnectionHandler {
     pub fn new(
         signaling_gateway: Arc<dyn SignalingGateway>,
         gateway_id: String,
+        default_tenant_id: String,
         ack_publisher: Option<Arc<dyn AckPublisher>>,
         message_router: Option<Arc<MessageRouter>>,
         metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
@@ -64,6 +66,7 @@ impl LongConnectionHandler {
         Self {
             signaling_gateway,
             gateway_id,
+            default_tenant_id,
             server_handle,
             manager_trait: Arc::new(Mutex::new(None)),
             ack_publisher,
@@ -81,6 +84,7 @@ impl LongConnectionHandler {
     pub fn new_with_placeholders(
         signaling_gateway: Arc<dyn SignalingGateway>,
         gateway_id: String,
+        default_tenant_id: String,
         ack_publisher: Option<Arc<dyn AckPublisher>>,
         message_router: Option<Arc<MessageRouter>>,
         metrics: Arc<flare_im_core::metrics::AccessGatewayMetrics>,
@@ -116,6 +120,7 @@ impl LongConnectionHandler {
         Self {
             signaling_gateway,
             gateway_id,
+            default_tenant_id,
             server_handle,
             manager_trait: Arc::new(Mutex::new(None)),
             ack_publisher,
@@ -200,13 +205,18 @@ impl LongConnectionHandler {
         None
     }
 
-    /// 获取连接对应的租户ID
-    pub(crate) async fn get_tenant_id_for_connection(&self, connection_id: &str) -> Option<String> {
+    /// 获取连接对应的租户ID（确保总是返回一个值）
+    ///
+    /// 从连接信息的 metadata 中提取租户ID，如果没有则返回默认值
+    pub(crate) async fn get_tenant_id_for_connection(&self, connection_id: &str) -> String {
         // 从连接信息的 metadata 中提取租户ID
         if let Some(metadata) = self.get_connection_metadata(connection_id).await {
-            return crate::infrastructure::connection_context::extract_tenant_id_from_metadata(&metadata);
+            if let Some(tenant_id) = crate::infrastructure::connection_context::extract_tenant_id_from_metadata(&metadata) {
+                return tenant_id;
+            }
         }
-        None
+        // 如果没有找到，返回默认值
+        self.default_tenant_id.clone()
     }
     
     /// 获取连接的 metadata（内部辅助函数）

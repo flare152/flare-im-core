@@ -224,7 +224,8 @@ impl MediaMetadataStore for PostgresMetadataStore {
         Ok(())
     }
 
-    async fn load_metadata(&self, tenant_id: &str, file_id: &str) -> Result<Option<MediaFileMetadata>> {
+    async fn load_metadata(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Option<MediaFileMetadata>> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let row = sqlx::query_as::<_, MediaAssetRow>(
             r#"
             SELECT
@@ -437,7 +438,8 @@ impl MediaReferenceStore for PostgresMetadataStore {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn delete_any_reference(&self, tenant_id: &str, file_id: &str) -> Result<Option<String>> {
+    async fn delete_any_reference(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Option<String>> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let row =
             sqlx::query("DELETE FROM media_references WHERE tenant_id = $1 AND file_id = $2 RETURNING reference_id")
                 .bind(tenant_id)
@@ -457,7 +459,8 @@ impl MediaReferenceStore for PostgresMetadataStore {
         }
     }
 
-    async fn delete_all_references(&self, tenant_id: &str, file_id: &str) -> Result<u64> {
+    async fn delete_all_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<u64> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let result = sqlx::query("DELETE FROM media_references WHERE tenant_id = $1 AND file_id = $2")
             .bind(tenant_id)
             .bind(file_id)
@@ -468,7 +471,8 @@ impl MediaReferenceStore for PostgresMetadataStore {
         Ok(result.rows_affected())
     }
 
-    async fn list_references(&self, tenant_id: &str, file_id: &str) -> Result<Vec<MediaReference>> {
+    async fn list_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<Vec<MediaReference>> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let rows = sqlx::query_as::<_, MediaReferenceRow>(
             r#"
             SELECT
@@ -494,7 +498,8 @@ impl MediaReferenceStore for PostgresMetadataStore {
         rows.into_iter().map(MediaReference::try_from).collect()
     }
 
-    async fn count_references(&self, tenant_id: &str, file_id: &str) -> Result<u64> {
+    async fn count_references(&self, ctx: &flare_server_core::context::Context, file_id: &str) -> Result<u64> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let row = sqlx::query("SELECT COUNT(*) as count FROM media_references WHERE tenant_id = $1 AND file_id = $2")
             .bind(tenant_id)
             .bind(file_id)
@@ -510,12 +515,13 @@ impl MediaReferenceStore for PostgresMetadataStore {
 
     async fn reference_exists(
         &self,
-        tenant_id: &str,
+        ctx: &flare_server_core::context::Context,
         file_id: &str,
         namespace: &str,
         owner_id: &str,
         business_tag: Option<&str>,
     ) -> Result<bool> {
+        let tenant_id = ctx.tenant_id().unwrap_or("0");
         let count: i64 = if let Some(tag) = business_tag {
             sqlx::query_scalar(
                 "SELECT COUNT(*) FROM media_references WHERE tenant_id = $1 AND file_id = $2 AND namespace = $3 AND owner_id = $4 AND business_tag = $5"

@@ -51,7 +51,7 @@ impl WebhookHookAdapter {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
-        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let payload = json!({
             "hook_type": "pre_send",
@@ -165,7 +165,7 @@ impl WebhookHookAdapter {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let hook_data = get_hook_context_data(ctx).cloned().unwrap_or_default();
-        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let payload = json!({
             "hook_type": "post_send",
@@ -218,7 +218,7 @@ impl WebhookHookAdapter {
     pub async fn delivery(&self, ctx: &Context, event: &DeliveryEvent) -> Result<()> {
         use serde_json::json;
 
-        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let payload = json!({
             "hook_type": "delivery",
@@ -259,7 +259,7 @@ impl WebhookHookAdapter {
     pub async fn recall(&self, ctx: &Context, event: &RecallEvent) -> Result<PreSendDecision> {
         use serde_json::json;
 
-        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
 
         let payload = json!({
             "hook_type": "recall",

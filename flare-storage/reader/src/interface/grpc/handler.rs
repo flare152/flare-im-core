@@ -210,18 +210,18 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         &self,
         request: Request<DeleteMessageForUserRequest>,
     ) -> Result<Response<DeleteMessageForUserResponse>, Status> {
+        let ctx = flare_im_core::utils::context::require_context(&request)?;
         let req = request.into_inner();
-        // 注意：proto 中可能没有 conversation_id 字段，需要从消息中获取或使用空字符串
         let command = DeleteMessageForUserCommand {
             message_ids: vec![req.message_id],
             user_id: req.user_id,
-            conversation_id: String::new(), // 从消息中获取或从请求中获取
+            conversation_id: String::new(),
             permanent: req.permanent,
         };
 
         match self
             .command_handler
-            .handle_delete_message_for_user(command)
+            .handle_delete_message_for_user(&ctx, command)
             .await
         {
             Ok(deleted_count) => Ok(Response::new(DeleteMessageForUserResponse {
@@ -308,13 +308,14 @@ impl StorageReaderService for StorageReaderGrpcHandler {
         &self,
         request: Request<MarkMessageReadRequest>,
     ) -> Result<Response<MarkMessageReadResponse>, Status> {
+        let ctx = flare_im_core::utils::context::require_context(&request)?;
         let req = request.into_inner();
         let command = MarkReadCommand {
             message_id: req.message_id,
             user_id: req.user_id,
         };
 
-        match self.command_handler.handle_mark_read(command).await {
+        match self.command_handler.handle_mark_read(&ctx, command).await {
             Ok((read_at, burned_at)) => Ok(Response::new(MarkMessageReadResponse {
                 success: true,
                 error_message: String::new(),

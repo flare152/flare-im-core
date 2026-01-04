@@ -146,13 +146,19 @@ impl PushDomainService {
         self.process_tasks(tasks).await
     }
 
-    /// 处理客户端 ACK（从 Gateway 接收）
-    #[instrument(skip(self), fields(message_id = %ack.server_msg_id))]
+    #[instrument(skip(self, ctx), fields(message_id = %ack.server_msg_id))]
     pub async fn handle_client_ack(
         &self,
-        user_id: &str,
+        ctx: &flare_server_core::context::Context,
         ack: &flare_proto::common::SendEnvelopeAck,
     ) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InvalidParameter,
+                "user_id is required in context"
+            )
+            .build_error()
+        })?;
         let start_time = Instant::now();
         info!(
             message_id = %ack.server_msg_id,
@@ -161,8 +167,7 @@ impl PushDomainService {
             "Received client ACK from Gateway"
         );
 
-        // 确认 ACK，停止重试
-        if let Ok(confirmed) = self.ack_tracker.confirm_ack(&ack.server_msg_id, user_id).await {
+        if let Ok(confirmed) = self.ack_tracker.confirm_ack(ctx, &ack.server_msg_id).await {
             let duration_ms = start_time.elapsed().as_millis();
             if confirmed {
                 info!(
@@ -505,9 +510,11 @@ impl PushDomainService {
                                     .update_status(message_id, user_id, MessageStatus::Pushed, None)
                                     .await;
 
-                                // 注册待确认的ACK
+                                // 注册待确认的ACK（从 task 构建 Context）
+                                let ctx = flare_server_core::context::Context::root()
+                                    .with_user_id(user_id.clone());
                                 if let Err(e) =
-                                    ack_tracker.register_pending_ack(message_id, user_id).await
+                                    ack_tracker.register_pending_ack(&ctx, message_id).await
                                 {
                                     tracing::warn!(
                                         error = %e,
@@ -904,14 +911,13 @@ impl PushDomainService {
         Ok(tasks)
     }
 
-    /// 获取消息状态（查询业务逻辑）
     pub async fn get_message_status(
         &self,
+        ctx: &flare_server_core::context::Context,
         message_id: &str,
-        user_id: &str,
     ) -> Result<MessageStatus> {
         self.state_tracker
-            .get_status(message_id, user_id)
+            .get_status(ctx, message_id)
             .await
             .map(|state| state.status)
             .ok_or_else(|| {

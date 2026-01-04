@@ -25,42 +25,37 @@ pub struct PresenceUpdate {
 pub trait ConversationRepository: Send + Sync {
     async fn load_bootstrap(
         &self,
-        tenant_id: &str,
-        user_id: &str,
+        ctx: &flare_server_core::context::Context,
         client_cursor: &HashMap<String, i64>,
     ) -> Result<ConversationBootstrapResult>;
 
-    async fn update_cursor(&self, user_id: &str, conversation_id: &str, ts: i64) -> Result<()>;
+    async fn update_cursor(&self, ctx: &flare_server_core::context::Context, conversation_id: &str, ts: i64) -> Result<()>;
 
-    // 会话管理方法
-    async fn create_conversation(&self, tenant_id: &str, conversation: &Conversation) -> Result<()>;
-    async fn get_conversation(&self, tenant_id: &str, conversation_id: &str) -> Result<Option<Conversation>>;
-    async fn update_conversation(&self, tenant_id: &str, conversation: &Conversation) -> Result<()>;
-    async fn delete_conversation(&self, tenant_id: &str, conversation_id: &str, hard_delete: bool) -> Result<()>;
+    async fn create_conversation(&self, ctx: &flare_server_core::context::Context, conversation: &Conversation) -> Result<()>;
+    async fn get_conversation(&self, ctx: &flare_server_core::context::Context, conversation_id: &str) -> Result<Option<Conversation>>;
+    async fn update_conversation(&self, ctx: &flare_server_core::context::Context, conversation: &Conversation) -> Result<()>;
+    async fn delete_conversation(&self, ctx: &flare_server_core::context::Context, conversation_id: &str, hard_delete: bool) -> Result<()>;
     async fn manage_participants(
         &self,
-        tenant_id: &str,
+        ctx: &flare_server_core::context::Context,
         conversation_id: &str,
         to_add: &[ConversationParticipant],
         to_remove: &[String],
         role_updates: &[(String, Vec<String>)],
     ) -> Result<Vec<ConversationParticipant>>;
-    async fn batch_acknowledge(&self, tenant_id: &str, user_id: &str, cursors: &[(String, i64)]) -> Result<()>;
+    async fn batch_acknowledge(&self, ctx: &flare_server_core::context::Context, cursors: &[(String, i64)]) -> Result<()>;
     async fn search_conversations(
         &self,
-        tenant_id: &str,
-        user_id: Option<&str>,
+        ctx: &flare_server_core::context::Context,
         filters: &[crate::domain::model::ConversationFilter],
         sort: &[crate::domain::model::ConversationSort],
         limit: usize,
         offset: usize,
     ) -> Result<(Vec<ConversationSummary>, usize)>;
 
-    /// 标记消息为已读（更新 last_read_msg_seq）
-    async fn mark_as_read(&self, tenant_id: &str, user_id: &str, conversation_id: &str, seq: i64) -> Result<()>;
+    async fn mark_as_read(&self, ctx: &flare_server_core::context::Context, conversation_id: &str, seq: i64) -> Result<()>;
 
-    /// 获取未读数（基于 last_message_seq - last_read_msg_seq）
-    async fn get_unread_count(&self, tenant_id: &str, user_id: &str, conversation_id: &str) -> Result<i32>;
+    async fn get_unread_count(&self, ctx: &flare_server_core::context::Context, conversation_id: &str) -> Result<i32>;
 }
 
 /// Presence 仓储接口（需要作为 trait 对象使用，保留 async-trait）

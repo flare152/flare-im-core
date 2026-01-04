@@ -54,7 +54,7 @@ impl HookSelector {
     pub fn matches(&self, ctx: &Context) -> bool {
         use crate::hooks::hook_context_data::get_hook_context_data;
         
-        let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+        let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
         let hook_data = get_hook_context_data(ctx);
         
         self.tenants.matches(Some(tenant_id.as_str()))

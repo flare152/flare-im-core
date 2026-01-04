@@ -15,8 +15,7 @@ pub struct OnlineStatus {
 
 #[async_trait]
 pub trait OnlineStatusRepository: Send + Sync {
-    /// 查询单个用户在线状态
-    async fn is_online(&self, user_id: &str) -> Result<bool>;
+    async fn is_online(&self, ctx: &flare_server_core::context::Context) -> Result<bool>;
 
     /// 批量查询用户在线状态（返回用户ID到在线状态的映射）
     async fn batch_get_online_status(

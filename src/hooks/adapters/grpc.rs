@@ -507,7 +507,7 @@ fn build_request_context(ctx: &Context, hook_data: &crate::hooks::hook_context_d
 }
 
 fn build_tenant_context(ctx: &Context, hook_data: &crate::hooks::hook_context_data::HookContextData) -> ProtoTenantContext {
-    let tenant_id = ctx.tenant_id().map(|s| s.to_string()).unwrap_or_default();
+    let tenant_id = ctx.tenant_id().unwrap_or("0").to_string();
     let business_type = hook_data
         .attributes
         .get("tenant_business_type")

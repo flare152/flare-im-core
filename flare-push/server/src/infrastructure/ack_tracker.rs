@@ -49,8 +49,11 @@ impl AckTracker {
         self
     }
 
-    /// 注册待确认的ACK
-    pub async fn register_pending_ack(&self, message_id: &str, user_id: &str) -> Result<()> {
+    pub async fn register_pending_ack(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Result<()> {
+        let user_id = ctx.user_id().ok_or_else(|| {
+            ErrorBuilder::new(ErrorCode::InvalidParameter, "user_id is required in context")
+                .build_error()
+        })?;
         let ack_info = flare_im_core::ack::AckStatusInfo {
             message_id: message_id.to_string(),
             user_id: user_id.to_string(),
@@ -80,8 +83,11 @@ impl AckTracker {
         Ok(())
     }
 
-    /// 确认ACK
-    pub async fn confirm_ack(&self, message_id: &str, user_id: &str) -> Result<bool> {
+    pub async fn confirm_ack(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Result<bool> {
+        let user_id = ctx.user_id().ok_or_else(|| {
+            ErrorBuilder::new(ErrorCode::InvalidParameter, "user_id is required in context")
+                .build_error()
+        })?;
         let start_time = std::time::Instant::now();
         debug!(
             message_id = %message_id,

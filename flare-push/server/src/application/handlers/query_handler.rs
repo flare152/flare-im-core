@@ -27,13 +27,14 @@ impl PushQueryHandler {
     }
 
     /// 查询消息状态（直接调用基础设施层）
-    #[instrument(skip(self), fields(message_id = %query.message_id, user_id = %query.user_id))]
+    #[instrument(skip(self, ctx), fields(message_id = %query.message_id))]
     pub async fn query_message_status(
         &self,
+        ctx: &flare_server_core::context::Context,
         query: QueryMessageStatusQuery,
     ) -> Result<MessageStatus> {
         self.state_tracker
-            .get_status(&query.message_id, &query.user_id)
+            .get_status(ctx, &query.message_id)
             .await
             .map(|state| state.status)
             .ok_or_else(|| {
@@ -46,12 +47,14 @@ impl PushQueryHandler {
     #[instrument(skip(self), fields(count = query.message_user_pairs.len()))]
     pub async fn batch_query_message_status(
         &self,
+        ctx: &flare_server_core::context::Context,
         query: BatchQueryMessageStatusQuery,
     ) -> Result<HashMap<(String, String), MessageStatus>> {
         let mut result = HashMap::new();
         for (message_id, user_id) in query.message_user_pairs {
+            let user_ctx = ctx.clone().with_user_id(user_id.clone());
             if let Ok(status) = self
-                .query_message_status(QueryMessageStatusQuery {
+                .query_message_status(&user_ctx, QueryMessageStatusQuery {
                     message_id: message_id.clone(),
                     user_id: user_id.clone(),
                 })

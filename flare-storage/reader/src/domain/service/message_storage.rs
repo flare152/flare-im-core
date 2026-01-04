@@ -413,17 +413,15 @@ impl MessageStorageDomainService {
     }
 
     /// 标记消息已读
-    #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
+    #[instrument(skip(self, ctx), fields(message_id = %message_id))]
     pub async fn mark_message_read(
         &self,
+        ctx: &flare_server_core::context::Context,
         message_id: &str,
-        user_id: &str,
     ) -> Result<(Timestamp, Option<Timestamp>)> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         if message_id.is_empty() {
             return Err(anyhow!("message_id is required"));
-        }
-        if user_id.is_empty() {
-            return Err(anyhow!("user_id is required"));
         }
 
         // 获取消息
@@ -494,7 +492,7 @@ impl MessageStorageDomainService {
 
         // 同时写入 message_state 表
         if let Some(message_state_repo) = &self.message_state_repo {
-            if let Err(e) = message_state_repo.mark_as_read(message_id, user_id).await {
+            if let Err(e) = message_state_repo.mark_as_read(ctx, message_id).await {
                 tracing::warn!(
                     error = %e,
                     message_id = %message_id,
@@ -505,7 +503,7 @@ impl MessageStorageDomainService {
 
             // 如果是阅后即焚消息，同时标记为已焚毁
             if burned_at.is_some() {
-                if let Err(e) = message_state_repo.mark_as_burned(message_id, user_id).await {
+                if let Err(e) = message_state_repo.mark_as_burned(ctx, message_id).await {
                     tracing::warn!(
                         error = %e,
                         message_id = %message_id,
@@ -520,18 +518,16 @@ impl MessageStorageDomainService {
     }
 
     /// 为用户删除消息（软删除）
-    #[instrument(skip(self), fields(message_id = %message_id, user_id = %user_id))]
+    #[instrument(skip(self, ctx), fields(message_id = %message_id))]
     pub async fn delete_message_for_user(
         &self,
+        ctx: &flare_server_core::context::Context,
         message_id: &str,
-        user_id: &str,
         permanent: bool,
     ) -> Result<usize> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         if message_id.is_empty() {
             return Err(anyhow!("message_id is required"));
-        }
-        if user_id.is_empty() {
-            return Err(anyhow!("user_id is required"));
         }
 
         // 检查消息是否存在
@@ -567,7 +563,7 @@ impl MessageStorageDomainService {
         // 同时写入 message_state 表
         if let Some(message_state_repo) = &self.message_state_repo {
             if let Err(e) = message_state_repo
-                .mark_as_deleted(message_id, user_id)
+                .mark_as_deleted(ctx, message_id)
                 .await
             {
                 tracing::warn!(

@@ -151,14 +151,14 @@ impl WalRepository for WalRepositoryItem {
 /// Conversation 仓储接口 - 用于确保 conversation 存在（Rust 2024: 原生异步 trait）
 pub trait ConversationRepository: Send + Sync {
     /// 确保 conversation 存在，如果不存在则创建
-    fn ensure_conversation(
-        &self,
-        conversation_id: &str,
-        conversation_type: &str,
-        business_type: &str,
+    fn ensure_conversation<'a>(
+        &'a self,
+        ctx: &'a flare_server_core::context::Context,
+        conversation_id: &'a str,
+        conversation_type: &'a str,
+        business_type: &'a str,
         participants: Vec<String>,
-        tenant_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
 /// ConversationRepository 的枚举封装，用于在 Rust 2024 下避免 `dyn` + async trait 带来的
@@ -169,21 +169,21 @@ pub enum ConversationRepositoryItem {
 }
 
 impl ConversationRepository for ConversationRepositoryItem {
-    fn ensure_conversation(
-        &self,
-        conversation_id: &str,
-        conversation_type: &str,
-        business_type: &str,
+    fn ensure_conversation<'a>(
+        &'a self,
+        ctx: &'a flare_server_core::context::Context,
+        conversation_id: &'a str,
+        conversation_type: &'a str,
+        business_type: &'a str,
         participants: Vec<String>,
-        tenant_id: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         match self {
             ConversationRepositoryItem::Grpc(repo) => repo.ensure_conversation(
+                ctx,
                 conversation_id,
                 conversation_type,
                 business_type,
                 participants,
-                tenant_id,
             ),
         }
     }

@@ -47,7 +47,14 @@ impl OnlineStatusRepositoryImpl {
 
 #[async_trait]
 impl OnlineStatusRepository for OnlineStatusRepositoryImpl {
-    async fn is_online(&self, user_id: &str) -> Result<bool> {
+    async fn is_online(&self, ctx: &flare_server_core::context::Context) -> Result<bool> {
+        let user_id = ctx.user_id().ok_or_else(|| {
+            flare_server_core::error::ErrorBuilder::new(
+                flare_server_core::error::ErrorCode::InvalidParameter,
+                "user_id is required in context"
+            )
+            .build_error()
+        })?;
         let statuses = self.batch_get_online_status(&[user_id.to_string()]).await?;
 
         Ok(statuses.get(user_id).map(|s| s.online).unwrap_or(false))

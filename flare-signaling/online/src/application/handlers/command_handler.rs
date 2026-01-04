@@ -66,10 +66,11 @@ impl OnlineCommandHandler {
     #[instrument(skip(self), fields(user_id = %command.request.user_id))]
     pub async fn handle_unsubscribe(
         &self,
+        ctx: &flare_server_core::context::Context,
         command: UnsubscribeCommand,
     ) -> Result<UnsubscribeResponse> {
         self.subscription_domain_service
-            .unsubscribe(command.request)
+            .unsubscribe(ctx, command.request)
             .await
     }
 

@@ -44,10 +44,11 @@ impl MessageStorageCommandHandler {
     #[instrument(skip(self), fields(message_id = %command.message_id, user_id = %command.user_id))]
     pub async fn handle_mark_read(
         &self,
+        ctx: &flare_server_core::context::Context,
         command: MarkReadCommand,
     ) -> Result<(Timestamp, Option<Timestamp>)> {
         self.domain_service
-            .mark_message_read(&command.message_id, &command.user_id)
+            .mark_message_read(ctx, &command.message_id)
             .await
     }
 
@@ -55,13 +56,14 @@ impl MessageStorageCommandHandler {
     #[instrument(skip(self), fields(message_id = %command.message_ids.first().map(|s| s.as_str()).unwrap_or(""), user_id = %command.user_id))]
     pub async fn handle_delete_message_for_user(
         &self,
+        ctx: &flare_server_core::context::Context,
         command: DeleteMessageForUserCommand,
     ) -> Result<usize> {
         let mut total_deleted = 0;
         for message_id in &command.message_ids {
             let deleted = self
                 .domain_service
-                .delete_message_for_user(message_id, &command.user_id, command.permanent)
+                .delete_message_for_user(ctx, message_id, command.permanent)
                 .await?;
             total_deleted += deleted;
         }

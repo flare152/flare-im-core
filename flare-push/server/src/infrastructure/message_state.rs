@@ -162,15 +162,15 @@ impl MessageStateTracker {
         );
     }
 
-    /// 获取消息状态
-    pub async fn get_status(&self, message_id: &str, user_id: &str) -> Option<MessageState> {
+    pub async fn get_status(&self, ctx: &flare_server_core::context::Context, message_id: &str) -> Option<MessageState> {
+        let user_id = ctx.user_id().map_or("0".to_string(), |s| s.to_string());
         let key = format!("{}:{}", message_id, user_id);
         let cache = self.state_cache.read().await;
         cache.get(&key).cloned()
     }
 
-    /// 设置消息类型
-    pub async fn set_message_type(&self, message_id: &str, user_id: &str, message_type: String) {
+    pub async fn set_message_type(&self, ctx: &flare_server_core::context::Context, message_id: &str, message_type: String) {
+        let user_id = ctx.user_id().map_or("0".to_string(), |s| s.to_string());
         let key = format!("{}:{}", message_id, user_id);
         let mut cache = self.state_cache.write().await;
         if let Some(state) = cache.get_mut(&key) {

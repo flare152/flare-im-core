@@ -157,7 +157,7 @@ pub async fn initialize(
         Arc<crate::infrastructure::messaging::message_router::MessageRouter>,
     > = {
         let service_name = route_service.clone();
-        let default_tenant_id = "default".to_string();
+        let default_tenant_id = access_config.default_tenant_id.clone(); // 使用配置中的默认租户ID
         let default_svid = access_config.default_svid.clone();
 
         let router = if let Some(discover) = route_service_discover {
@@ -212,6 +212,7 @@ pub async fn initialize(
     let connection_handler = Arc::new(LongConnectionHandler::new_with_placeholders(
         signaling_gateway.clone(),
         gateway_id.clone(),
+        access_config.default_tenant_id.clone(),
         ack_publisher.clone(),
         Some(message_router_arc.clone()),
         metrics.clone(),
@@ -263,6 +264,7 @@ pub async fn initialize(
     let connection_handler = Arc::new(LongConnectionHandler::new(
         signaling_gateway.clone(),
         gateway_id.clone(),
+        access_config.default_tenant_id.clone(),
         ack_publisher.clone(),
         Some(message_router_arc.clone()),
         metrics.clone(),

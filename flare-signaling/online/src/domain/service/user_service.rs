@@ -135,14 +135,13 @@ impl UserService {
         })
     }
 
-    /// 列出用户设备
     pub async fn list_user_devices(
         &self,
+        ctx: &flare_server_core::context::Context,
         request: ListUserDevicesRequest,
     ) -> Result<ListUserDevicesResponse> {
-        let user_id = &request.user_id;
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
 
-        // 获取用户的所有会话
         let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
             .map_err(|e| anyhow::anyhow!(e))?;
         let sessions = self
@@ -214,9 +213,8 @@ impl UserService {
         }
     }
 
-    /// 查询设备信息
-    pub async fn get_device(&self, request: GetDeviceRequest) -> Result<GetDeviceResponse> {
-        let user_id = &request.user_id;
+    pub async fn get_device(&self, ctx: &flare_server_core::context::Context, request: GetDeviceRequest) -> Result<GetDeviceResponse> {
+        let user_id = ctx.user_id().ok_or_else(|| anyhow::anyhow!("user_id is required in context"))?;
         let device_id = &request.device_id;
 
         let user_id_vo = crate::domain::value_object::UserId::new(user_id.to_string())
